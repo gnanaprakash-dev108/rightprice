@@ -2,7 +2,8 @@
 
 Received 23 November 2026, pasted as text. Mill not yet confirmed ("Arvisilk" suggests Arvind).
 All figures are rupees; the "$" signs in the original were cell formatting.
-Not yet built into the tool.
+Built into the tool on 23 November 2026 as drop-down upcharges (see PROGRESS.md). The per-end and
+per-pick figures in section 1 are for comparison only and are not used.
 
 ## 1. End and pick
 

@@ -22,6 +22,7 @@ if not os.path.exists(APP_YARN_FILE):          # repository layout: the file sit
     APP_YARN_FILE = paths.find("Yarn_Inteliigence_Master.xlsx")
 
 V1, PH, NS = "V1 workbook", "Placeholder", "Not set"
+RC = "Mill rate card 23 Nov 2026"           # docs/Mill_Rate_Card.md
 V1_DATE = "2026-11-23"
 
 
@@ -155,8 +156,53 @@ def finishing_rates():
           ("F- Wicking", 55, 15), ("F- Baby Skin Finish", 55, 15), ("F- Apricot Touch", 55, 15),
           ("Antibacterial finish + Quik Dry Finish", 65, 25), ("F- LA+MOIST CURE+Silk Protein", 130, 90)]
     rows += [(a, b, c, PH) for a, b, c in ph]
-    return pd.DataFrame(rows, columns=["Finish", "Rs per kg greige (yarn dyed)",
-                                       "Rs per kg greige (piece dyed / RFD / printed)", "Basis"])
+    df = pd.DataFrame(rows, columns=["Finish", "Rs per kg greige (yarn dyed)",
+                                     "Rs per kg greige (piece dyed / RFD / printed)", "Basis"])
+    df["Upcharge Rs per m"] = 0.0
+    df["Upcharge basis"] = NS
+    return pd.concat([df, card_finishes()], ignore_index=True)
+
+
+def card_finishes():
+    """Finishes on the mill rate card that the list did not have: Normal finishing plus Rs per metre."""
+    card = [("F- Immaculate", 35), ("F- Carbonium Peach", 5), ("F- Diamond Peach", 5), ("F- Diamer Finish", 5),
+            ("F- Emerise", 5), ("F- Cool Touch", 15), ("F- Arvisilk Finish", 5), ("F- Silk Protein", 5),
+            ("F- Silk Touch", 5), ("F- Evershine", 9), ("F- Prepress", 32), ("F- Liquid Cotton", 5),
+            ("F- Teflon", 30)]
+    return pd.DataFrame([(f, 40, 0, "Normal finishing, " + V1, float(r), RC) for f, r in card],
+                        columns=["Finish", "Rs per kg greige (yarn dyed)",
+                                 "Rs per kg greige (piece dyed / RFD / printed)", "Basis",
+                                 "Upcharge Rs per m", "Upcharge basis"])
+
+
+def print_method():
+    rows = [("Not specified", 0.0, NS, "Printing is costed per kg from the Piece dyeing table"),
+            ("Rotary", 18.0, RC, "Cloth prepared at the RFD rate, plus this per metre"),
+            ("Digital", 55.0, RC, "Cloth prepared at the RFD rate, plus this per metre")]
+    return pd.DataFrame(rows, columns=["Print method", "Rs per m", "Basis", "Note"])
+
+
+def dobby_upcharge():
+    rows = [("Up to 8 shafts", 0.0, 10.0, RC), ("9 to 12 shafts", 8.0, 18.0, RC),
+            ("13 shafts and above", 10.0, 20.0, RC)]
+    return pd.DataFrame(rows, columns=["Dobby shafts", "Rs per m", "Rs per m with top beam", "Basis"])
+
+
+def weft_upcharge():
+    rows = [("Dyed, costed by shade", 0.0, NS, "Weft dyeing per kg from the Yarn dyeing table (V1 method)"),
+            ("Undyed", 0.0, RC, "No weft dyeing"),
+            ("Dyed, rate card", 10.0, RC, "No weft dyeing per kg; this per metre instead")]
+    return pd.DataFrame(rows, columns=["Weft", "Rs per m", "Basis", "Note"])
+
+
+def order_quantity():
+    rows = [("Not specified", 0.0, 0.0, NS),
+            ("Below 500 m", 8.0, 0.0, PH + " (the card stops at 500 m; its 8% step carried down)"),
+            ("500 to 599 m", 8.0, 0.0, RC), ("600 to 699 m", 7.0, 0.0, RC), ("700 to 799 m", 4.0, 0.0, RC),
+            ("800 to 1,999 m", 0.0, 0.0, RC), ("2,000 to 3,999 m", 0.0, 2.0, RC),
+            ("4,000 to 6,000 m", 0.0, 3.0, RC), ("Above 6,000 m", 0.0, 4.0, RC)]
+    return pd.DataFrame(rows, columns=["Order quantity", "Small-lot upcharge % (yarn dyed)",
+                                       "Volume discount Rs per m", "Basis"])
 
 
 def class_defaults():
@@ -216,6 +262,8 @@ SHEETS = {
     "Sizing_Rates": sizing_rates, "Yarn_Dyeing": yarn_dyeing, "Piece_Dyeing": piece_dyeing,
     "Finishing_Rates": finishing_rates, "Class_Defaults": class_defaults, "Mill_Tier": mill_tier,
     "Order_Slab": order_slab, "Supplier_Benchmarks": supplier_benchmarks, "Settings": settings,
+    "Print_Method": print_method, "Dobby_Upcharge": dobby_upcharge, "Weft_Upcharge": weft_upcharge,
+    "Order_Quantity": order_quantity,
 }
 
 

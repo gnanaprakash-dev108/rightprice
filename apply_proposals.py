@@ -55,6 +55,16 @@ def main():
         log.append(f"Printing: {pr['Current']:g} -> {pr['Proposed']:g} Rs/kg greige")
     m["Piece_Dyeing"] = pdt
 
+    # mill rate card: only the rows marked Yes in the Apply column
+    card = p.get("Rate card proposals")
+    if card is not None and len(card):
+        import calibrate
+        yes = card[card["Apply"].astype(str).str.strip().str.lower() == "yes"]
+        m = calibrate.apply_card(m, yes)
+        for _, r in yes.iterrows():
+            log.append(f"Rate card, {r['Sheet']} {r['Row']} / {r['Column']}: {r['Current']:g} -> {r['Proposed']:g}")
+        log.append(f"Rate card proposals: {len(yes)} of {len(card)} rows applied")
+
     masters.save(m)
     print("\n".join(log))
     print("Backup:", backup)

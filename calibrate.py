@@ -6,6 +6,9 @@ Order of work:
   1. order-size premium, from yarn-dyed and piece-dyed fabrics
   2. weaving rate per route and weave group (the rate that closes the median gap)
   3. one printing rate, with weaving held at the piece-dyed rate for the same weave
+  4. the mill rate card: what the fit becomes when the card replaces the rates it overlaps
+     (sheets 'Rate card fit', 'Rate card by type', 'Rate card proposals'). The card's figures are
+     not fitted to the purchase orders, so every set of fabrics is a fair test of them.
 The rate master on disk is only read. Output: pilot/Proposed_Rate_Changes.xlsx
 Run: python calibrate.py
 """
@@ -67,8 +70,105 @@ def fit(d):
             "Within 20%": round((g.abs() <= 0.20).mean(), 3)}
 
 
+CARD_FINISHES = [  # existing finish, card Rs/m, basis
+    ("F- ETI Easy to Iron", 4, None), ("F- Easy Care", 4, None), ("F- LA Liquid Ammonia", 10, None),
+    ("F- LAMC Liquid Ammonia Moist Cure", 30, None), ("F- PEACH", 5, None), ("F- Aero", 5, None),
+    ("F- Apricot Touch", 5, None),
+    ("F- LA + ETI", 14, "Placeholder (card LA 10 + ETI 4; the combination is not on the card)"),
+    ("F- LA+Easy Care", 14, "Placeholder (card LA 10 + Easy Care 4; the combination is not on the card)"),
+    ("F- LA+MOIST CURE+Silk Protein", 35, "Placeholder (card LA + MC 30 + Silk Protein 5; not on the card)"),
+]
+YD_KG, OTHER_KG = "Rs per kg greige (yarn dyed)", "Rs per kg greige (piece dyed / RFD / printed)"
+
+
+def card_proposals(m):
+    """Existing rates the mill rate card overlaps, as rows to approve one by one."""
+    import build_masters as bm
+    rows = []
+
+    def add(group, sheet, key_col, key, col, new, basis_col, basis):
+        df = m[sheet]
+        cur = df.loc[df[key_col] == key, col].iloc[0]
+        if float(cur) != float(new):
+            rows.append({"Group": group, "Sheet": sheet, "Row column": key_col, "Row": key, "Column": col,
+                         "Current": float(cur), "Proposed": float(new), "Basis column": basis_col,
+                         "Proposed basis": basis, "Apply": "No"})
+
+    for slab in m["Order_Slab"]["Order size"]:
+        add("Order size", "Order_Slab", "Order size", slab, "Overhead add (points)", 0, "Basis",
+            "Replaced by Order_Quantity, " + bm.RC)
+    fr = m["Finishing_Rates"].set_index("Finish")
+    for fin, rs, basis in CARD_FINISHES:
+        if fin not in fr.index:
+            continue
+        add("Finishes", "Finishing_Rates", "Finish", fin, YD_KG, fr.loc["Normal", YD_KG], "Basis",
+            "Normal finishing, " + bm.V1)
+        add("Finishes", "Finishing_Rates", "Finish", fin, OTHER_KG, fr.loc["Normal", OTHER_KG], "Basis",
+            "Normal finishing, " + bm.V1)
+        add("Finishes", "Finishing_Rates", "Finish", fin, "Upcharge Rs per m", rs, "Upcharge basis", basis or bm.RC)
+    return pd.DataFrame(rows)
+
+
+def apply_card(m, props):
+    """Rate master with the given proposal rows applied (in memory)."""
+    m = dict(m)
+    for _, r in props.iterrows():
+        df = m[r["Sheet"]].copy()
+        hit = df[r["Row column"]] == r["Row"]
+        df[r["Column"]] = df[r["Column"]].astype(float)
+        df.loc[hit, r["Column"]] = float(r["Proposed"])
+        df.loc[hit, r["Basis column"]] = r["Proposed basis"]
+        m[r["Sheet"]] = df
+    return m
+
+
+def gaps(m, inp):
+    """Gap of every fabric under rate master m and the drop-down choices in inp."""
+    wg = m["Weaves"].set_index("Weave")["Weave group"]
+    rows = []
+    for _, r in inp.iterrows():
+        sel = r.to_dict()
+        try:
+            total = masters.cost(sel, m)["total_per_m"]
+        except Exception:
+            continue
+        rows.append({"Fabric code": sel["Fabric code"], "Route": sel["Route"], "Weave group": wg[sel["Weave"]],
+                     "Gap": sel["Quoted price (Rs/m)"] / total - 1,
+                     "Train": zlib.crc32(str(sel["Fabric code"]).encode()) % 3 != 0})
+    return pd.DataFrame(rows)
+
+
+def rate_card(m, inp):
+    """Fit before and after the mill rate card, step by step. inp carries the current order size."""
+    props = card_proposals(m)
+    m_qty = pilot.without_order_points(m)
+    m_fin = apply_card(m_qty, props[props["Group"] == "Finishes"])
+    cc = pilot.card_choices
+    steps = [
+        ("0. Current rates", m, inp),
+        ("1. Card order quantity in place of the order-size points", m_qty, cc(inp, weft=None)),
+        ("2. ...and finishes at the card's Rs/m", m_fin, cc(inp, weft=None)),
+        ("3. ...and weft on checks at Rs 10/m (other patterns by shade, as now)", m_fin, cc(inp)),
+        ("3b. as 3, but stripes and solids with undyed weft", m_fin, cc(inp, weft="checks, others undyed")),
+        ("4a. step 3 with every print rotary (Rs 18/m)", m_fin, cc(inp, print_method="Rotary")),
+        ("4b. step 3 with every print digital (Rs 55/m)", m_fin, cc(inp, print_method="Digital")),
+    ]
+    fit_rows, cells = [], None
+    for label, mm, ii in steps:
+        g = gaps(mm, ii)
+        for name, d in (("All fabrics", g), ("Held-back third", g[~g["Train"]])):
+            fit_rows.append({"Step": label, "Set": name, **fit(d)})
+        by = g.groupby(["Route", "Weave group"])["Gap"].agg(["size", "median"])
+        if cells is None:
+            cells = by[["size"]].rename(columns={"size": "Fabrics"})
+        cells[label.split(".")[0]] = (by["median"] * 100).round(1)
+    cells = cells[cells["Fabrics"] >= 20].sort_values("Fabrics", ascending=False).reset_index()
+    return pd.DataFrame(fit_rows), cells, props
+
+
 def main():
     m0, inp, _, _ = pilot.build_inputs()
+    m_live = m0
     inp = inp.copy()
     inp["Order size"] = inp["PO metres"].map(slab_of)
     m0 = dict(m0)
@@ -203,12 +303,21 @@ def main():
         f"between Rs {WEAVE_BAND[0]:.2f} and Rs {WEAVE_BAND[1]:.2f} per pick.",
         "Yarn dyeing (Rs 150/kg) and piece dyeing (Rs 160/kg) were held at the V1 workbook values.",
         "Sheets: Order size, Weaving, Printing, Held-back test, Held-back by cell, By yarn, By supplier.",
+        "MILL RATE CARD. 'Rate card fit' shows the fit as the card replaces the rates it overlaps, one step at a "
+        "time; 'Rate card by type' gives the median gap % by route and weave for each step number.",
+        "PLM has no print method, shaft count, top beam or weft colour. Checks are taken as dyed weft; print "
+        "method is shown both ways; dobby is taken as up to 8 shafts without top beam (no upcharge).",
+        "'Rate card proposals' lists each existing rate the card would replace. Write Yes in the Apply column "
+        "for the rows you approve; apply_proposals.py applies only those.",
     ]})
+    card_fit, card_cells, card_props = rate_card(m_live, inp)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with pd.ExcelWriter(OUT, engine="openpyxl") as xw:
         for name, df in [("Read me", readme), ("Order size", pd.DataFrame(slab_rows)), ("Weaving", props),
                          ("Printing", print_row), ("Held-back test", pd.DataFrame(test_rows)),
-                         ("Held-back by cell", by_cell), ("By yarn", yarn), ("By supplier", sup)]:
+                         ("Held-back by cell", by_cell), ("By yarn", yarn), ("By supplier", sup),
+                         ("Rate card fit", card_fit), ("Rate card by type", card_cells),
+                         ("Rate card proposals", card_props)]:
             df.to_excel(xw, sheet_name=name, index=False)
             ws = xw.sheets[name]
             for i, col in enumerate(df.columns, start=1):
@@ -223,6 +332,9 @@ def main():
     print(by_cell.to_string(index=False))
     print(yarn.to_string(index=False))
     print(sup.head(14).to_string(index=False))
+    print(card_fit.to_string(index=False))
+    print(card_cells.to_string(index=False))
+    print(card_props.drop(columns=["Row column", "Basis column"]).to_string(index=False))
     print("Saved", OUT)
 
 

@@ -51,6 +51,39 @@ def main():
     good = "not on the list" in bad["Error"].iloc[0]
     ok &= good
     print("Bad value rejected", "OK" if good else "MISMATCH", "-", bad["Error"].iloc[0])
+    # Mill rate card steps: price steps outside the mark-ups, worked by hand from the card.
+    base = 181.40
+    q1 = dict(masters.EXAMPLE_ROW)
+    card = [
+        ("Dobby 9 to 12 shafts with top beam (+18)", dict(q1, **{"Dobby shafts": "9 to 12 shafts", "Top beam": "Yes"}), base + 18),
+        ("Finish Teflon (+30)", dict(q1, Finish="F- Teflon"), base + 30),
+        ("Small lot 600 to 699 m (+7%)", dict(q1, **{"Order quantity": "600 to 699 m"}), base * 1.07),
+        ("Volume discount not given on 40s", dict(q1, **{"Order quantity": "Above 6,000 m"}), base),
+        ("Undyed weft (no weft dyeing)", dict(q1, Weft="Undyed"), None),
+        ("Dyed weft at the card rate (+10)", dict(q1, Weft="Dyed, rate card"), None),
+    ]
+    undyed = masters.cost(dict(q1, **{"Weft yarn dyeing": "Undyed"}), m)["total_per_m"]
+    for label, sel, target in card:
+        if target is None:
+            target = undyed + (10 if "card" in sel["Weft"] else 0)
+        got = masters.cost(sel, m)["total_per_m"]
+        good = abs(got - target) < 0.01
+        ok &= good
+        print(f"{label:42s} {got:8.2f}  expected {target:8.2f}  {'OK' if good else 'MISMATCH'}")
+    pr = dict(q1, Route="Printed", Weave="Plain", **{"Warp yarn": "Cotton 60S", "Weft yarn": "Cotton 60S",
+              "Warp yarn dyeing": "Undyed", "Weft yarn dyeing": "Undyed"})
+    rfd = masters.cost(dict(pr, Route="RFD / Bleached"), m)["total_per_m"]
+    wv = m["Weaving_Rates"].set_index(["Weave group", "Route"])["Rs per pick"]
+    same_weaving = wv[("Plain", "Printed")] == wv[("Plain", "RFD / Bleached")]
+    for label, sel, add in [("Rotary print", dict(pr, **{"Print method": "Rotary"}), 18),
+                            ("Digital print, 4,000 m (-3)", dict(pr, **{"Print method": "Digital",
+                                                                        "Order quantity": "4,000 to 6,000 m"}), 55 - 3)]:
+        r = masters.cost(sel, m)
+        lines = {l["name"]: l["amount"] for b in r["buckets"] for l in b["lines"]}
+        got = lines.get("Printing", 0) + lines.get("Volume discount", 0)
+        good = abs(got - add) < 0.01 and (not same_weaving or abs(r["total_per_m"] - rfd - add) < 0.01)
+        ok &= good
+        print(f"{label:42s} {got:8.2f}  expected {add:8.2f}  {'OK' if good else 'MISMATCH'}")
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
 

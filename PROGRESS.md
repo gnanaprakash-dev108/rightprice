@@ -21,7 +21,7 @@ It is not yet inside the 3–5% accuracy target.
 
 - Costing engine that reproduces all seven V1 qualities exactly (Qlty-1 = Rs 181.40/m).
 - Seven-screen app, bulk upload template, cost sheet download.
-- Rate master with 15 sheets; every rate carries its basis.
+- Rate master with 19 sheets; every rate carries its basis.
 - PLM link: 19,669 of 19,770 purchase-order material codes have specs.
 - Content grouping: 8,446 blend spellings folded into 17 groups; stretch tracked separately.
 - 68 PLM woven weave types mapped to 7 weave groups.
@@ -88,27 +88,57 @@ yarn-dyed oxford −2.7%, 46%; piece-dyed satin 3.1%, 57%; piece-dyed twill 4.3%
 12. **Pictures are not read automatically** in the price intake; rates are typed beside the image.
 13. **Yarn rates are one date.** Orders span August to November, costed on November rates.
 
-## Mill rate card received 23 Nov 2026 (not yet built in)
+## Mill rate card: built in on 23 Nov 2026, not yet switched on
 
-Saved in [docs/Mill_Rate_Card.md](docs/Mill_Rate_Card.md). Comparison with the tool, for a 40s yarn-dyed shirting:
+Saved in [docs/Mill_Rate_Card.md](docs/Mill_Rate_Card.md). The card is in the tool as price steps that
+are not marked up, each a drop-down that defaults to "no upcharge":
 
-| | Rate card | Tool |
+| Driver | Choices | Rate |
 |---|---|---|
-| One extra end | Rs 0.60 | Rs 0.62 |
-| One extra pick, twill or plain | Rs 0.90 to 90 picks, Rs 1.00 above | Rs 1.03 |
-| One extra pick, dobby | as above plus a shaft charge | Rs 1.13 |
+| Print method | Not specified, Rotary, Digital | Rs 18 / Rs 55 per m, on cloth prepared at the RFD rate |
+| Dobby shafts, top beam | Up to 8, 9 to 12, 13 and above; top beam No or Yes | Rs 0 / 8 / 10, with top beam Rs 10 / 18 / 20 per m |
+| Weft (yarn dyed) | Dyed costed by shade, Undyed, Dyed at the card rate | Rs 10 per m |
+| Finish | 13 card finishes added to the list | Rs per m on top of Normal finishing |
+| Order quantity | Bands from below 500 m to above 6,000 m | +8%, +7%, +4% below 800 m (yarn dyed); Rs 2, 3, 4 off from 2,000 m |
 
-To build in: print method (rotary, digital), dobby shafts and top beam, dyed or undyed weft,
-finishes as Rs/m upcharges, small-lot steps (4%, 7%, 8% below 800 m) and volume discount
-(Rs 2, 3, 4 per metre from 2,000, 4,000, 6,000 m).
+The discount is not given on 40s x 40s or where "split delivery or EOSS" is chosen.
+"Below 500 m" is off the card and is a placeholder.
 
-Open questions on the card: which mill it is from, and whether the per-end and per-pick figures are
-the price change for one end or pick (as read here).
+Nothing that was calibrated has been changed (backup: `data/Rate_Master before rate card 20261123-1659.xlsx`).
+The rates the card overlaps are in the draft `pilot/Proposed_Rate_Changes.xlsx`, sheet
+"Rate card proposals", waiting for approval: the order-size overhead points, and ten finishes still
+priced per kg.
+
+**Fit with the card (draft, nothing applied).** Median gap, share within 10%:
+
+| Step | All 1,582 | Held-back 517 |
+|---|---|---|
+| 0. Current rates | −0.5%, 48.4% | −1.5%, 46.8% |
+| 1. Card order quantity in place of the order-size points | 2.0%, 48.9% | 1.9%, 46.8% |
+| 2. and finishes at the card's Rs/m | 2.1%, 49.7% | 2.0%, 47.8% |
+| 3. and checks with weft at Rs 10/m | 3.0%, 50.9% | 2.9%, 48.2% |
+| 3b. as 3, stripes and solids with undyed weft | 6.4%, 50.0% | 6.9%, 47.6% |
+| 4a. step 3, every print rotary | 4.7%, 47.0% | 5.6%, 44.1% |
+| 4b. step 3, every print digital | 3.4%, 49.0% | 3.0%, 46.8% |
+
+What this says:
+
+- The card does not bring the tool closer to the purchase orders. Share within 10% moves by one or
+  two points; share within 20% falls (79% to 77%, and to 70–74% with a print method).
+- The card's small-lot steps are smaller than what the orders show, so step 1 leaves small orders under-costed.
+- Yarn-dyed plain improves (−13.9% to −9.0%, and −3.7% with undyed weft on stripes and solids), but the
+  same change pushes yarn-dyed twill, dobby and oxford to +7 to +11%. Weft dyeing is not the whole cause.
+- Printing at the card's rates under-costs printed satin and twill badly as rotary (+44%, +34%); digital
+  fits plain (−4.5%) and twill (+7%) but leaves satin at +17%. The orders imply about Rs 95/m for printing.
+- PLM has no print method, shaft count, top beam or weft colour, so those cannot be tested per fabric.
+
+Open questions on the card: which mill it is from, whether the per-end and per-pick figures are
+the price change for one end or pick, and what base price the print upcharge is added to.
 
 ## Next steps, in order
 
-1. Build the rate card in as upcharges, then rerun `pilot.py` and `calibrate.py`.
-2. Add a "share of yarn dyed" or "weft dyed" input for yarn-dyed fabrics.
+1. Decide which rate card proposals to apply (draft sheet "Rate card proposals").
+2. Ask the mill which base price its print and dyed-weft upcharges sit on.
 3. Map the 303 unrecognised finishes and the "Solid" dye method.
 4. Get one or two mill cost sheets (a piece-dyed poplin first) to settle weaving against dyeing.
 5. Set mill tier adjustments from the by-supplier gaps.

@@ -21,7 +21,33 @@ def load():
     if not os.path.exists(MASTER_PATH):
         import build_masters
         build_masters.build()
-    return pd.read_excel(MASTER_PATH, sheet_name=None)
+    return upgrade(pd.read_excel(MASTER_PATH, sheet_name=None))
+
+
+CARD_SHEETS = ["Print_Method", "Dobby_Upcharge", "Weft_Upcharge", "Order_Quantity"]
+TOP_BEAM = ["No", "Yes"]
+DISCOUNT = ["Applies", "Not applicable (split delivery or EOSS)"]
+
+
+def upgrade(masters):
+    """Add the mill rate card tables to a rate master that predates them.
+
+    Only adds: new sheets, two upcharge columns on Finishing_Rates and the card's
+    finishes that were not on the list. No existing rate is touched.
+    """
+    import build_masters as bm
+    m = dict(masters)
+    for name in CARD_SHEETS:
+        if name not in m:
+            m[name] = bm.SHEETS[name]()
+    fr = m["Finishing_Rates"]
+    if "Upcharge Rs per m" not in fr.columns:
+        fr = fr.copy()
+        fr["Upcharge Rs per m"] = 0.0
+        fr["Upcharge basis"] = bm.NS
+        new = bm.card_finishes()
+        m["Finishing_Rates"] = pd.concat([fr, new[~new["Finish"].isin(fr["Finish"])]], ignore_index=True)
+    return m
 
 
 def save(masters):
@@ -51,6 +77,12 @@ def lists(masters):
         "Piece shade": ["Light", "Medium", "Dark"],
         "Mill tier": masters["Mill_Tier"]["Mill tier"].tolist(),
         "Order size": masters["Order_Slab"]["Order size"].tolist(),
+        "Print method": masters["Print_Method"]["Print method"].tolist(),
+        "Dobby shafts": masters["Dobby_Upcharge"]["Dobby shafts"].tolist(),
+        "Top beam": TOP_BEAM,
+        "Weft": masters["Weft_Upcharge"]["Weft"].tolist(),
+        "Order quantity": masters["Order_Quantity"]["Order quantity"].tolist(),
+        "Volume discount": DISCOUNT,
     }
 
 
@@ -97,6 +129,18 @@ def resolve(sel, masters):
     warp_shade = pick("Warp yarn dyeing", L["Yarn shade"], "Medium" if yd else "Undyed")
     weft_shade = pick("Weft yarn dyeing", L["Yarn shade"], "Medium" if yd else "Undyed")
     piece_shade = pick("Piece shade", L["Piece shade"], "Medium")
+    method = pick("Print method", L["Print method"], L["Print method"][0])
+    shafts = pick("Dobby shafts", L["Dobby shafts"], L["Dobby shafts"][0])
+    top_beam = pick("Top beam", L["Top beam"], "No")
+    weft_mode = pick("Weft", L["Weft"], L["Weft"][0])
+    quantity = pick("Order quantity", L["Order quantity"], L["Order quantity"][0])
+    discount_ok = pick("Volume discount", L["Volume discount"], DISCOUNT[0]) == DISCOUNT[0]
+    ups = []
+
+    def upcharge(name, choice, rs, basis):
+        note(name, choice, rs, "Rs/m", basis)
+        if rs:
+            ups.append({"name": name, "basis": f"{choice}, {basis}", "amount": rs})
 
     group = masters["Weaves"].set_index("Weave")["Weave group"][weave]
     inp = {"k": float(setting(masters, "Yarn weight constant K", engine.K_DEFAULT)),
@@ -129,11 +173,18 @@ def resolve(sel, masters):
         inp[f"{side.lower()}_rate"], inp[f"{side.lower()}_ne"] = rate, count
         note(f"{side} yarn", f"{key} (Ne {count:g})", rate, "Rs/kg", basis)
 
-    # Yarn dyeing
+    # Yarn dyeing. For a yarn-dyed fabric the weft can be costed by shade (per kg), left undyed,
+    # or taken as the rate card's Rs per metre.
+    wu = masters["Weft_Upcharge"].set_index("Weft").loc[weft_mode]
+    weft_by_card = yd and weft_mode != L["Weft"][0]
+    if weft_by_card:
+        weft_shade = "Undyed"
     ydt = masters["Yarn_Dyeing"].set_index("Shade")
     for side, shade in (("warp", warp_shade), ("weft", weft_shade)):
         inp[f"{side}_dye"] = float(ydt.loc[shade, "Rs per kg yarn"])
         note(f"{side.capitalize()} yarn dyeing", shade, inp[f"{side}_dye"], "Rs/kg", ydt.loc[shade, "Basis"])
+    if weft_by_card:
+        upcharge("Dyed weft", weft_mode, float(wu["Rs per m"]), wu["Basis"])
 
     # Weaving
     wr = masters["Weaving_Rates"]
@@ -150,6 +201,11 @@ def resolve(sel, masters):
     inp["weaving_rate"] = rate
     note("Weaving", f"{weave} ({group}), {route}, {pattern}, {loom}", rate, "Rs/pick", basis)
 
+    if group == "Dobby/Matt":
+        du = masters["Dobby_Upcharge"].set_index("Dobby shafts").loc[shafts]
+        col = "Rs per m with top beam" if top_beam == "Yes" else "Rs per m"
+        upcharge("Dobby shafts and top beam", f"{shafts}, top beam: {top_beam}", float(du[col]), du["Basis"])
+
     # Sizing
     sz = masters["Sizing_Rates"]
     sz = sz[sz["Route type"] == ("Yarn Dyed" if yd else "Other")].sort_values("Warp count up to (Ne)")
@@ -162,17 +218,26 @@ def resolve(sel, masters):
     if not yd:
         pdn = masters["Piece_Dyeing"]
         shade = piece_shade if route == "Piece Dyed" else "Any"
-        hit = pdn[(pdn["Route"] == route) & (pdn["Shade"] == shade)]
+        pm = masters["Print_Method"].set_index("Print method").loc[method]
+        by_method = route == "Printed" and method != L["Print method"][0]
+        # a print method from the rate card: cloth prepared as RFD, printing added per metre
+        hit = pdn[(pdn["Route"] == ("RFD / Bleached" if by_method else route)) & (pdn["Shade"] == shade)]
         if hit.empty:
             raise ValueError(f"No piece dyeing rate for {route} / {shade}")
         inp["piece_dye_rate"] = float(hit["Rs per kg greige"].iloc[0])
-        note("Piece dyeing", f"{route}, {shade}", inp["piece_dye_rate"], "Rs/kg greige", hit["Basis"].iloc[0])
+        note("Preparation for print" if by_method else "Piece dyeing", f"{route}, {shade}",
+             inp["piece_dye_rate"], "Rs/kg greige", hit["Basis"].iloc[0])
+        if by_method:
+            upcharge("Printing", method, float(pm["Rs per m"]), pm["Basis"])
 
     # Finishing
     fr = masters["Finishing_Rates"].set_index("Finish")
     col = "Rs per kg greige (yarn dyed)" if yd else "Rs per kg greige (piece dyed / RFD / printed)"
     inp["finishing_rate"] = float(fr.loc[finish, col])
     note("Finishing", finish, inp["finishing_rate"], "Rs/kg greige", fr.loc[finish, "Basis"])
+    fin_up = _num(fr.loc[finish, "Upcharge Rs per m"]) or 0.0
+    if fin_up:
+        upcharge("Finish upcharge", finish, fin_up, fr.loc[finish, "Upcharge basis"])
 
     # Class defaults
     cd = masters["Class_Defaults"]
@@ -198,6 +263,19 @@ def resolve(sel, masters):
     inp["margin"] += m_add / 100
     note("Mill tier", tier, f"overhead +{float(mt['Overhead add (points)']):g}, margin +{m_add:g}", "points", mt["Basis"])
     note("Order size", slab, f"overhead +{float(sl['Overhead add (points)']):g}", "points", sl["Basis"])
+
+    # Order quantity: small-lot step (yarn dyed only on the card) and volume discount
+    oq = masters["Order_Quantity"].set_index("Order quantity").loc[quantity]
+    pct = float(oq["Small-lot upcharge % (yarn dyed)"]) if yd else 0.0
+    disc = float(oq["Volume discount Rs per m"])
+    why = ""
+    if disc and not discount_ok:
+        disc, why = 0.0, ", no discount: split delivery or EOSS"
+    elif disc and inp["warp_ne"] == 40 and inp["weft_ne"] == 40:
+        disc, why = 0.0, ", no discount: 40s quality"
+    inp["small_lot_pct"], inp["volume_discount"] = pct / 100, disc
+    note("Order quantity", quantity, f"small lot +{pct:g}%, discount Rs {disc:g}/m{why}", "", oq["Basis"])
+    inp["upcharges"] = ups
 
     inp["extra_per_m"] = _num(sel.get("Extra charge (Rs/m)")) or 0.0
     return inp, used
@@ -225,6 +303,9 @@ TEMPLATE_COLUMNS = [  # (column, list name or None, required)
     ("Piece shade", "Piece shade", False), ("EPI", None, True), ("PPI", None, True),
     ("Finished width (in)", None, True), ("Reed space (in)", None, False),
     ("Loom type", "Loom type", False), ("Mill tier", "Mill tier", False), ("Order size", "Order size", False),
+    ("Print method", "Print method", False), ("Dobby shafts", "Dobby shafts", False),
+    ("Top beam", "Top beam", False), ("Weft", "Weft", False), ("Order quantity", "Order quantity", False),
+    ("Volume discount", "Volume discount", False),
     ("Quoted price (Rs/m)", None, False), ("Warp yarn price override", None, False),
     ("Weft yarn price override", None, False), ("Weaving rate override (Rs/pick)", None, False),
     ("Extra charge (Rs/m)", None, False),
@@ -274,6 +355,8 @@ def make_template(masters):
         "Columns with a drop-down accept only values from the Lists sheet.",
         "Yarn dyeing shades default to Medium for yarn dyed fabrics and Undyed for the rest.",
         "Leave reed space blank to use finished width x the reed space factor in Settings.",
+        "Print method applies to printed fabrics, Dobby shafts and Top beam to dobby weaves, Weft to yarn dyed fabrics.",
+        "Order quantity sets the small-lot step (yarn dyed) and the volume discount (not given on 40s x 40s).",
         "Row 2 is an example (Qlty-1). Overwrite or delete it.",
         "Download a fresh template after changing lists in the tool, so the drop-downs match.",
     ], start=1):
@@ -288,7 +371,7 @@ def cost_many(df, masters):
     """Cost every row of an uploaded sheet. Bad rows get an Error, not a cost."""
     out = []
     names = [b for b in ("Yarn", "Yarn dyeing", "Sizing and weaving", "Dyeing and finishing",
-                         "Losses", "Overhead", "Margin")]
+                         "Losses", "Overhead", "Margin", "Mill upcharges")]
     for _, row in df.iterrows():
         sel = row.to_dict()
         rec = {"Fabric code": sel.get("Fabric code"), "Description": sel.get("Description"),

@@ -42,6 +42,16 @@ base      = yarn + yarn dyeing + sizing + weaving + finishing + piece dyeing
 price     = base / (1 - shrinkage) x (1 + process wastage + overhead) x (1 + margin) + extra
 ```
 
+Mill rate card steps come after that and are not marked up:
+
+```
+price     = (price + upcharges in Rs/m) x (1 + small-lot %) - volume discount in Rs/m
+```
+
+The upcharges are print method (rotary, digital), dobby shafts and top beam, dyed weft, and finishes
+priced per metre. All are drop-downs, and all default to "no upcharge", so a costing that does not use
+them is unchanged. See [docs/Mill_Rate_Card.md](docs/Mill_Rate_Card.md).
+
 K = 0.00059, shrinkage = 4%. `python check_engine.py` confirms the engine reproduces the seven
 qualities in the V1 workbook to the paisa; run it after any change to `engine.py` or `masters.py`.
 
@@ -61,12 +71,13 @@ qualities in the V1 workbook to the paisa; run it after any change to `engine.py
 | `refresh_groups.py` | Adds content groups and PLM weave types to the rate master |
 | `pilot.py` | Costs purchase-order fabrics and compares with the price paid |
 | `calibrate.py` | Drafts rate changes from the pilot with a held-back test; applies nothing |
-| `apply_proposals.py` | Applies the draft to the rate master, after saving a dated backup |
+| `apply_proposals.py` | Applies the draft to the rate master, after saving a dated backup. Rate card rows are applied only where the draft's Apply column says Yes. |
+| `add_rate_card.py` | One-off: adds the rate card tables to an older rate master, after a backup. Changes no existing rate. |
 | `data/Rate_Master.xlsx` | **The source of truth for every rate.** Edited through the app or in Excel. |
 | `data/plm_specs_for_po.csv` | PLM specs for the 19,669 purchase-order codes (output of `plm_extract.py`) |
 | `pilot/` | Pilot results and the proposed rate changes |
 | `templates/` | Bulk upload template |
-| `docs/` | Input file list, the mill rate card, and the roadmap |
+| `docs/` | Input file list, the mill rate card, and how to put the tool on a Hostinger server |
 
 ## Rerunning the analysis
 
@@ -74,6 +85,7 @@ qualities in the V1 workbook to the paisa; run it after any change to `engine.py
 python plm_extract.py     # needs the two large workbooks; about 90 seconds
 python refresh_groups.py  # needs the master data workbook
 python pilot.py           # needs inputs/Fabric _ 3Months_4746.xlsx and data/plm_specs_for_po.csv
+python pilot.py --card    # the same with the rate card's order quantity and dyed weft on checks
 python calibrate.py       # same inputs as pilot.py; writes a draft only
 ```
 
@@ -82,5 +94,5 @@ See [docs/INPUT_FILES.md](docs/INPUT_FILES.md) for what each source file is and 
 ## Rates and their basis
 
 Every rate carries a Basis: `V1 workbook`, `Pilot calibration <date>`, `Pilot-checked`,
-`Market circular`, `Placeholder` (a starting guess with no data behind it) or `Not set`.
+`Market circular`, `Mill rate card <date>`, `Placeholder` (a starting guess with no data behind it) or `Not set`.
 The app warns whenever a costing uses a placeholder.

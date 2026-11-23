@@ -79,17 +79,18 @@ def cost_view(res, title):
         f"&nbsp;·&nbsp; {res['finished_g_per_m']:.0f} g per running metre</div>{q}</div>",
         unsafe_allow_html=True)
 
-    top = max(b["pct"] for b in res["buckets"]) or 1
+    shown = [b for b in res["buckets"] if b["lines"]]
+    top = max(abs(b["pct"]) for b in shown) or 1
     rows = ""
-    for i, b in enumerate(res["buckets"]):
-        w = max(1.0, 62 * b["pct"] / top)
+    for i, b in enumerate(shown):
+        w = max(1.0, 62 * abs(b["pct"]) / top)
         rows += (f"<div class='sc-row'><div class='sc-bar' style='width:{w:.1f}%;background:{PURPLE[i % 7]}'></div>"
                  f"<span class='sc-name'>{b['name']}</span><span class='sc-pct'>{b['pct']:.0%}</span>"
                  f"<span class='sc-amt'>{rupee(b['amount'])} / m</span></div>")
     st.markdown(rows, unsafe_allow_html=True)
 
     st.markdown("##### Second-level detail")
-    for b in res["buckets"]:
+    for b in shown:
         with st.expander(f"{b['name']}  ·  {rupee(b['amount'])} / m  ·  {b['pct']:.1%}"):
             d = pd.DataFrame(b["lines"]).rename(columns={"name": "Line", "basis": "How it is worked out",
                                                          "amount": "Rs/m"})
@@ -176,6 +177,12 @@ def page_cost(m):
         weave = st.selectbox("Weave", L["Weave"], index=L["Weave"].index("Dobby") if "Dobby" in L["Weave"] else 0)
         pattern = st.selectbox("Pattern", L["Pattern"], index=L["Pattern"].index("Check") if "Check" in L["Pattern"] else 0)
         finish = st.selectbox("Finish", L["Finish"])
+        st.markdown("**Mill rate card**")
+        group = m["Weaves"].set_index("Weave")["Weave group"][weave]
+        method = st.selectbox("Print method", L["Print method"], disabled=route != "Printed")
+        shafts = st.selectbox("Dobby shafts", L["Dobby shafts"], disabled=group != "Dobby/Matt")
+        top_beam = st.selectbox("Top beam", L["Top beam"], disabled=group != "Dobby/Matt")
+        weft_mode = st.selectbox("Weft (yarn dyed)", L["Weft"], disabled=route != "Yarn Dyed")
     yd = route == "Yarn Dyed"
     with b:
         st.markdown("**Yarn**")
@@ -190,6 +197,9 @@ def page_cost(m):
         loom = st.selectbox("Loom type", L["Loom type"])
         tier = st.selectbox("Mill tier", L["Mill tier"])
         slab = st.selectbox("Order size", L["Order size"])
+        quantity = st.selectbox("Order quantity (rate card)", L["Order quantity"],
+                                help="Small-lot step for yarn dyed below 800 m; volume discount from 2,000 m")
+        discount = st.selectbox("Volume discount", L["Volume discount"])
     with c:
         st.markdown("**Construction**")
         epi = st.number_input("Ends per inch (EPI)", min_value=1.0, value=132.0, step=1.0)
@@ -206,7 +216,9 @@ def page_cost(m):
            "Pattern": pattern, "Finish": finish, "Warp yarn": warp, "Weft yarn": weft,
            "Warp yarn dyeing": warp_shade, "Weft yarn dyeing": weft_shade, "Piece shade": piece_shade,
            "EPI": epi, "PPI": ppi, "Finished width (in)": width, "Reed space (in)": reed or None,
-           "Loom type": loom, "Mill tier": tier, "Order size": slab, "Quoted price (Rs/m)": quote or None,
+           "Loom type": loom, "Mill tier": tier, "Order size": slab, "Print method": method,
+           "Dobby shafts": shafts, "Top beam": top_beam, "Weft": weft_mode, "Order quantity": quantity,
+           "Volume discount": discount, "Quoted price (Rs/m)": quote or None,
            "Extra charge (Rs/m)": extra or None, "Weaving rate override (Rs/pick)": wv_over or None}
     st.divider()
     try:
@@ -471,14 +483,17 @@ def page_cotton(m):
 
 RATE_SHEETS = [("Weaving_Rates", "Weaving"), ("Weaving_Uplifts", "Pattern and loom uplifts"),
                ("Sizing_Rates", "Sizing"), ("Yarn_Dyeing", "Yarn dyeing"), ("Piece_Dyeing", "Piece dyeing"),
-               ("Finishing_Rates", "Finishing"), ("Class_Defaults", "Crimp, wastage, overhead, margin"),
+               ("Finishing_Rates", "Finishing"), ("Print_Method", "Print method"),
+               ("Dobby_Upcharge", "Dobby shafts and top beam"), ("Weft_Upcharge", "Weft"),
+               ("Order_Quantity", "Order quantity"), ("Class_Defaults", "Crimp, wastage, overhead, margin"),
                ("Weaves", "Weave list"), ("Content_Groups", "Content groups")]
 
 
 def page_rates(m):
     st.title("Rate tables")
     st.caption("Every drop-down choice looks up a number here. Basis shows where the number came from: "
-               "V1 workbook, Placeholder (a starting guess) or Not set (zero until there is data).")
+               "V1 workbook, Pilot calibration, Mill rate card, Placeholder (a starting guess) or "
+               "Not set (zero until there is data).")
     for tab, (sheet, label) in zip(st.tabs([l for _, l in RATE_SHEETS]), RATE_SHEETS):
         with tab:
             ed = st.data_editor(m[sheet], num_rows="dynamic", hide_index=True, use_container_width=True,

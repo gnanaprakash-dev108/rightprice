@@ -5,6 +5,8 @@ Same arithmetic as 'Should be Cost V1 23rd Nov.xlsx', corrected method:
   weft kg/m = PPI x reed space x K x (1+weft wastage) / weft Ne
   base      = yarn + yarn dyeing + sizing + weaving + finishing + piece dyeing
   price     = base / (1-shrinkage) x (1 + process wastage + overhead) x (1 + margin) + extra
+Mill rate card steps come after that and are not marked up:
+  price     = (price + upcharges in Rs/m) x (1 + small-lot %) - volume discount in Rs/m
 
 Everything here is plain numbers in, plain numbers out. Turning drop-down
 choices into rates is done in masters.resolve().
@@ -43,6 +45,8 @@ def compute(inp):
     weft_wastage, weaving_rate, sizing_rate, finishing_rate, piece_dye_rate,
     extra_per_m, shrinkage, process_wastage, overhead, margin, k.
     Optional: weft_crimp + weft_method='Old' reproduces the old sheets.
+    Optional rate card steps: upcharges (list of {name, basis, amount} in Rs/m),
+    small_lot_pct (share of price), volume_discount (Rs/m).
     """
     k = _n(inp, "k", K_DEFAULT)
     epi, ppi = _n(inp, "epi"), _n(inp, "ppi")
@@ -88,6 +92,19 @@ def compute(inp):
     margin_cost = (subtotal + pw_cost + oh_cost) * margin
     total = subtotal + pw_cost + oh_cost + margin_cost + extra
 
+    # Mill rate card steps: price steps, so they sit outside wastage, overhead and margin.
+    ups = [{"name": str(u["name"]), "basis": str(u.get("basis", "")), "amount": float(u["amount"])}
+           for u in (inp.get("upcharges") or [])]
+    sl_pct, discount = _n(inp, "small_lot_pct"), _n(inp, "volume_discount")
+    if ups:
+        total += sum(u["amount"] for u in ups)
+    if sl_pct:
+        ups.append({"name": "Small-lot upcharge", "basis": f"{sl_pct:.1%} of price", "amount": total * sl_pct})
+        total += total * sl_pct
+    if discount:
+        ups.append({"name": "Volume discount", "basis": "fixed Rs/m off the price", "amount": -discount})
+        total -= discount
+
     # Fabric weight: yarn that stays in the cloth (no wastage), per finished metre.
     fab_warp = epi * width * k * (1 + wc) / warp_ne
     fab_weft = ppi * reed * k / weft_ne
@@ -118,6 +135,7 @@ def compute(inp):
             line("Mill overhead", f"{oh:.1%} of subtotal", oh_cost)]},
         {"name": "Margin", "lines": [
             line("Mill margin", f"{margin:.1%} on cost", margin_cost)]},
+        {"name": "Mill upcharges", "lines": ups},
     ]
     for b in buckets:
         b["amount"] = sum(l["amount"] for l in b["lines"])

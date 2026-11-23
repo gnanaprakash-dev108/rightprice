@@ -4,9 +4,15 @@ Reads the SAP purchase order export and the sourcing platform's PLM fabric code
 list extract (data/plm_specs_for_po.csv, made by plm_extract.py), keeps priced rupee-per-metre bulk orders whose material code
 has specs, costs the 100% cotton wovens with the current rate master and writes
 pilot/Pilot_Results.xlsx.   Run: python pilot.py
+
+  python pilot.py                       rate card drop-downs left at "not specified" (the calibrated rates)
+  python pilot.py --card                rate card order quantity and dyed weft on checks; old order-size points off
+  python pilot.py --card --print=Digital    also a print method for every printed fabric (Rotary or Digital)
+The results of a --card run go to pilot/Pilot_Results_rate_card.xlsx.
 """
 import os
 import re
+import sys
 import warnings
 
 import pandas as pd
@@ -107,6 +113,41 @@ def plm_count(txt, yarn_by_count):
     return None
 
 
+def quantity_band(metres, lines=1):
+    """Rate card order quantity. Small-lot steps are per colour per design, so they go by
+    the average purchase-order line; the volume discount is at fabric code level."""
+    per_line = metres / max(lines, 1)
+    if per_line < 800:
+        return ("Below 500 m" if per_line < 500 else "500 to 599 m" if per_line < 600
+                else "600 to 699 m" if per_line < 700 else "700 to 799 m")
+    return ("800 to 1,999 m" if metres < 2000 else "2,000 to 3,999 m" if metres < 4000
+            else "4,000 to 6,000 m" if metres <= 6000 else "Above 6,000 m")
+
+
+def card_choices(inp, quantity=True, weft="checks", print_method=None):
+    """Rate card drop-downs for the pilot fabrics. PLM has no print method, shaft count, top beam
+    or weft colour, so: checks have a dyed weft for certain; the rest is an assumption passed in.
+    weft: None, 'checks' (checks at the card rate, others by shade) or 'checks, others undyed'."""
+    out = inp.copy()
+    if quantity:
+        out["Order quantity"] = [quantity_band(q, n) for q, n in zip(out["PO metres"], out["PO lines"])]
+    if weft:
+        check = out["PLM pattern"].str.contains("Check", case=False)
+        other = "Undyed" if weft == "checks, others undyed" else None
+        out["Weft"] = [("Dyed, rate card" if c else other) if r == "Yarn Dyed" else None
+                       for c, r in zip(check, out["Route"])]
+    if print_method:
+        out["Print method"] = [print_method if r == "Printed" else None for r in out["Route"]]
+    return out
+
+
+def without_order_points(m):
+    """The rate master with the old order-size overhead points at zero (in memory only)."""
+    m = dict(m)
+    m["Order_Slab"] = m["Order_Slab"].assign(**{"Overhead add (points)": 0.0})
+    return m
+
+
 def build_inputs():
     """Purchase-order fabrics turned into tool inputs: (masters, inputs, not costed, funnel)."""
     import grouping
@@ -182,24 +223,33 @@ def build_inputs():
                      "EPI": epi, "PPI": ppi, "Finished width (in)": round(width, 1),
                      "Quoted price (Rs/m)": round(g.loc[code, "PO price Rs/m"], 2),
                      "Finish as written": s["finish_name"], "Finish mapped": fkey in fin_by_norm,
-                     "PO metres": g.loc[code, "qty"], "PO lines": g.loc[code, "lines"]})
+                     "PO metres": g.loc[code, "qty"], "PO lines": g.loc[code, "lines"],
+                     "PLM pattern": s["pattern_name"]})
 
     return m, pd.DataFrame(rows), pd.DataFrame(reasons), funnel
 
 
 def main():
+    card = "--card" in sys.argv
+    method = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--print=")), None)
+    out_file = OUT.replace(".xlsx", "_rate_card.xlsx") if card else OUT
     m, inp, rej, funnel = build_inputs()
     slabs = m["Order_Slab"]["Order size"].tolist()     # order size from the PO quantity, where slabs match
     by_metres = {"Below 1,000 m": (0, 1000), "1,000 to 3,000 m": (1000, 3000), "3,000 m and above": (3000, 1e12)}
     if set(by_metres) <= set(slabs):
         inp["Order size"] = inp["PO metres"].map(
             lambda q: next(k for k, (lo, hi) in by_metres.items() if lo <= q < hi))
+    if card:
+        inp = card_choices(inp, print_method=method)
+        m = without_order_points(m)
+        print(f"Rate card run: order quantity bands, dyed weft on checks, print method {method or 'not specified'}")
     funnel.append(("...100% cotton", int((~rej["Reason"].str.startswith("Not 100% cotton")).sum()) + len(inp)))
     funnel.append(("...with every field readable (costed)", len(inp)))
 
     res = masters.cost_many(inp, m)
     extra = ["Route", "Weave", "Finish", "Finish as written", "Finish mapped", "Warp yarn", "Weft yarn", "EPI",
              "PPI", "Finished width (in)", "PO metres", "PO lines"]
+    extra += [c for c in ("Order quantity", "Weft", "Print method") if c in inp.columns]
     res = pd.concat([res, inp[extra]], axis=1).rename(columns={"Quoted Rs/m": "PO price Rs/m",
                                                                 "Gap Rs/m": "PO minus should-cost Rs/m",
                                                                 "Gap %": "PO above should-cost %"})
@@ -221,8 +271,8 @@ def main():
                              "Within 10%": (ok["PO above should-cost %"].abs() <= 10).mean(),
                              "Within 20%": (ok["PO above should-cost %"].abs() <= 20).mean(),
                              "PO above should-cost (share)": (ok["PO above should-cost %"] > 0).mean()}]).round(3)
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with pd.ExcelWriter(OUT, engine="openpyxl") as xw:
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    with pd.ExcelWriter(out_file, engine="openpyxl") as xw:
         pd.DataFrame(funnel, columns=["Step", "Fabrics"]).to_excel(xw, sheet_name="Funnel", index=False)
         overall.to_excel(xw, sheet_name="Overall", index=False)
         summarise(ok, ["Route", "Weave group"]).to_excel(xw, sheet_name="By route and weave", index=False)
@@ -245,7 +295,7 @@ def main():
         print("Unmapped dye methods:", rej[rej["Reason"].str.startswith("Dye")]["Dye method"].value_counts().to_dict())
     print(ok["PO above should-cost %"].describe().round(1).to_string())
     print("Finish not mapped:", int((~ok["Finish mapped"]).sum()), ok[~ok["Finish mapped"]]["Finish as written"].value_counts().head(12).to_dict())
-    print("Saved", OUT)
+    print("Saved", out_file)
 
 
 if __name__ == "__main__":
