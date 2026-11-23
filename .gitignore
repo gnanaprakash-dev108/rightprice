@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.claude/
+.streamlit/secrets.toml
+~$*
+
+# over 100 MB once unpacked and close to the limit zipped; keep these two local
+inputs/PLM FABRIC CODE LIST*.xls
+inputs/Master Data- Pending to WFX New.xlsx
+
+# source documents kept by the price intake, and the local costing log
+data/price_sources/
+data/costing_log.csv
+
+# Uncomment the next three lines to keep purchase prices and supplier data out of the repository
+# inputs/
+# data/plm_specs_for_po.csv
+# pilot/
