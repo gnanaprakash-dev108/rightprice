@@ -14,7 +14,7 @@ The mill rate card is built in as optional upcharges. It is not yet inside the 3
 | Output | Rs per metre and Rs per kg, with buckets and second-level lines |
 | Scope of version 1 | 100% cotton woven, rupee purchases per metre |
 | Yarn master in the V1 workbook | Left untouched. The tool has its own copy in `data/Rate_Master.xlsx` |
-| Platform | Stay with the Streamlit tool for now; no larger web stack yet |
+| Platform | Streamlit until 24 Nov 2026; from then a hand-built front end over the same engine, still no database |
 | Yarn price intake | Excel/CSV, PDF, image, web link or API, all ending in a review table |
 
 ## What is built
@@ -217,6 +217,32 @@ gave, so adding the card's terms on top would count quantity twice.
 6. 66 finishes still not recognised: Others 17, ETI Clat 14, ETI + Baby Skin 9, Stain Repellent 8.
 7. "Not applicable for 40s quality" is read as warp and weft both 40s single.
 8. The draft above awaits a decision.
+
+## New front end (started 24 Nov 2026)
+
+The "no new web stack" rule was lifted by decision on 24 Nov 2026. The costing engine, the rate
+master and every rate are untouched; only the screens changed.
+
+**Stage 1, built:**
+
+- `server.py` (FastAPI) serves a hand-built front end in `web/`, styled after the FarmTicker site:
+  dark navy with a green accent, plus a light version, switched in the header.
+- Left panel grouped under Costing, Prices, Rates, Analysis; each page has its own address
+  (`#cost`, `#rates/Weaving_Rates`, and so on).
+- Cost a fabric: live costing as choices change, and a waterfall from yarn to the final price with
+  a switch between cost groups and every sub-cost. A group opens into its sub-costs on a click.
+- Dashboard cards, header search, phone layout, bulk upload, read-only prices, rate tables, mill
+  rate card, settings and pilot results.
+- The earlier Streamlit screens run beside it at `/classic`, so rates can still be edited.
+- `check_server.py` confirms the server returns the engine's numbers (Qlty-1 = Rs 181.40).
+- Reviewed cold by a separate reviewer that saw only the running screens (the "elephant and
+  goldfish" method); its findings and what was done about each are in the pull request.
+
+**Stage 2, not started:** editing of yarn rates, rate tables and settings in the new screens, and
+the yarn price intake (Excel, PDF, image, link, API). Until then these are done under `/classic`.
+
+**Not verified:** nothing has been run on Azure before the merge. If the live site does not come up,
+revert the merge; or set the app setting `RIGHTPRICE_UI` = `classic` to run the old screens alone.
 
 ## Next steps, in order
 

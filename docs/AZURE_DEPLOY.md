@@ -9,6 +9,12 @@ resource group `rightprice-rg`, plan `ASP-rightpricerg-a720` (Basic B1, India So
 Azure for Students subscription. Every push to `main` redeploys it through
 `.github/workflows/main_rightprice.yml`.
 
+Since 24 Nov 2026 the start command runs `server.py` (the new front end), which starts the earlier
+Streamlit screens beside itself and serves them under `/classic`. Nothing in the portal changes: the
+Startup Command is still `bash startup.sh`, and web sockets must stay on (the classic screens need them).
+To go back to the Streamlit screens alone without a redeploy, add the app setting
+`RIGHTPRICE_UI` = `classic` and restart; remove it to return to the new front end.
+
 Lessons from the first setup:
 
 - A student subscription allows only a few regions (Policy > Assignments > Allowed resource
@@ -90,6 +96,8 @@ Set "Restrict access" to **Require authentication**. Without this, anyone with t
 - "Application Error" straight after deploy usually means the packages are still installing, or the
   startup command is missing.
 - A page that loads and then stays on "Please wait" means web sockets are off.
+- The new pages load but "Edit rates" shows "The classic screens are still starting": wait a few
+  seconds and reload. If it persists, the Streamlit process did not start; see the Log stream.
 
 ## Cost
 

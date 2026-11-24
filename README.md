@@ -13,11 +13,17 @@ Version 1 covers 100% cotton woven fabrics. Status, findings and open items are 
 
 ```
 pip install -r requirements.txt
-streamlit run app.py
+python -m uvicorn server:app --port 8000
 ```
 
-The app needs only `data/Rate_Master.xlsx`. None of the source workbooks are needed to cost a fabric.
-On Windows, `Start RightPrice.bat` does the same on port 8502.
+Then open `http://localhost:8000`. The app needs only `data/Rate_Master.xlsx`. None of the source
+workbooks are needed to cost a fabric. On Windows, `Start RightPrice.bat` does the same on port 8502.
+
+The front end is hand-built (`web/`, plain HTML, CSS and JavaScript, no build step) and reads its
+numbers from `server.py`. The costing has not moved: every number still comes from `engine.py` and
+`masters.py`, every rate from the rate master workbook, and there is no database. The earlier
+Streamlit screens stay reachable at `/classic` (the "Edit rates" link); rate editing and the yarn
+price intake still live there until they are rebuilt.
 
 To host it on Azure, follow [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md). The environment variable
 `RIGHTPRICE_DATA` moves the rate master, saved costings and imported price files to a folder that
@@ -25,15 +31,20 @@ survives redeploys.
 
 ## Screens
 
+The left panel groups the pages under Costing, Prices, Rates and Analysis. Light and dark are
+switched in the header; the search box finds yarns, saved costings, rate tables and pages.
+
 | Screen | What it does |
 |---|---|
-| Dashboard | Saved costings, quote gap, key yarn and cotton rates, supplier cost ratios |
-| Cost a fabric | Drop-downs for every cost driver; cost view with one bar per bucket and second-level detail |
+| Dashboard | Saved costings as cards, quote gap, cotton yarn rates against the market, supplier cost ratios |
+| Cost a fabric | Drop-downs for every cost driver; a waterfall from yarn to the final price, switchable between cost groups and every sub-cost; table of every line; rates used |
 | Bulk upload | Excel template with the same drop-downs; costs every row and rejects values not on a list |
-| Yarn prices | Yarn master (editable), market reference, and price intake from Excel, PDF, image, web link or API |
+| Yarn prices | Yarn master, market reference, master against market. Editing and the price intake are under `/classic` |
 | Cotton prices | Shankar-6 history and chart |
 | Rate tables | Weaving, sizing, dyeing, finishing, print method, dobby, weft, rate card quantity, defaults, weave list, content groups |
+| Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |
 | Settings | Shrinkage, reed space factor, mill tiers, order size slabs |
+| Pilot results | Should-cost against purchase order prices, and the calibration draft |
 
 ## The calculation
 
@@ -63,7 +74,10 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 |---|---|
 | `engine.py` | The calculation. Numbers in, numbers out. |
 | `masters.py` | Reads and saves the rate master, turns drop-down choices into rates, upload template, bulk costing |
-| `app.py` | The Streamlit screens |
+| `server.py` | The web server: serves `web/`, answers its requests, and passes `/classic` through to the Streamlit screens |
+| `web/` | The front end: `index.html`, `app.css`, `app.js` |
+| `app.py` | The earlier Streamlit screens, now at `/classic` |
+| `check_server.py` | Checks the server gives the engine's numbers and refuses bad input. Must print `ALL OK` |
 | `grouping.py` | Folds blend spellings into 17 content groups and weave names into 7 weave groups |
 | `price_import.py` | Yarn price intake from Excel, PDF, image, link or API |
 | `paths.py` | Finds the source workbooks (`inputs/`, or the env variable `SHOULD_COST_INPUTS`) |
