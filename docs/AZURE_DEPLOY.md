@@ -2,6 +2,23 @@
 
 The portal's menu names change from time to time; the settings below are what matter.
 
+## Live site (set up 24 Nov 2026)
+
+`https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net`: web app `rightprice`,
+resource group `rightprice-rg`, plan `ASP-rightpricerg-a720` (Basic B1, India South Central),
+Azure for Students subscription. Every push to `main` redeploys it through
+`.github/workflows/main_rightprice.yml`.
+
+Lessons from the first setup:
+
+- A student subscription allows only a few regions (Policy > Assignments > Allowed resource
+  deployment regions). "South India" was refused; "India South Central" was allowed.
+- Connect GitHub and let the first deploy finish **before** setting the startup command. With the
+  command set and no code, the app fails to start, the site shows 503 and Deployment Center cannot save.
+- The Free F1 plan ran out of its daily processor quota ("Site Disabled", status "Quota exceeded").
+  Basic B1 is the smallest plan that runs the tool comfortably.
+- Stopping the web app does not stop the B1 charge; scale the plan down to Free F1 to stop paying.
+
 ## Before you start
 
 - An Azure subscription (Azure for Students, a free trial, or pay-as-you-go).
