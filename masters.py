@@ -11,16 +11,26 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import engine
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MASTER_PATH = os.path.join(HERE, "data", "Rate_Master.xlsx")
-LOG_PATH = os.path.join(HERE, "data", "costing_log.csv")
+SHIPPED_MASTER = os.path.join(HERE, "data", "Rate_Master.xlsx")
+# On a server, set RIGHTPRICE_DATA to a folder that survives redeploys (Azure: /home/rightprice-data).
+# Unset, everything stays in the project's own data folder, as on a laptop.
+DATA_DIR = os.environ.get("RIGHTPRICE_DATA") or os.path.join(HERE, "data")
+MASTER_PATH = os.path.join(DATA_DIR, "Rate_Master.xlsx")
+LOG_PATH = os.path.join(DATA_DIR, "costing_log.csv")
 
 ROUTES = ["Yarn Dyed", "Piece Dyed", "RFD / Bleached", "Printed"]
 
 
 def load():
     if not os.path.exists(MASTER_PATH):
-        import build_masters
-        build_masters.build()
+        if not os.path.exists(SHIPPED_MASTER):
+            import build_masters
+            build_masters.build()
+        if MASTER_PATH != SHIPPED_MASTER:
+            # first start on a server: begin from the rate master that came with the code
+            import shutil
+            os.makedirs(DATA_DIR, exist_ok=True)
+            shutil.copyfile(SHIPPED_MASTER, MASTER_PATH)
     return pd.read_excel(MASTER_PATH, sheet_name=None)
 
 
