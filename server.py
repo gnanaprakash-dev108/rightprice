@@ -210,7 +210,12 @@ def save(sel: dict = Body(...)):
            "Quoted Rs/m": res["quote"], "Gap Rs/m": None if res["gap"] is None else round(res["gap"], 2),
            "Gap %": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
            # the choices themselves, so the costing can be opened again and re-costed on today's rates
-           "Id": f"{now:%Y%m%d%H%M%S%f}", "Inputs": json.dumps(sel)}
+           "Id": f"{now:%Y%m%d%H%M%S%f}", "Inputs": json.dumps(sel),
+           # what it cost and on which rates, so a later look can say what has moved since
+           "Result": json.dumps({"total_per_m": res["total_per_m"],
+                                 "buckets": [{"name": b["name"], "amount": b["amount"]} for b in res["buckets"]],
+                                 "rates": [{"Item": u["Item"], "Choice": str(u["Choice"]), "Value": clean(u["Value"]) if not isinstance(u["Value"], str) else u["Value"],
+                                            "Unit": u["Unit"]} for u in res["rates_used"]]})}
     os.makedirs(os.path.dirname(masters.LOG_PATH), exist_ok=True)
     pd.concat([read_log(), pd.DataFrame([row])], ignore_index=True).to_csv(masters.LOG_PATH, index=False)
     return {"saved": True, "id": row["Id"]}
@@ -260,7 +265,12 @@ def dashboard():
             inputs = json.loads(raw) if isinstance(raw, str) and raw else None
         except ValueError:
             inputs = None
-        items.append({"id": None if pd.isna(r.get("Id")) else str(r.get("Id")).split(".")[0], "inputs": inputs})
+        try:
+            then = json.loads(r.get("Result")) if isinstance(r.get("Result"), str) and r.get("Result") else None
+        except ValueError:
+            then = None
+        items.append({"id": None if pd.isna(r.get("Id")) else str(r.get("Id")).split(".")[0], "inputs": inputs,
+                      "then": then, "saved_on": clean(r.get("Saved on"))})
     return {"saved": records(shown[[c for c in LOG_COLS if c in shown.columns]]), "saved_items": items,
             "saved_count": len(log),
             "avg_gap_pct": None if gaps.empty else float(gaps.mean()), "cotton": cotton, "yarns": yarns,

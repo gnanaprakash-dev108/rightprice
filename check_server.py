@@ -44,6 +44,11 @@ def main():
                 ["/api/table/" + s for s in meta["tables"]]:
             check(f"GET {path}", c.get(path).status_code == 200)
         check("Unknown table refused", c.get("/api/table/Nope").status_code == 404)
+        man = c.get("/manifest.webmanifest")
+        check("Phone home-screen files are served",
+              man.status_code == 200 and man.json()["display"] == "standalone"
+              and all(c.get("/" + i["src"]).status_code == 200 for i in man.json()["icons"])
+              and c.get("/icons/icon-180.png").status_code == 200)
         home = c.get("/")
         check("Page asks the browser for the current script, not a stored copy",
               "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"
@@ -65,6 +70,12 @@ def main():
         check("Saved costing listed with its choices",
               d["saved_count"] == 1 and d["saved_items"][0]["id"] == sid and d["saved_items"][0]["inputs"]["EPI"] == 132
               and "Inputs" not in d["saved"]["columns"])
+        then = d["saved_items"][0]["then"]
+        check("Saved costing keeps its cost and the rates it used",
+              abs(then["total_per_m"] - 181.40) < 0.01 and len(then["buckets"]) == 8
+              and any(u["Item"] == "Warp yarn" and u["Value"] == 345 for u in then["rates"]))
+        lea = c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Count system": "Lea (linen)", "Warp count": 112, "Weft count": 112})).json()
+        check("Count typed in lea through the server (112 lea = Ne 40)", abs(lea["total_per_m"] - 181.40) < 0.01, f"{lea['total_per_m']:.2f}")
         check("Saved costing deleted", c.delete(f"/api/saved/{sid}").status_code == 200
               and c.get("/api/dashboard").json()["saved_count"] == 0)
         check("Deleting it twice refused", c.delete(f"/api/saved/{sid}").status_code == 404)

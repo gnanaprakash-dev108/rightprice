@@ -34,11 +34,15 @@ survives redeploys.
 
 The left panel groups the pages under Costing, Prices, Rates and Analysis. Light and dark are
 switched in the header; the search box finds yarns, saved costings, rate tables and pages.
+The left panel folds to icons and opens on hover; pin it open, or turn the compact header off, under
+Settings > Display. On a phone, "Add to Home screen" in the browser gives it its own icon and a
+full-screen view.
 
 | Screen | What it does |
 |---|---|
 | Dashboard | Saved costings as cards, quote gap, cotton yarn rates against the market, supplier cost ratios |
 | Cost a fabric | Numbered steps on the left (fabric content, route, yarn, dyeing, construction, finish), each deciding what the next asks; live cost on the right; chart switchable between bars, waterfall, pie, treemap and line, by cost group or every sub-cost |
+| Compare | Two costings side by side on today's rates: every group and sub-cost, the difference, and the choices that differ |
 | Bulk upload | Excel template with the same drop-downs; costs every row and rejects values not on a list |
 | Yarn prices | Yarn master and market reference, both editable; master against market |
 | Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference |
