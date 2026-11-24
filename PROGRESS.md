@@ -21,7 +21,7 @@ The mill rate card is built in as optional upcharges. It is not yet inside the 3
 
 - Costing engine that reproduces all seven V1 qualities exactly (Qlty-1 = Rs 181.40/m).
 - Seven-screen app, bulk upload template, cost sheet download.
-- Rate master with 20 sheets; every rate carries its basis.
+- Rate master with 20 sheets; every rate carries its basis. 48 are placeholders, six of them the new blend yarns.
 - PLM link: 19,669 of 19,770 purchase-order material codes have specs.
 - Content grouping: 8,446 blend spellings folded into 17 groups; stretch tracked separately.
 - 68 PLM woven weave types mapped to 7 weave groups.
@@ -76,7 +76,7 @@ yarn-dyed oxford −2.7%, 46%; piece-dyed satin 3.1%, 57%; piece-dyed twill 4.3%
    probably missing a premium cotton or finish.
 5. **Rajapalayam sits 8% below should-cost** across 289 fabrics while Arvind, NSL and Vardhman are within 4%.
    Mill tier is still set to zero.
-6. **42 placeholder rates remain** (46 before the rate card), mostly finishes. Four yarn rates are placeholders: Cotton 20S and
+6. **48 placeholder rates remain**, mostly finishes; six are the poly cotton and linen yarns added on 24 Nov. Four yarn rates are placeholders: Cotton 20S and
    Slub 20S, 24S, 30S.
 7. **66 fabrics have a finish the tool does not recognise** (303 before) and are costed as Normal.
 8. **328 cotton fabrics are not costed** because one direction mixes yarns ("40s + 40s melange").
@@ -238,11 +238,41 @@ master and every rate are untouched; only the screens changed.
 - Reviewed cold by a separate reviewer that saw only the running screens (the "elephant and
   goldfish" method); its findings and what was done about each are in the pull request.
 
-**Stage 2, not started:** editing of yarn rates, rate tables and settings in the new screens, and
-the yarn price intake (Excel, PDF, image, link, API). Until then these are done under `/classic`.
+**Stage 1 is live** (confirmed on the Azure site, 24 Nov 2026).
 
-**Not verified:** nothing has been run on Azure before the merge. If the live site does not come up,
-revert the merge; or set the app setting `RIGHTPRICE_UI` = `classic` to run the old screens alone.
+**Stage 2, built and merged 24 Nov 2026:**
+
+- Every rate table, the mill rate card tables, the yarn master, the market reference and the
+  settings are edited in place. The server refuses text in a number column, a duplicate key, and
+  any change after which the example fabric can no longer be costed. The first change of each day
+  keeps `Rate_Master backup <date>.xlsx` beside the rate master.
+- Cotton prices can be added. "Bring in prices" rebuilds the yarn price intake: Excel, CSV, PDF,
+  picture, web page or price service, ending in a review table.
+- `/classic` is kept as a fallback only.
+
+**Cost a fabric, redesigned 24 Nov 2026:**
+
+- Numbered steps on the left: fabric content, how it is coloured, yarn, dyeing, weave and
+  construction, finish, name and compare. Each step shows only what the earlier choices call for:
+  yarn dyeing shades for yarn dyed, a piece shade for piece dyed, a print method for printed,
+  nothing for bleached. Finished steps fold to a one-line summary. The cost is on the right and
+  updates as choices change; on a desktop the page fits one screen.
+- Chart views: bars (the default, one bar per group from zero), waterfall, pie, treemap and line,
+  each by cost group or by every sub-cost.
+- Fabric content is 100% cotton, poly cotton or linen and filters the yarn list. It is not a cost
+  driver in the engine.
+
+**Poly cotton and linen are provisional.** Six yarn rates were added as placeholders
+(`yarn_seed.py`): poly cotton 65/35 30s, 40s, 45s at Rs 215, 235, 245 per kg; linen 25, 40, 60 lea at
+Rs 750, 900, 1,200. They are guesses, not market figures. Weaving, sizing, dyeing and finishing
+rates for those fabrics are the ones measured on 100% cotton. None of this has been checked against
+a purchase price.
+
+**Open on the front end:**
+
+1. Real yarn rates for poly cotton and linen, and process rates for those fabrics.
+2. The web page and price service routes of the intake were not tried against a real site.
+3. Several people editing rates at the same moment: the last save wins.
 
 ## Next steps, in order
 

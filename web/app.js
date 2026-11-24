@@ -82,7 +82,7 @@ const NAV = [
   ["Analysis", [["pilot", "Pilot results"]]],
 ];
 const PAGES = {};
-const state = { meta: null, sel: null, wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
+const state = { meta: null, sel: null, visited: new Set(), chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
 
 function buildNav() {
   const nav = $("#nav");
@@ -247,96 +247,178 @@ PAGES.dashboard = async () => {
 
 // ------------------------------------------------------------------ cost a fabric
 const GROUP_COLOR = ["--g1", "--g2", "--g3", "--g4", "--g5", "--g6", "--g7", "--g8"];
-function defaultSel() {
-  const L = state.meta.lists, ex = state.meta.example;
-  return { "Fabric code": ex["Fabric code"], Description: ex.Description, Supplier: "", Route: ex.Route, Weave: ex.Weave,
-    Pattern: ex.Pattern, Finish: ex.Finish, "Warp yarn": ex["Warp yarn"], "Weft yarn": ex["Weft yarn"],
-    "Warp yarn dyeing": "Medium", "Weft yarn dyeing": "Medium", "Piece shade": "Medium",
-    "Weft (yarn dyed)": L["Weft (yarn dyed)"][0], EPI: ex.EPI, PPI: ex.PPI, "Finished width (in)": ex["Finished width (in)"],
-    "Reed space (in)": ex["Reed space (in)"], "Loom type": L["Loom type"][0], "Mill tier": L["Mill tier"][0],
-    "Rate card quantity": L["Rate card quantity"][0], "Order size": L["Order size"][0], "Print method": L["Print method"][0],
-    "Dobby shafts": L["Dobby shafts"][0], "Top beam": L["Top beam"][0], "Quoted price (Rs/m)": "", "Extra charge (Rs/m)": "",
-    "Weaving rate override (Rs/pick)": "" };
+const NUM_FIELDS = ["EPI", "PPI", "Finished width (in)", "Reed space (in)", "Quoted price (Rs/m)", "Extra charge (Rs/m)", "Weaving rate override (Rs/pick)"];
+const contentOfYarn = key => (state.meta.yarns.find(y => y.key === key) || {}).content;
+function blankSel() { return { Content: "", Route: "" }; }
+function exampleSel() {
+  const ex = state.meta.example;
+  return Object.assign(blankSel(), ex, { Content: contentOfYarn(ex["Warp yarn"]) || state.meta.contents[0], "Weft (yarn dyed)": state.meta.lists["Weft (yarn dyed)"][0] });
 }
-// which fields apply to the fabric as it stands; the rest are greyed and not sent
-function applies(sel) {
-  const L = state.meta.lists, yd = sel.Route === "Yarn Dyed", dobby = state.meta.weave_group[sel.Weave] === "Dobby/Matt";
-  return { "Piece shade": sel.Route === "Piece Dyed", "Weft (yarn dyed)": yd, "Dobby shafts": dobby, "Top beam": dobby,
-    "Order size": sel["Rate card quantity"] === L["Rate card quantity"][0] };
+function selFromRow(row) {          // a bulk upload row opened in the cost view
+  const s = Object.assign(blankSel(), Object.fromEntries(Object.entries(row).filter(([, v]) => !blank(v))));
+  s.Content = contentOfYarn(s["Warp yarn"]) || state.meta.contents[0];
+  return s;
+}
+// what each route asks for in the colouring step; anything else is not shown and not sent
+const ROUTE_FIELDS = { "Yarn Dyed": ["Warp yarn dyeing", "Weft (yarn dyed)", "Weft yarn dyeing", "Print method"], "Piece Dyed": ["Piece shade"], "Printed": ["Print method"], "RFD / Bleached": [] };
+function fieldOn(sel, name) {
+  const L = state.meta.lists, first = n => L[n][0];
+  if (["Warp yarn dyeing", "Weft (yarn dyed)", "Weft yarn dyeing", "Piece shade", "Print method"].includes(name)) {
+    if (!(ROUTE_FIELDS[sel.Route] || []).includes(name)) return false;
+    if (name === "Weft yarn dyeing") return (sel["Weft (yarn dyed)"] || first("Weft (yarn dyed)")) === first("Weft (yarn dyed)");
+    return true;
+  }
+  if (name === "Dobby shafts" || name === "Top beam") return state.meta.weave_group[sel.Weave] === "Dobby/Matt";
+  if (name === "Order size") return (sel["Rate card quantity"] || first("Rate card quantity")) === first("Rate card quantity");
+  return true;
 }
 function payload(sel) {
-  const on = applies(sel), out = {};
-  for (const [k, v] of Object.entries(sel)) if (on[k] !== false && !blank(v)) out[k] = v;
+  const out = {};
+  for (const [k, v] of Object.entries(sel)) if (!blank(v) && fieldOn(sel, k)) out[k] = v;
   return out;
 }
+const STEPS = [
+  { id: "fabric", title: "Fabric", need: "Choose the fabric", done: s => !!s.Content, sum: s => s.Content },
+  { id: "route", title: "How it is coloured", need: "Choose yarn dyed, piece dyed, bleached or printed", done: s => !!s.Route, sum: s => s.Route },
+  { id: "yarn", title: "Yarn", need: "Choose the warp and weft yarn", done: s => !!s["Warp yarn"] && !!s["Weft yarn"], sum: s => `${s["Warp yarn"]} × ${s["Weft yarn"]}` },
+  { id: "dye", title: s => ({ "Yarn Dyed": "Yarn dyeing", "Piece Dyed": "Piece dyeing", Printed: "Printing", "RFD / Bleached": "Bleaching" }[s.Route] || "Dyeing"), done: () => true, sum: s => [["Warp yarn dyeing", "warp "], ["Weft (yarn dyed)", "weft "], ["Weft yarn dyeing", "weft shade "], ["Piece shade", ""], ["Print method", "print: "]].filter(([f]) => fieldOn(s, f) && s[f]).map(([f, p]) => p + s[f]).join(" \u00B7 ") },
+  { id: "cons", title: "Weave and construction", need: "Choose the weave and type EPI, PPI and width", done: s => !!s.Weave && s.EPI > 0 && s.PPI > 0 && s["Finished width (in)"] > 0, sum: s => `${s.Weave} · ${s.EPI} × ${s.PPI} · ${s["Finished width (in)"]} in` },
+  { id: "finish", title: "Finish, mill and order", done: () => true, sum: s => [s.Finish, fieldOn(s, "Order size") ? s["Order size"] : s["Rate card quantity"]].filter(Boolean).join(" \u00B7 ") },
+  { id: "name", title: "Name and compare (optional)", done: () => true, sum: s => [s["Fabric code"], s["Quoted price (Rs/m)"] ? "quote Rs " + s["Quoted price (Rs/m)"] : ""].filter(Boolean).join(" \u00B7 ") },
+];
+const ready = sel => STEPS.every(st => st.done(sel));
 
 PAGES.cost = async () => {
-  const L = state.meta.lists;
-  if (!state.sel) state.sel = defaultSel();
-  const sel = state.sel, inputs = {};
-  const out = h("div", { "aria-live": "polite" });
-
-  const field = (name, o = {}) => {
-    const id = "f-" + name.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-    let input;
-    if (o.list) {
-      input = h("select", { id }, L[o.list].map(v => h("option", { value: v }, v)));
-      if (!L[o.list].includes(sel[name])) sel[name] = L[o.list][0];
-      input.value = sel[name];
-    } else {
-      input = h("input", { id, type: o.number ? "number" : "text", value: sel[name] ?? "", step: o.step || (o.number ? "any" : null), min: o.number ? "0" : null, placeholder: o.placeholder, inputmode: o.number ? "decimal" : null });
-    }
-    inputs[name] = input;
-    input.addEventListener(o.list ? "change" : "input", () => {
-      sel[name] = o.number ? (input.value === "" ? "" : Number(input.value)) : input.value;
-      if (name === "Route") {           // shades follow the route, as in the bulk template
-        const shade = sel.Route === "Yarn Dyed" ? "Medium" : "Undyed";
-        for (const s of ["Warp yarn dyeing", "Weft yarn dyeing"]) { sel[s] = shade; inputs[s].value = shade; }
-      }
-      sync(); recalc();
-    });
-    return h("div", { class: "field" + (o.wide ? " wide" : "") }, h("label", { for: id }, o.label || name), input, o.hint ? h("span", { class: "hint" }, o.hint) : null);
-  };
-  const sync = () => {
-    const yd = sel.Route === "Yarn Dyed", small = state.meta.small_lot_bands;
-    for (const o of inputs["Rate card quantity"].options) o.disabled = !yd && small.includes(o.value);
-    if (!yd && small.includes(sel["Rate card quantity"])) {      // a small-lot band cannot stay on a fabric that is not yarn dyed
-      sel["Rate card quantity"] = L["Rate card quantity"][0]; inputs["Rate card quantity"].value = sel["Rate card quantity"];
-      toast("Quantity band cleared: bands below 800 m are for yarn dyed fabrics only");
-    }
-    const on = applies(sel);
-    for (const [k, el] of Object.entries(inputs)) el.disabled = on[k] === false;
-  };
-  const card = (title, ...fields) => h("div", { class: "card" }, h("h3", {}, title), h("div", { class: "fields" }, fields));
-
-  const form = h("form", { class: "form-grid", onsubmit: e => e.preventDefault() },
-    card("Fabric", field("Fabric code"), field("Supplier"), field("Description", { wide: true }), field("Route", { list: "Route" }), field("Weave", { list: "Weave" }), field("Pattern", { list: "Pattern" }), field("Finish", { list: "Finish" })),
-    card("Yarn and dyeing", field("Warp yarn", { list: "Yarn" }), field("Weft yarn", { list: "Yarn" }), field("Warp yarn dyeing", { list: "Yarn shade" }), field("Weft yarn dyeing", { list: "Yarn shade" }), field("Weft (yarn dyed)", { list: "Weft (yarn dyed)", label: "Weft: dyed or undyed", hint: "Undyed takes weft yarn dyeing away" }), field("Piece shade", { list: "Piece shade" })),
-    card("Construction", field("EPI", { number: true, label: "Ends per inch (EPI)" }), field("PPI", { number: true, label: "Picks per inch (PPI)" }), field("Finished width (in)", { number: true, label: "Finished width (inch)" }), field("Reed space (in)", { number: true, label: "Reed space (inch)", hint: "Blank = worked out from width" })),
-    card("Mill and order", field("Loom type", { list: "Loom type" }), field("Mill tier", { list: "Mill tier", hint: "No adjustment is set for any tier yet" }), field("Rate card quantity", { list: "Rate card quantity", label: "Quantity band (mill rate card)", hint: "When set, it is used instead of Order size. Bands below 800 m are for yarn dyed only" }), field("Order size", { list: "Order size", label: "Order size (pilot slabs)" })),
-    card("Mill rate card upcharges", field("Print method", { list: "Print method", hint: "Not selected = printing rate per kg" }), field("Dobby shafts", { list: "Dobby shafts" }), field("Top beam", { list: "Top beam" })),
-    card("Compare and overrides (optional)", field("Quoted price (Rs/m)", { number: true, label: "Supplier's quote (Rs/m)" }), field("Extra charge (Rs/m)", { number: true }), field("Weaving rate override (Rs/pick)", { number: true, step: "0.01", wide: true, hint: "Blank = use the rate table" })));
-  sync();
+  const L = state.meta.lists, M = state.meta;
+  if (!state.sel) state.sel = blankSel();
+  const sel = state.sel;
+  const flow = h("div", { class: "flow" }), out = h("div", { class: "cost-out", "aria-live": "polite" });
 
   let timer, last = 0;
   const recalc = () => {
     clearTimeout(timer);
+    if (!ready(sel)) { ++last; return out.replaceChildren(waiting(sel)); }
     timer = setTimeout(async () => {
       const mine = ++last;
-      try {
-        const res = await (await postJSON("/api/cost", payload(sel))).json();
-        if (mine === last) out.replaceChildren(...costView(res, sel));
-      } catch (e) {
-        if (mine === last) out.replaceChildren(h("div", { class: "notice err", role: "alert" }, "Cannot cost this fabric: " + e.message));
-      }
-    }, 180);
+      try { const res = await (await postJSON("/api/cost", payload(sel))).json(); if (mine === last) out.replaceChildren(...costView(res, sel)); }
+      catch (e) { if (mine === last) out.replaceChildren(h("div", { class: "notice err", role: "alert" }, "Cannot cost this fabric: " + e.message)); }
+    }, 160);
   };
-  recalc();
-  return [...pageHead("Cost a fabric", "Every cost driver is a drop-down from the rate master. Only EPI, PPI, width and reed space are typed. The cost updates as you change a choice."), form,
-    h("div", { class: "row-actions" }, h("button", { class: "btn", type: "button", onclick: () => { state.sel = null; route(); } }, "Reset to the example fabric")),
-    h("div", { style: "margin-top:16px" }, out)];
+  const doneNow = () => STEPS.map(st => st.done(sel));
+  const advance = before => {            // the open step has just been finished: fold it and open the next
+    const after = doneNow(), i = STEPS.findIndex(st => st.id === state.openStep);
+    if (i >= 0 && !before[i] && after[i] && i < STEPS.length - 1) { state.openStep = STEPS[i + 1].id; return true; }
+    return false;
+  };
+  const set = (name, value, repaint = true) => {
+    const before = doneNow();
+    sel[name] = value;
+    if (name === "Content") { let cleared = false; for (const y of ["Warp yarn", "Weft yarn"]) if (sel[y] && contentOfYarn(sel[y]) !== value) { sel[y] = ""; cleared = true; } if (cleared) toast(`Yarn cleared: choose a ${value.toLowerCase()} yarn in step 3`); }
+    if (name === "Route") {                    // each route starts from its own defaults
+      // choices made for another route are kept, out of sight, in case the buyer comes back to it
+      const fill = (f, v) => { if (blank(sel[f])) sel[f] = v; };
+      if (value === "Yarn Dyed") { fill("Warp yarn dyeing", "Medium"); fill("Weft yarn dyeing", "Medium"); fill("Weft (yarn dyed)", L["Weft (yarn dyed)"][0]); }
+      if (value === "Piece Dyed") fill("Piece shade", "Medium");
+      if (value !== "Yarn Dyed" && M.small_lot_bands.includes(sel["Rate card quantity"])) { sel["Rate card quantity"] = L["Rate card quantity"][0]; toast("Quantity band cleared: bands below 800 m are for yarn dyed fabrics only"); }
+    }
+    if (name === "Warp yarn" && !sel["Weft yarn"]) sel["Weft yarn"] = value;      // most fabrics use one yarn both ways
+    const moved = repaint && (name === "Content" || name === "Route") && advance(before);     // a chip finishes its step; elsewhere "Next" moves on
+    if (repaint) paint(moved ? null : name, moved);
+    recalc();
+  };
+
+  // --- field builders
+  const idOf = n => "f-" + n.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const wrap = (name, label, input, hint, wide) => h("div", { class: "field" + (wide ? " wide" : "") }, h("label", { for: idOf(name) }, label || name), input, hint ? h("span", { class: "hint" }, hint) : null);
+  const pick = (name, list, o = {}) => {
+    const opts = (o.options || L[list]).map(v => typeof v === "string" ? { value: v, text: v } : v);
+    if (blank(sel[name]) && !o.blank) sel[name] = opts[0].value;
+    const input = h("select", { id: idOf(name) }, o.blank ? h("option", { value: "" }, o.blank) : null, opts.map(v => h("option", { value: v.value, disabled: v.disabled || null }, v.text)));
+    input.value = sel[name] ?? "";
+    input.addEventListener("change", () => set(name, input.value));
+    return wrap(name, o.label, input, o.hint, o.wide);
+  };
+  const typed = (name, o = {}) => {
+    const input = h("input", { id: idOf(name), type: o.text ? "text" : "number", value: sel[name] ?? "", step: o.step || (o.text ? null : "any"), min: o.text ? null : "0", inputmode: o.text ? null : "decimal", placeholder: o.placeholder });
+    let wasDone = doneNow();
+    input.addEventListener("input", () => { set(name, o.text ? input.value : (input.value === "" ? "" : Number(input.value)), false); });
+    input.addEventListener("change", () => {      // typing finished (or unfinished) the step: unlock what follows, keep the buyer where they are
+      const before = wasDone.join(); wasDone = doneNow();
+      if (wasDone.join() !== before) setTimeout(() => { const id = document.activeElement && document.activeElement.id; paint(); const el = id && document.getElementById(id); if (el) el.focus({ preventScroll: true }); }, 0);
+    });
+    return wrap(name, o.label, input, o.hint, o.wide);
+  };
+  const chipset = (name, values, label) => h("div", { class: "field wide" }, h("span", { class: "lbl", id: idOf(name) + "-l" }, label),
+    h("div", { class: "chips", role: "group", "aria-labelledby": idOf(name) + "-l" }, values.map(v => h("button", { type: "button", class: "chip", "aria-pressed": String(sel[name] === v), "data-v": v, onclick: () => set(name, v) }, v))));
+  const yarnOptions = () => M.yarns.filter(y => y.content === sel.Content).map(y => ({ value: y.key, text: `${y.key} · Rs ${fmt(y.rate, 0)}/kg${y.basis.startsWith("Placeholder") ? " · placeholder" : ""}` }));
+
+  const bodies = {
+    fabric: () => [chipset("Content", M.contents, "Fabric content"),
+      sel.Content && sel.Content !== M.contents[0] ? h("div", { class: "notice wide", style: "margin:0" }, "Yarn rates for this content are placeholders, and the weaving, dyeing and finishing rates were measured on 100% cotton. Treat the cost as provisional.") : null],
+    route: () => [chipset("Route", L.Route, "Route")],
+    yarn: () => { const opts = yarnOptions(); return opts.length ? [pick("Warp yarn", null, { options: opts, blank: "Choose...", wide: true }), pick("Weft yarn", null, { options: opts, blank: "Choose...", wide: true })] : [h("div", { class: "notice wide", style: "margin:0" }, "No yarn of this content is in the yarn master yet. Add one under Yarn prices.")]; },
+    dye: () => {
+      const f = [];
+      if (fieldOn(sel, "Warp yarn dyeing")) f.push(pick("Warp yarn dyeing", "Yarn shade", { label: "Warp shade" }));
+      if (fieldOn(sel, "Weft (yarn dyed)")) f.push(pick("Weft (yarn dyed)", "Weft (yarn dyed)", { label: "Weft: dyed or undyed" }));
+      if (fieldOn(sel, "Weft yarn dyeing")) f.push(pick("Weft yarn dyeing", "Yarn shade", { label: "Weft shade" }));
+      if (fieldOn(sel, "Piece shade")) f.push(pick("Piece shade", "Piece shade"));
+      if (fieldOn(sel, "Print method")) f.push(pick("Print method", "Print method", sel.Route === "Printed" ? { hint: "Not selected = the calibrated printing rate per kg. Rotary or Digital uses the mill rate card instead", wide: true } : { label: "Print over the cloth", hint: "Leave at Not selected for no print" }));
+      return f.length ? f : [h("p", { class: "sub wide", style: "margin:0" }, "Bleached only: nothing to choose here.")];
+    },
+    cons: () => [pick("Weave", "Weave", { blank: "Choose..." }), pick("Pattern", "Pattern", { hint: "No price uplift is set for any pattern yet" }),
+      typed("EPI", { label: "Ends per inch (EPI)" }), typed("PPI", { label: "Picks per inch (PPI)" }), typed("Finished width (in)", { label: "Finished width (inch)" }), typed("Reed space (in)", { label: "Reed space (inch)", hint: "Blank = from width" }),
+      fieldOn(sel, "Dobby shafts") ? pick("Dobby shafts", "Dobby shafts") : null, fieldOn(sel, "Top beam") ? pick("Top beam", "Top beam") : null],
+    finish: () => [pick("Finish", "Finish", { wide: true }), pick("Loom type", "Loom type"), pick("Mill tier", "Mill tier"),
+      pick("Rate card quantity", null, { label: "Quantity band (mill rate card)", hint: "When set, used instead of Order size", options: L["Rate card quantity"].map(v => ({ value: v, text: v, disabled: sel.Route !== "Yarn Dyed" && M.small_lot_bands.includes(v) })) }),
+      fieldOn(sel, "Order size") ? pick("Order size", "Order size", { label: "Order size (pilot slabs)" }) : null],
+    name: () => [typed("Fabric code", { text: true }), typed("Supplier", { text: true }), typed("Description", { text: true, wide: true }),
+      typed("Quoted price (Rs/m)", { label: "Supplier's quote (Rs/m)" }), typed("Extra charge (Rs/m)"), typed("Weaving rate override (Rs/pick)", { step: "0.01", wide: true, hint: "Blank = use the rate table" })],
+  };
+
+  /* One step is open at a time. A finished step folds to a line that says what was chosen;
+     clicking it opens it again. A step cannot be opened before the ones above it are done. */
+  const paint = (focusName, moved) => {
+    let reachable = true;
+    if (!state.openStep || !STEPS.some(st => st.id === state.openStep)) state.openStep = (STEPS.find(st => !st.done(sel)) || {}).id || null;
+    flow.replaceChildren(...STEPS.map((st, i) => {
+      const title = typeof st.title === "function" ? st.title(sel) : st.title;
+      const open = reachable && state.openStep === st.id;
+      if (open) state.visited.add(st.id);
+      const mine = reachable, done = mine && st.done(sel) && (!!st.need || state.visited.has(st.id));
+      if (mine && !st.done(sel)) reachable = false;
+      const sum = mine && st.done(sel) && !open ? ((done ? "" : "default: ") + st.sum(sel)).replace(/^default: $/, "") : "";
+      const head = [h("span", { class: "step-n", "aria-hidden": "true" }, done ? "\u2713" : String(i + 1)), h("h2", {}, title), sum ? h("span", { class: "step-sum" }, sum) : null, mine ? h("span", { class: "step-caret", html: svg('<path d="m6 9 6 6 6-6"/>', 14) }) : null];
+      const next = STEPS[i + 1];
+      return h("section", { class: "step" + (mine ? "" : " locked") + (done ? " done" : "") + (open ? " open" : ""), "aria-label": `Step ${i + 1}: ${title}` },
+        mine ? h("button", { type: "button", class: "step-head", "aria-expanded": String(open), "data-step": st.id, onclick: () => { state.openStep = open ? null : st.id; paint(null, true); } }, head) : h("div", { class: "step-head" }, head),
+        open ? h("div", { class: "fields" }, bodies[st.id](), next && st.done(sel) ? h("div", { class: "wide" }, h("button", { type: "button", class: "btn small", onclick: () => { state.openStep = next.id; paint(null, true); } }, "Next: " + (typeof next.title === "function" ? next.title(sel) : next.title))) : null) : null);
+    }));
+    if (focusName) { const el = flow.querySelector(`[data-v="${CSS.escape(String(sel[focusName] ?? ""))}"]`) || $("#" + idOf(focusName), flow); if (el) el.focus({ preventScroll: true }); }
+    else if (moved) { const el = flow.querySelector(".step.open .fields button, .step.open .fields select, .step.open .fields input") || flow.querySelector(`[data-step="${state.openStep}"]`); if (el) el.focus({ preventScroll: true }); const sec = flow.querySelector(".step.open"); if (sec) sec.scrollIntoView({ block: "nearest" }); }
+  };
+  paint(); recalc();
+
+  const actions = h("div", { class: "row-actions", style: "margin:0 0 12px" },
+    h("button", { class: "btn", type: "button", onclick: () => { state.sel = blankSel(); state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
+    h("button", { class: "btn", type: "button", onclick: () => { state.sel = exampleSel(); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
+  // the two panes take exactly the height left on the screen, so the page itself does not scroll
+  const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
+  const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
+  addEventListener("resize", fit); requestAnimationFrame(fit); setTimeout(fit, 300);
+  return [h("div", { class: "cost-head" }, h("div", {}, h("h1", {}, "Cost a fabric"), h("p", { class: "sub", style: "margin:0" }, "Work down the steps on the left; each choice decides what the next step asks. The cost on the right updates as you go.")), actions),
+    split];
 };
 
+function waiting(sel) {
+  const todo = STEPS.filter(st => st.need);
+  let reached = true;
+  return h("div", { class: "card waiting" }, h("h2", {}, "The cost appears here"), h("p", { class: "sub" }, "Finish these steps on the left. Everything after them has a default you can change."),
+    h("ol", { class: "todo" }, todo.map(st => { const ok = reached && st.done(sel); if (!ok) reached = false; return h("li", { class: ok ? "ok" : "" }, h("span", { "aria-hidden": "true" }, ok ? "✓" : "○"), " ", st.need, ok ? h("span", { class: "visually-hidden" }, " (done)") : null); })));
+}
+
+const CHARTS = [["bars", "Bars"], ["waterfall", "Waterfall"], ["pie", "Pie"], ["treemap", "Treemap"], ["line", "Line"]];
+const CHART_NOTE = { bars: "One bar per cost group, from zero. Best for comparing the groups with each other.", waterfall: "Each step starts where the one before ended. Best for seeing how the price builds up.", pie: "Each group's share of the price.", treemap: "Area is rupees per metre; sub-costs sit inside their group. Best for seeing where the money is.", line: "The running total after each step." };
 function costView(res, sel) {
   const title = [sel["Fabric code"], sel.Description].filter(v => !blank(v)).join(" — ");
   let quote = null;
@@ -345,33 +427,33 @@ function costView(res, sel) {
     quote = h("div", { class: "quote" }, h("span", { class: "tag " + (above ? "down" : "up") }, `${above ? "▲" : "▼"} Quote ${rs(res.quote)}/m is ${rs(Math.abs(res.gap))} (${pct(Math.abs(res.gap_pct))}) ${above ? "above" : "below"} should-cost`));
   }
   const hero = h("div", { class: "card hero" },
-    h("div", { class: "lbl" }, title, title ? " · " : "", "ex-mill should-cost"),
-    h("div", { class: "big num" }, `${rs(res.total_per_m)} / m`),
-    h("div", { class: "facts" }, h("span", {}, [sel.Route, sel.Weave, `${sel["Warp yarn"]} × ${sel["Weft yarn"]}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].join(" · "))),
+    h("div", { class: "hero-row" },
+      h("div", {}, h("div", { class: "lbl" }, title ? title + " · " : "", "ex-mill should-cost"), h("div", { class: "big num" }, `${rs(res.total_per_m)} / m`)),
+      h("div", { class: "row-actions", style: "margin:0" },
+        h("button", { class: "btn primary", onclick: async e => { e.target.disabled = true; try { await postJSON("/api/save", payload(sel)); state.dash = null; toast("Saved to the dashboard"); } catch (err) { toast("Not saved: " + err.message); } e.target.disabled = false; } }, "Save to dashboard"),
+        h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet"))),
+    h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${sel["Warp yarn"]} × ${sel["Weft yarn"]}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
     h("div", { class: "facts num" }, h("span", {}, `${rs(res.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(res.gsm, 0)} g/m²`), h("span", {}, `${fmt(res.finished_g_per_m, 0)} g per running metre`)),
-    quote,
-    h("div", { class: "row-actions" },
-      h("button", { class: "btn primary", onclick: async e => { e.target.disabled = true; try { await postJSON("/api/save", payload(sel)); toast("Saved to the dashboard"); } catch (err) { toast("Not saved: " + err.message); } e.target.disabled = false; } }, "Save to dashboard"),
-      h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet")));
+    quote);
 
-  const wfBox = h("div");
-  const paint = () => wfBox.replaceChildren(waterfall(res));
-  const modeBtn = (mode, label) => h("button", { type: "button", "aria-pressed": String(state.wfMode === mode), onclick: () => { state.wfMode = mode; state.wfOpen.clear(); chart.replaceWith(chart = chartCard()); } }, label);
-  const chartCard = () => {
-    paint();
-    const zero = h("input", { type: "checkbox", id: "zero" }); zero.checked = state.showZero;
-    zero.addEventListener("change", () => { state.showZero = zero.checked; paint(); });
-    return h("div", { class: "card" },
-      h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "How the price builds up"), h("div", { class: "sub", style: "margin:2px 0 0" }, state.wfMode === "groups" ? "One step per cost group. Click a group to open its sub-costs." : "Every sub-cost as its own step, under its group.")),
-        h("div", { style: "display:flex;gap:14px;align-items:center;flex-wrap:wrap" },
-          h("label", { for: "zero", style: "color:var(--muted);display:flex;gap:6px;align-items:center;min-height:38px" }, zero, "Show lines at zero"),
-          h("div", { class: "seg", role: "group", "aria-label": "Level of detail" }, modeBtn("groups", "Groups"), modeBtn("all", "All sub-costs")))),
-      wfBox,
-      h("div", { class: "legend", "aria-hidden": "true" }, res.buckets.map((b, i) => h("span", {}, h("i", { style: `background:var(${GROUP_COLOR[i % 8]})` }), b.name)), h("span", {}, h("i", { style: "background:var(--total);opacity:.55;height:5px" }), "Group subtotal"), h("span", {}, h("i", { style: "background:var(--total)" }), "Should-cost"),
-        res.quote !== null ? h("span", {}, h("i", { class: "quote-swatch" }), "Supplier's quote") : null,
-        res.buckets.some(b => b.lines.some(l => l.amount < -0.005)) ? h("span", {}, h("i", { class: "wf-bar neg", style: "position:static;background-color:var(--g8);min-width:10px" }), "Hatched: a discount, stepping back") : null));
+  const box = h("div"), note = h("div", { class: "sub", style: "margin:2px 0 0" });
+  const negative = res.buckets.some(b => b.lines.some(l => l.amount < -0.005));
+  const draw = () => {
+    const fn = { bars: barsChart, waterfall, pie: pieChart, treemap: treemapChart, line: buildLine }[state.chart];
+    box.replaceChildren(fn(res));
+    if (negative && (state.chart === "pie" || state.chart === "treemap")) box.append(h("p", { class: "sub", style: "margin:10px 0 0" }, "A discount cannot be drawn as an area, so it is left out of this view. The bars and the waterfall show it."));
+    note.textContent = state.chart === "pie" && state.wfMode === "all" ? "Each sub-cost's share of the price; sub-costs of one group share its colour." : CHART_NOTE[state.chart];
   };
-  let chart = chartCard();
+  const seg = (items, key, label) => { const g = h("div", { class: "seg", role: "group", "aria-label": label }); for (const [v, text] of items) g.append(h("button", { type: "button", "aria-pressed": String(state[key] === v), onclick: () => { state[key] = v; state.wfOpen.clear(); [...g.children].forEach(b => b.setAttribute("aria-pressed", String(b.textContent === text))); draw(); } }, text)); return g; };
+  const zero = h("input", { type: "checkbox", id: "zero" }); zero.checked = state.showZero;
+  zero.addEventListener("change", () => { state.showZero = zero.checked; draw(); });
+  draw();
+  const chart = h("div", { class: "card" },
+    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Where the price comes from"), note),
+      h("div", { style: "display:flex;gap:10px 14px;align-items:center;flex-wrap:wrap" }, seg(CHARTS, "chart", "Chart"), seg([["groups", "Groups"], ["all", "All sub-costs"]], "wfMode", "Level of detail"),
+        h("label", { for: "zero", style: "color:var(--muted);display:flex;gap:6px;align-items:center;min-height:38px" }, zero, "Lines at zero"))),
+    box,
+    h("div", { class: "legend", "aria-hidden": "true" }, res.buckets.map((b, i) => h("span", {}, h("i", { style: `background:var(${GROUP_COLOR[i % 8]})` }), b.name))));
 
   const lineRows = [];
   for (const b of res.buckets) {
@@ -385,6 +467,120 @@ function costView(res, sel) {
   const ratesView = h("details", { class: "card" }, h("summary", {}, "Rates used and where each came from"), dataTable(used, { label: "Rates used" }));
   const warn = res.placeholders.length ? h("div", { class: "notice", role: "status" }, h("b", {}, "Provisional. "), "Placeholder rates were used for: " + res.placeholders.join(", ") + ". These are starting guesses with no data behind them.") : null;
   return [hero, warn, chart, tableView, ratesView].filter(Boolean);
+}
+
+// the steps a chart draws: groups, or every sub-cost, each with its group's colour
+function chartItems(res, positiveOnly) {
+  const items = [];
+  res.buckets.forEach((b, i) => {
+    const color = GROUP_COLOR[i % 8];
+    if (state.wfMode === "groups") items.push({ name: b.name, group: b.name, amount: b.amount, color, basis: `${b.lines.length} sub-costs` });
+    else for (const l of b.lines) items.push({ name: l.name, group: b.name, amount: l.amount, color, basis: l.basis });
+  });
+  return items.filter(it => positiveOnly ? it.amount > 0.005 : (state.showZero || Math.abs(it.amount) >= 0.005));
+}
+const itemTip = (it, total) => () => `<b>${it.name}</b>${it.group !== it.name ? it.group + "<br>" : ""}${rs(it.amount)} per metre · ${pct(total ? it.amount / total : 0)} of the price${it.basis && it.group !== it.name ? "<br>" + it.basis : ""}`;
+
+/* Bars: one bar per group from zero, with its name, share and rupees beside it. A group opens
+   into its sub-costs on a click; 'All sub-costs' opens every group. */
+function barsChart(res) {
+  const total = res.total_per_m;
+  // with a quote on the chart, every bar shares the scale of the quote and the should-cost
+  const top = res.quote !== null ? Math.max(total, res.quote) : Math.max(...res.buckets.map(b => Math.abs(b.amount)), 0.01);
+  const box = h("div", { class: "bars", role: "list" });
+  const row = (name, amount, color, cls, tipFn, button) => {
+    const bar = h("div", { class: "bar" + (amount < 0 ? " neg" : ""), style: `width:${Math.max(0.6, Math.abs(amount) / top * 62)}%;background-color:var(${color})` });
+    const text = h("span", { class: "bar-text" }, button || h("span", { class: "bar-name" }, name), h("span", { class: "bar-pct num" }, pct(total ? amount / total : 0, 0)), h("span", { class: "bar-amt num" }, `${rs(amount)} / m`));
+    const el = h("div", { class: "bar-row " + cls, role: "listitem", tabindex: button ? null : "0" }, bar, text);
+    withTip(el, tipFn); box.append(el);
+  };
+  res.buckets.forEach((b, i) => {
+    const color = GROUP_COLOR[i % 8], open = state.wfMode === "all" || state.wfOpen.has(b.name);
+    const btn = h("button", { type: "button", class: "bar-name", "aria-expanded": String(open), onclick: () => { open ? state.wfOpen.delete(b.name) : state.wfOpen.add(b.name); box.replaceWith(barsChart(res)); } }, h("span", { class: "caret", html: svg('<path d="m9 6 6 6-6 6"/>', 10) }), b.name);
+    row(b.name, b.amount, color, "grp", () => `<b>${b.name}</b>${rs(b.amount)} per metre · ${pct(b.pct)} of the price`, btn);
+    if (open) for (const l of b.lines.filter(l => state.showZero || Math.abs(l.amount) >= 0.005))
+      row(l.name, l.amount, color, "sub-row", itemTip({ name: l.name, group: b.name, amount: l.amount, basis: l.basis }, total));
+  });
+  if (res.quote !== null) {
+    box.append(h("div", { class: "wf-sep", role: "presentation" }));
+    const top2 = top;
+    for (const [name, v, cls] of [["Should-cost", total, "totalbar"], ["Supplier's quote", res.quote, "quotebar"]])
+      box.append(h("div", { class: "bar-row grp" }, h("div", { class: "bar " + cls, style: `width:${v / top2 * 62}%` }), h("span", { class: "bar-text" }, h("span", { class: "bar-name" }, name), h("span", { class: "bar-amt num" }, `${rs(v)} / m`))));
+  }
+  return box;
+}
+
+function pieChart(res) {
+  const items = chartItems(res, true), sum = items.reduce((a, it) => a + it.amount, 0) || 1, total = res.total_per_m;
+  const R = 100, r = 58, C = 110;
+  let a0 = -Math.PI / 2;
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  g.setAttribute("viewBox", "0 0 220 220"); g.setAttribute("role", "img"); g.setAttribute("aria-label", "Share of the price by " + (state.wfMode === "groups" ? "cost group" : "sub-cost"));
+  for (const it of items) {
+    const a1 = a0 + it.amount / sum * Math.PI * 2, big = a1 - a0 > Math.PI ? 1 : 0, pt = (a, rad) => `${(C + rad * Math.cos(a)).toFixed(2)} ${(C + rad * Math.sin(a)).toFixed(2)}`;
+    const p = document.createElementNS(g.namespaceURI, "path");
+    p.setAttribute("d", items.length === 1 ? `M${C} ${C - R}A${R} ${R} 0 1 1 ${C - 0.01} ${C - R}L${C - 0.01} ${C - r}A${r} ${r} 0 1 0 ${C} ${C - r}Z` : `M${pt(a0, R)}A${R} ${R} 0 ${big} 1 ${pt(a1, R)}L${pt(a1, r)}A${r} ${r} 0 ${big} 0 ${pt(a0, r)}Z`);
+    p.setAttribute("class", "slice"); p.style.fill = `var(${it.color})`; p.setAttribute("tabindex", "0");
+    withTip(p, itemTip(it, total)); g.append(p); a0 = a1;
+  }
+  const mid = document.createElementNS(g.namespaceURI, "g");
+  mid.innerHTML = `<text x="${C}" y="${C - 4}" text-anchor="middle" class="pie-big">${fmt(total)}</text><text x="${C}" y="${C + 16}" text-anchor="middle" class="pie-small">Rs per metre</text>`;
+  g.append(mid);
+  const list = h("div", { class: "pie-list" }, items.map(it => h("div", { class: "pie-item" }, h("span", { class: "dot", style: `background:var(${it.color})` }), h("span", { class: "pie-name" }, it.name), h("span", { class: "num" }, pct(it.amount / total, 0)), h("span", { class: "num pie-amt" }, fmt(it.amount)))));
+  return h("div", { class: "pie" }, h("div", { class: "pie-svg" }, g), list);
+}
+
+function splitRects(items, x, y, w, hgt) {      // halve the list by value, cut the longer side, repeat
+  if (!items.length) return [];
+  if (items.length === 1) return [Object.assign({}, items[0], { x, y, w, h: hgt })];
+  const total = items.reduce((a, it) => a + it.v, 0);
+  let acc = 0, i = 0;
+  while (i < items.length - 1 && (i === 0 || acc + items[i].v <= total / 2)) { acc += items[i].v; i++; }
+  const f = acc / total, a = items.slice(0, i), b = items.slice(i);
+  return w >= hgt ? [...splitRects(a, x, y, w * f, hgt), ...splitRects(b, x + w * f, y, w * (1 - f), hgt)] : [...splitRects(a, x, y, w, hgt * f), ...splitRects(b, x, y + hgt * f, w, hgt * (1 - f))];
+}
+function treemapChart(res) {
+  const total = res.total_per_m, W = 100, H = 46;      // drawn in a 100 x 46 box, as percentages
+  const groups = res.buckets.map((b, i) => ({ b, color: GROUP_COLOR[i % 8], v: b.lines.reduce((a, l) => a + Math.max(l.amount, 0), 0) })).filter(g => g.v > 0.005).sort((p, q) => q.v - p.v);
+  const box = h("div", { class: "treemap", role: "list", style: `aspect-ratio:${W}/${H}` });
+  const place = (el, r, bw, bh) => { el.style.cssText += `left:${r.x / bw * 100}%;top:${r.y / bh * 100}%;width:${r.w / bw * 100}%;height:${r.h / bh * 100}%;`; return el; };
+  for (const g of splitRects(groups, 0, 0, W, H)) {
+    const cell = place(h("div", { class: "tm-group", role: "listitem", tabindex: "0", style: `background-color:var(${g.color});` }), g, W, H);
+    const fits = (r, bw, bh) => r.w / bw * (g.w / W) > 0.085 && r.h / bh * (g.h / H) > 0.11;      // room for a label, as a share of the whole chart
+    const label = h("div", { class: "tm-label" }, h("b", {}, g.b.name), h("span", { class: "num" }, `${fmt(g.b.amount)} \u00B7 ${pct(g.b.pct, 0)}`));
+    if (state.wfMode === "groups") { cell.append(label); withTip(cell, () => `<b>${g.b.name}</b>${rs(g.b.amount)} per metre · ${pct(g.b.pct)} of the price`); }
+    else {
+      const inner = h("div", { class: "tm-inner" });
+      const kids = g.b.lines.filter(l => l.amount > 0.005).map(l => ({ l, v: l.amount })).sort((p, q) => q.v - p.v);
+      for (const k of splitRects(kids, 0, 0, g.w, g.h)) {
+        const kid = place(h("div", { class: "tm-kid", tabindex: "0", "aria-label": `${k.l.name}, ${fmt(k.l.amount)} rupees per metre` }, fits(k, g.w, g.h) ? h("div", { class: "tm-label" }, h("b", {}, k.l.name), h("span", { class: "num" }, fmt(k.l.amount))) : null), k, g.w, g.h);
+        withTip(kid, itemTip({ name: k.l.name, group: g.b.name, amount: k.l.amount, basis: k.l.basis }, total)); inner.append(kid);
+      }
+      cell.removeAttribute("tabindex"); cell.append(inner);
+    }
+    box.append(cell);
+  }
+  return box;
+}
+
+function buildLine(res) {
+  const items = chartItems(res, false), total = res.total_per_m;
+  const narrow = innerWidth < 700, W = narrow ? 430 : 760, H = narrow ? 380 : 360, m = { l: 46, r: 16, t: 20, b: state.wfMode === "all" ? 130 : 100 };
+  let run = 0; const pts = items.map(it => { run += it.amount; return { it, y: run }; });
+  const top = Math.max(...pts.map(p => p.y), total, 1), n = pts.length;
+  const X = i => m.l + (n === 1 ? 0.5 : i / (n - 1)) * (W - m.l - m.r), Y = v => m.t + (1 - v / top) * (H - m.t - m.b);
+  let g = "";
+  for (let k = 0; k <= 4; k++) { const v = top * k / 4; g += `<line class="grid-line" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="axis-text" x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end">${fmt(v, 0)}</text>`; }
+  const path = pts.map((p, i) => `${i ? "L" : "M"}${X(i).toFixed(1)} ${Y(p.y).toFixed(1)}`).join("");
+  const el = h("div", { class: "chart", html: `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Running total of the price after each step, ending at ${fmt(total)} rupees per metre">${g}<path class="line" style="stroke:var(--total)" d="${path}"/></svg>` });
+  const s = el.firstChild, ns = s.namespaceURI;
+  pts.forEach((p, i) => {
+    const c = document.createElementNS(ns, "circle"); c.setAttribute("cx", X(i)); c.setAttribute("cy", Y(p.y)); c.setAttribute("r", 6); c.setAttribute("class", "pt"); c.style.fill = `var(${p.it.color})`; c.setAttribute("tabindex", "0");
+    withTip(c, () => `<b>${p.it.name}</b>+${fmt(p.it.amount)} → running total ${rs(p.y)}`); s.append(c);
+    const t = document.createElementNS(ns, "text"); t.setAttribute("class", "axis-text"); t.setAttribute("text-anchor", "end"); t.setAttribute("transform", `translate(${X(i) + 4} ${H - m.b + 16}) rotate(-50)`); const cut = narrow ? 15 : 22; t.textContent = p.it.name.length > cut ? p.it.name.slice(0, cut - 1) + "\u2026" : p.it.name; if (!(narrow && n > 12 && i % 2)) s.append(t);
+  });
+  const end = document.createElementNS(ns, "text"); end.setAttribute("class", "pie-small"); end.setAttribute("x", X(n - 1)); end.setAttribute("y", Y(pts[n - 1].y) - 12); end.setAttribute("text-anchor", "end"); end.textContent = `Rs ${fmt(total)} / m`; s.append(end);
+  return el;
 }
 
 /* Waterfall: each step starts where the one before ended. In 'groups' a group is one bar that
@@ -452,14 +648,14 @@ PAGES.bulk = async () => {
     const stat = (lbl, val) => h("div", { class: "card stat" }, h("div", { class: "lbl" }, lbl), h("div", { class: "val num" }, String(val)));
     out.replaceChildren(
       h("div", { class: "grid g3", style: "margin-top:16px" }, stat("Rows read", total), stat("Costed", total - b.rejected), stat("Rejected", b.rejected)),
-      b.rejected ? h("div", { class: "notice" }, "Rejected rows carry the reason in the Error column.") : null,
+      b.rejected ? h("div", { class: "notice" }, "Rejected rows carry the reason in the Error column.") : "",
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Results"),
         h("button", { class: "btn", onclick: async () => download(await postJSON("/api/bulk-download", b.results), "Should_Cost_Results.xlsx") }, "Download results")),
         h("p", { class: "sub" }, "Click a costed row to open its cost view."),
         dataTable(b.results, { filter: true, label: "Bulk results", onRow: r => {
           if (r[cols.indexOf("Error")]) return toast("This row was rejected: " + r[cols.indexOf("Error")]);
           const i = b.results.rows.indexOf(r);
-          state.sel = Object.assign(defaultSel(), Object.fromEntries(Object.entries(b.inputs[i]).filter(([, v]) => !blank(v))));
+          state.sel = selFromRow(b.inputs[i]); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id));
           location.hash = "#cost";
         } })));
   };
