@@ -315,7 +315,6 @@ main { max-width: none; }
 .side { transition: width .16s ease; }
 .pin { position: absolute; top: 20px; right: 10px; }
 .pin[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.side { position: sticky; }
 .opt { color: var(--muted); display: flex; gap: 6px; align-items: center; min-height: 38px; white-space: nowrap; }
 .opt-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; }
 .opt-row input { margin-top: 3px; }
@@ -323,17 +322,22 @@ main { max-width: none; }
 .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 0 10px; border-bottom: 1px solid var(--border); position: sticky; top: -6px; background: var(--panel); z-index: 2; }
 .pane-head h1 { font-size: 17px; margin: 0; }
 .cost-intro { margin: 0 0 10px; }
+/* Folded, every icon keeps the exact place it has when the panel is open, so a click lands on the icon aimed at.
+   The panel opens for the pointer, or for the keyboard (not for a mouse click, which would hold it open). */
 @media (min-width: 821px) {
   body.rail .shell { grid-template-columns: 60px minmax(0, 1fr); }
-  body.rail .side { width: 60px; overflow: hidden; z-index: 30; padding-left: 8px; padding-right: 8px; }
-  body.rail .side:hover, body.rail .side:focus-within { width: 236px; overflow-y: auto; box-shadow: 8px 0 30px rgba(0,0,0,.28); padding-left: 12px; padding-right: 12px; }
-  body.rail .side:not(:hover):not(:focus-within) .brand-text, body.rail .side:not(:hover):not(:focus-within) .nav-link span,
-  body.rail .side:not(:hover):not(:focus-within) .side-foot, body.rail .side:not(:hover):not(:focus-within) .pin { display: none; }
-  body.rail .side:not(:hover):not(:focus-within) .nav-group { height: 1px; margin: 9px 8px; background: var(--border); overflow: hidden; color: transparent; }
-  body.rail .side:not(:hover):not(:focus-within) .nav-link { justify-content: center; padding: 9px 0; }
-  body.rail .side:not(:hover):not(:focus-within) .brand { padding: 4px 5px 18px; }
+  body.rail .side { width: 60px; overflow: hidden; z-index: 30; }
+  body.rail .side:hover, body.rail .side:has(:focus-visible) { width: 236px; overflow-y: auto; box-shadow: 8px 0 30px rgba(0,0,0,.28); }
+  body.rail .side .brand-text, body.rail .side .nav-link span, body.rail .side .side-foot, body.rail .side .pin { visibility: hidden; white-space: nowrap; }
+  body.rail .side:hover .brand-text, body.rail .side:hover .nav-link span, body.rail .side:hover .side-foot, body.rail .side:hover .pin,
+  body.rail .side:has(:focus-visible) .brand-text, body.rail .side:has(:focus-visible) .nav-link span, body.rail .side:has(:focus-visible) .side-foot, body.rail .side:has(:focus-visible) .pin { visibility: visible; }
+  body.rail .side .nav-group { white-space: nowrap; overflow: hidden; }
+  body.rail .side:not(:hover):not(:has(:focus-visible)) .nav-group { color: transparent; background: linear-gradient(var(--border), var(--border)) left center / 20px 1px no-repeat; }
+  body.rail .side .nav-link, body.rail .side .brand { white-space: nowrap; overflow: hidden; }
+  body.rail .side .brand { padding-left: 1px; }
+  body.rail .side .nav-link { padding-left: 9px; }
 }
-@media (max-width: 820px) { .pin { display: none; } }
+@media (max-width: 820px) { .pin, .desk-only { display: none; } }
 body.compact .top { padding: 8px 16px; }
 body.compact .search input { height: 36px; }
 body.compact .search > svg { top: 10px; }

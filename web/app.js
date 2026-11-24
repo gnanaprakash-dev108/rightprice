@@ -97,6 +97,7 @@ function route() {
   const page = PAGES[id] ? id : "dashboard";
   document.querySelectorAll(".nav-link").forEach(a => a.dataset.page === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
   closeMenu(); hideTip();
+  if (document.activeElement && document.activeElement.closest("#side")) document.activeElement.blur();     // let the folded panel close once a page is chosen
   const main = $("#main");
   main.replaceChildren(h("p", { class: "empty" }, "Loading..."));
   const label = NAV.flatMap(g => g[1]).find(p => p[0] === page)[1];
@@ -117,6 +118,8 @@ function applyPrefs() {
   document.body.classList.toggle("rail", !PREFS.pin);
   document.body.classList.toggle("compact", !PREFS.roomy);
   const b = $("#pin"); if (b) { b.setAttribute("aria-pressed", String(PREFS.pin)); b.title = PREFS.pin ? "Unpin: fold the panel to icons" : "Pin the panel open"; }
+  const sw = $("#pref-pin"); if (sw) sw.checked = PREFS.pin;
+  const sc = $("#pref-compact"); if (sc) sc.checked = !PREFS.roomy;
 }
 function setPref(key, value) { PREFS[key] = value; try { localStorage.setItem("rp-display", JSON.stringify(PREFS)); } catch (e) { /* private window */ } applyPrefs(); dispatchEvent(new Event("resize")); }
 
@@ -124,6 +127,7 @@ function setPref(key, value) { PREFS[key] = value; try { localStorage.setItem("r
 function closeMenu() { $("#side").classList.remove("open"); $("#scrim").hidden = true; $("#menu").setAttribute("aria-expanded", "false"); }
 $("#menu").addEventListener("click", () => { const open = $("#side").classList.toggle("open"); $("#scrim").hidden = !open; $("#menu").setAttribute("aria-expanded", String(open)); });
 $("#scrim").addEventListener("click", closeMenu);
+document.addEventListener("keydown", e => { if (e.key === "Escape" && document.activeElement && document.activeElement.closest("#side")) { document.activeElement.blur(); closeMenu(); } });
 
 // theme
 function paintThemeButton() {
@@ -458,18 +462,21 @@ function costView(res, sel) {
     const fn = { bars: barsChart, waterfall, pie: pieChart, treemap: treemapChart, line: buildLine }[state.chart];
     box.replaceChildren(fn(res));
     if (negative && (state.chart === "pie" || state.chart === "treemap")) box.append(h("p", { class: "sub", style: "margin:10px 0 0" }, "A discount cannot be drawn as an area, so it is left out of this view. The bars and the waterfall show it."));
-    note.textContent = state.chart === "pie" && state.wfMode === "all" ? "Each sub-cost's share of the price; sub-costs of one group share its colour." : CHART_NOTE[state.chart];
+    note.textContent = state.chart === "pie" && state.wfMode === "all" ? "Each sub-cost's share of the price; sub-costs of one group share its colour and sit together."
+      : state.chart === "bars" && !state.bySize ? "One bar per cost, from zero, in the order the price is built." : CHART_NOTE[state.chart];
+    bigLabel.hidden = !(state.chart === "bars" || state.chart === "pie");
   };
   const seg = (items, key, label) => { const g = h("div", { class: "seg", role: "group", "aria-label": label }); for (const [v, text] of items) g.append(h("button", { type: "button", "aria-pressed": String(state[key] === v), onclick: () => { state[key] = v; state.wfOpen.clear(); [...g.children].forEach(b => b.setAttribute("aria-pressed", String(b.textContent === text))); draw(); } }, text)); return g; };
   const zero = h("input", { type: "checkbox", id: "zero" }); zero.checked = state.showZero;
   zero.addEventListener("change", () => { state.showZero = zero.checked; draw(); });
   const big = h("input", { type: "checkbox", id: "bysize" }); big.checked = state.bySize;
   big.addEventListener("change", () => { state.bySize = big.checked; draw(); });
+  const bigLabel = h("label", { for: "bysize", class: "opt", title: "Largest cost first. Untick for the order the price is built in." }, big, "Largest first");
   draw();
   const chart = h("div", { class: "card" },
     h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Where the price comes from"), note),
       h("div", { style: "display:flex;gap:10px 14px;align-items:center;flex-wrap:wrap" }, seg(CHARTS, "chart", "Chart"), seg([["groups", "Groups"], ["all", "All sub-costs"]], "wfMode", "Level of detail"),
-        h("label", { for: "bysize", class: "opt", title: "Bars and pie: largest cost at the top. Waterfall and line always follow the order the price is built in." }, big, "Largest first"),
+        bigLabel,
         h("label", { for: "zero", class: "opt" }, zero, "Lines at zero"))),
     box,
     h("div", { class: "legend", "aria-hidden": "true" }, res.buckets.map((b, i) => h("span", {}, h("i", { style: `background:var(${GROUP_COLOR[i % 8]})` }), b.name))));
@@ -532,7 +539,12 @@ function barsChart(res) {
 }
 
 function pieChart(res) {
-  const items = bySize(chartItems(res, true), it => it.amount), sum = items.reduce((a, it) => a + it.amount, 0) || 1, total = res.total_per_m;
+  let items = chartItems(res, true);
+  if (state.bySize) {            // largest group first, and inside a group its largest sub-cost first, so one colour stays in one piece
+    const groupSize = {}; for (const it of items) groupSize[it.group] = (groupSize[it.group] || 0) + it.amount;
+    items = [...items].sort((p, q) => groupSize[q.group] - groupSize[p.group] || q.amount - p.amount);
+  }
+  const sum = items.reduce((a, it) => a + it.amount, 0) || 1, total = res.total_per_m;
   const R = 100, r = 58, C = 110;
   let a0 = -Math.PI / 2;
   const g = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -862,7 +874,7 @@ function displayCard() {
   const toggle = (id, label, hint, key, invert) => { const box = h("input", { type: "checkbox", id }); box.checked = invert ? !PREFS[key] : PREFS[key]; box.addEventListener("change", () => setPref(key, invert ? !box.checked : box.checked)); return h("label", { for: id, class: "opt-row" }, box, h("span", {}, h("b", {}, label), h("small", {}, hint))); };
   return h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Display, on this device")),
     h("div", { class: "grid g3" },
-      h("div", {}, toggle("pref-pin", "Pin the left panel open", "Unpinned, it folds to a strip of icons and opens when the pointer or keyboard reaches it.", "pin"),
+      h("div", {}, h("div", { class: "desk-only" }, toggle("pref-pin", "Pin the left panel open", "Unpinned, it folds to a strip of icons and opens when the pointer or keyboard reaches it.", "pin")),
         toggle("pref-compact", "Compact header and headings", "Gives the page more room. Turn off for larger headings.", "roomy", true)),
       h("div", { style: "grid-column:span 2" }, h("h3", {}, "Use it like an app on a phone"),
         h("p", { class: "sub", style: "margin:0" }, h("b", {}, "Android (Chrome): "), "open the site, tap the three dots, then \u201CAdd to Home screen\u201D or \u201CInstall app\u201D. ", h("b", {}, "iPhone (Safari): "), "tap Share, then \u201CAdd to Home Screen\u201D. It then opens full screen from its own icon. It still needs the internet and your sign-in; nothing is stored on the phone."))));
@@ -932,7 +944,7 @@ function setupSearch() {
 // ------------------------------------------------------------------ start
 (async function start() {
   buildNav(); paintThemeButton(); loadPrefs();
-  $("#pin").addEventListener("click", () => setPref("pin", !PREFS.pin));
+  $("#pin").addEventListener("click", e => { setPref("pin", !PREFS.pin); e.currentTarget.blur(); });
   $("#today").textContent = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   try { state.meta = await getJSON("/api/meta"); }
   catch (e) { $("#main").replaceChildren(h("div", { class: "notice err" }, "The rate master could not be read: " + e.message)); return; }
