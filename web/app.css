@@ -210,3 +210,11 @@ details.card[open] > summary { margin-bottom: 14px; }
 }
 @media (max-width: 460px) { .g4 { grid-template-columns: 1fr; } .fields { grid-template-columns: 1fr; } .pill.link { padding: 8px 10px; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------- editing a table */
+table.edit td { padding: 4px 6px; }
+.cell { height: 34px; min-width: 90px; width: 100%; border-radius: 7px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); padding: 0 8px; font: inherit; }
+.cell.n { text-align: right; min-width: 80px; }
+.icon-btn.sm { width: 34px; height: 34px; font-size: 18px; line-height: 1; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.side-foot a { color: var(--faint); }

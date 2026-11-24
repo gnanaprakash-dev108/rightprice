@@ -10,6 +10,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 import engine
 import rate_card
+import yarn_seed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIPPED_MASTER = os.path.join(HERE, "data", "Rate_Master.xlsx")
@@ -37,17 +38,19 @@ def load():
 
 
 def _add_missing_tables(m):
-    """Bring a rate master from before the mill rate card up to date, once.
+    """Bring an older rate master up to date, once: the mill rate card tables, then the blend yarns.
 
     A server keeps its own rate master, which a new version of the code does not replace. The
     rate card tables are added to it here; every other rate, and every edit made in the app,
     stays as it is. A dated copy is saved beside it first.
     """
-    log = rate_card.apply(m)
+    card = rate_card.apply(m)
+    log = card + yarn_seed.apply(m)       # placeholder yarns for poly cotton and linen, added once
     if log:
         import datetime as dt
         import shutil
-        backup = MASTER_PATH.replace(".xlsx", f" before rate card {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
+        what = "rate card" if card else "blend yarns"
+        backup = MASTER_PATH.replace(".xlsx", f" before {what} {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
         shutil.copyfile(MASTER_PATH, backup)
         save(m)
         print("Rate master brought up to date:", "; ".join(log), "| Backup:", backup)
