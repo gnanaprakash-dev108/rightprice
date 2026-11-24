@@ -7,12 +7,10 @@ Adds the tables behind the rate card drop-downs and leaves every other rate as i
   * Quantity_Terms   small-lot upcharge and volume discount by quantity band
   * Finishing_Rates  new column 'Upcharge Rs per metre' and the card's finishes
   * Settings         how the order size slabs behave when rate card quantity terms are used
-A dated copy of the rate master is saved first. Running it twice changes nothing the second time.
-Run: python rate_card.py
+The app does this by itself when it opens a rate master that lacks the tables (a server keeps its
+own copy, which new code does not replace). A dated copy of the rate master is saved first, and
+running it twice changes nothing the second time.   Run by hand: python rate_card.py
 """
-import datetime as dt
-import shutil
-
 import pandas as pd
 
 CARD = "Mill rate card 23 Nov 2026"
@@ -129,17 +127,13 @@ def apply(m):
 
 
 def main():
+    import os
+
     import masters
-    m = dict(masters.load())
-    log = apply(m)
-    if not log:
-        print("The rate card is already in the rate master. Nothing changed.")
-        return
-    backup = masters.MASTER_PATH.replace(".xlsx", f" before rate card {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
-    shutil.copy(masters.MASTER_PATH, backup)
-    masters.save(m)
-    print("\n".join(log))
-    print("Backup:", backup)
+    before = {f for f in os.listdir(masters.DATA_DIR) if "before rate card" in f}
+    masters.load()          # adds the tables if they are missing, after saving a dated backup
+    new = {f for f in os.listdir(masters.DATA_DIR) if "before rate card" in f} - before
+    print("Backup: " + ", ".join(new) if new else "The rate card is already in the rate master. Nothing changed.")
 
 
 if __name__ == "__main__":

@@ -109,6 +109,9 @@ figures are the price change for one extra end or pick.
   and 21 further checks confirm each card item adds what the card says.
 - Order size and the card's quantity terms are reconciled by using one or the other, never both
   (see "Quantity" below).
+- The live server keeps its own rate master. The app now adds the rate card tables to it the first
+  time it opens after the merge, after saving a dated backup beside it; rates edited on the server
+  are kept. Tested against a copy of the pre-rate-card master with one edited rate.
 
 ### What the pilot could and could not set from PLM
 
@@ -217,7 +220,8 @@ gave, so adding the card's terms on top would count quantity twice.
 6. 66 finishes still not recognised: Others 17, ETI Clat 14, ETI + Baby Skin 9, Stain Repellent 8.
 7. "Not applicable for 40s quality" is read as warp and weft both 40s single.
 8. The draft above awaits a decision.
-9. `docs/AZURE_DEPLOY.md` is not in the repository.
+9. After merging, confirm on the live site that the rate card drop-downs appear and that
+   `Rate_Master before rate card <date>.xlsx` exists in `/home/rightprice-data`.
 
 ## Next steps, in order
 

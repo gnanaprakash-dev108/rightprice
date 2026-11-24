@@ -32,7 +32,26 @@ def load():
             import shutil
             os.makedirs(DATA_DIR, exist_ok=True)
             shutil.copyfile(SHIPPED_MASTER, MASTER_PATH)
-    return pd.read_excel(MASTER_PATH, sheet_name=None)
+    m = pd.read_excel(MASTER_PATH, sheet_name=None)
+    return _add_missing_tables(m)
+
+
+def _add_missing_tables(m):
+    """Bring a rate master from before the mill rate card up to date, once.
+
+    A server keeps its own rate master, which a new version of the code does not replace. The
+    rate card tables are added to it here; every other rate, and every edit made in the app,
+    stays as it is. A dated copy is saved beside it first.
+    """
+    log = rate_card.apply(m)
+    if log:
+        import datetime as dt
+        import shutil
+        backup = MASTER_PATH.replace(".xlsx", f" before rate card {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
+        shutil.copyfile(MASTER_PATH, backup)
+        save(m)
+        print("Rate master brought up to date:", "; ".join(log), "| Backup:", backup)
+    return m
 
 
 def save(masters):

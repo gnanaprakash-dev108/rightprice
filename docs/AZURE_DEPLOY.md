@@ -76,6 +76,11 @@ Set "Restrict access" to **Require authentication**. Without this, anyone with t
 - A later push that changes `data/Rate_Master.xlsx` in GitHub does **not** replace the server's copy.
   To replace it on purpose, delete `/home/rightprice-data/Rate_Master.xlsx` (web app >
   Development Tools > SSH) and restart.
+- New rate tables are the exception. When a new version of the code needs tables the server's copy
+  does not have (the mill rate card, 24 Nov 2026), the app adds them to the server's copy the first
+  time it opens, after saving `Rate_Master before rate card <date>.xlsx` in the same folder. Rates
+  edited on the server are kept. For the rate card this also replaces the printing rate per kg with
+  preparation at the RFD rate, and sets the finishes the card prices.
 - To take a copy of the live rate master, download it from the same folder (Advanced Tools > Kudu >
   file browser), or use the downloads on the Rate tables screen.
 
