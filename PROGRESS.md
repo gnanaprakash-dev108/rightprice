@@ -350,6 +350,13 @@ a purchase price.
 - **Print.** A Print button lays the result out for paper or PDF: light colours, inputs and menus
   left off, every table opened, dated.
 
+The four additions had their own cold review after they went live; seven problems were found and
+fixed the same night. The ones that could have misled a buyer: Compare kept showing the previous
+pair when the same costing was chosen on both sides; a typed count showed nowhere near the price;
+changing the count system re-read "40" as 40 tex; and Compare's number columns were off-screen on a
+phone. Compare now also warns when the two costings are different fabrics, and shows the two quotes
+on their own rows.
+
 **Read but not built: `inputs/Fabric Costing_Final.xlsx`** (the earlier prototype, sent again on
 24 Nov). Its rates are placeholders (most cells are 1 or 10), so only its logic is of use. What it
 has that RightPrice does not:

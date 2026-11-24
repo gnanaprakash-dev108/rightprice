@@ -221,7 +221,11 @@ def resolve(sel, masters):
     # Sizing
     sz = masters["Sizing_Rates"]
     sz = sz[sz["Route type"] == ("Yarn Dyed" if yd else "Other")].sort_values("Warp count up to (Ne)")
-    band = sz[sz["Warp count up to (Ne)"] >= inp["warp_ne"]].iloc[0]
+    # a count converted from tex or denier may land a hair over a band's limit (Ne 40.007): it belongs to that band
+    fits = sz[sz["Warp count up to (Ne)"] >= inp["warp_ne"] - 0.05]
+    if fits.empty:
+        raise ValueError(f"Warp count Ne {inp['warp_ne']:.4g} is finer than any band in the sizing table")
+    band = fits.iloc[0]
     inp["sizing_rate"] = float(band["Rs per kg warp"])
     note("Sizing", f"warp up to Ne {band['Warp count up to (Ne)']:g}", inp["sizing_rate"], "Rs/kg warp", band["Basis"])
 

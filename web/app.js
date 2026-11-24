@@ -248,7 +248,7 @@ PAGES.dashboard = async () => {
     return h("div", { class: "card price-card" },
       h("div", { class: "name" }, String(r[ix("Fabric code")] ?? "")),
       h("div", { class: "big num" }, `Rs ${fmt(r[ix("Should-cost Rs/m")])}/m`),
-      blank(gap) ? h("span", { class: "tag flat" }, "no quote") : h("span", { class: "tag " + (gap > 0 ? "down" : "up") }, `${gap > 0 ? "▲" : "▼"} quote ${Math.abs(gap).toFixed(1)}% ${gap > 0 ? "above" : "below"}`),
+      blank(gap) ? h("span", { class: "tag flat" }, "no quote") : h("span", { class: "tag " + (gap > 0 ? "down" : "up") }, `${gap > 0 ? "\u25B2" : "\u25BC"} quote ${Math.abs(gap).toFixed(1)}% ${gap > 0 ? "above" : "below"} when saved`),
       h("div", { class: "meta" }, [r[ix("Description")], r[ix("Supplier")], blank(r[ix("Saved on")]) ? null : "saved " + day(r[ix("Saved on")])].filter(v => !blank(v)).join(" · ")),
       open || del ? h("div", { class: "row-actions", style: "margin-top:10px" }, open, del) : null);
   });
@@ -282,6 +282,9 @@ function selFromRow(row) {          // a bulk upload row opened in the cost view
 }
 // what each route asks for in the colouring step; anything else is not shown and not sent
 const ROUTE_FIELDS = { "Yarn Dyed": ["Warp yarn dyeing", "Weft (yarn dyed)", "Weft yarn dyeing", "Print method"], "Piece Dyed": ["Piece shade"], "Printed": ["Print method"], "RFD / Bleached": [] };
+const yarnText = (sel, side) => blank(sel[side + " count"]) ? sel[side + " yarn"] : `${sel[side + " yarn"]} typed as ${sel[side + " count"]} ${String(sel["Count system"] || "English count (Ne)").replace(/ count| \(linen\)/g, "")}`;
+const COUNT_TO_NE = { "English count (Ne)": v => v, "Metric count (Nm)": v => v / 1.6934, Tex: v => 590.5 / v, Denier: v => 5315 / v, "Lea (linen)": v => v * 300 / 840, "Worsted count (Nw)": v => v * 560 / 840 };
+const NE_TO_COUNT = { "English count (Ne)": v => v, "Metric count (Nm)": v => v * 1.6934, Tex: v => 590.5 / v, Denier: v => 5315 / v, "Lea (linen)": v => v * 840 / 300, "Worsted count (Nw)": v => v * 840 / 560 };
 function fieldOn(sel, name) {
   const L = state.meta.lists, first = n => L[n][0];
   if (["Warp yarn dyeing", "Weft (yarn dyed)", "Weft yarn dyeing", "Piece shade", "Print method"].includes(name)) {
@@ -301,7 +304,7 @@ function payload(sel) {
 const STEPS = [
   { id: "fabric", title: "Fabric", need: "Choose the fabric", done: s => !!s.Content, sum: s => s.Content },
   { id: "route", title: "How it is coloured", need: "Choose yarn dyed, piece dyed, bleached or printed", done: s => !!s.Route, sum: s => s.Route },
-  { id: "yarn", title: "Yarn", need: "Choose the warp and weft yarn", done: s => !!s["Warp yarn"] && !!s["Weft yarn"], sum: s => `${s["Warp yarn"]} × ${s["Weft yarn"]}` },
+  { id: "yarn", title: "Yarn", need: "Choose the warp and weft yarn", done: s => !!s["Warp yarn"] && !!s["Weft yarn"], sum: s => `${yarnText(s, "Warp")} \u00D7 ${yarnText(s, "Weft")}` },
   { id: "dye", title: s => ({ "Yarn Dyed": "Yarn dyeing", "Piece Dyed": "Piece dyeing", Printed: "Printing", "RFD / Bleached": "Bleaching" }[s.Route] || "Dyeing"), done: () => true, sum: s => [["Warp yarn dyeing", "warp "], ["Weft (yarn dyed)", "weft "], ["Weft yarn dyeing", "weft shade "], ["Piece shade", ""], ["Print method", "print: "]].filter(([f]) => fieldOn(s, f) && s[f]).map(([f, p]) => p + s[f]).join(" \u00B7 ") },
   { id: "cons", title: "Weave and construction", need: "Choose the weave and type EPI, PPI and width", done: s => !!s.Weave && s.EPI > 0 && s.PPI > 0 && s["Finished width (in)"] > 0, sum: s => `${s.Weave} · ${s.EPI} × ${s.PPI} · ${s["Finished width (in)"]} in` },
   { id: "finish", title: "Finish, mill and order", done: () => true, sum: s => [s.Finish, fieldOn(s, "Order size") ? s["Order size"] : s["Rate card quantity"]].filter(Boolean).join(" \u00B7 ") },
@@ -322,7 +325,7 @@ PAGES.cost = async () => {
     timer = setTimeout(async () => {
       const mine = ++last;
       try { const res = await (await postJSON("/api/cost", payload(sel))).json(); if (mine === last) out.replaceChildren(...costView(res, sel)); }
-      catch (e) { if (mine === last) out.replaceChildren(h("div", { class: "notice err", role: "alert" }, "Cannot cost this fabric: " + e.message)); }
+      catch (e) { if (mine === last) { const old = out.querySelector(".cannot"); if (old) old.remove(); out.prepend(h("div", { class: "notice err cannot", role: "alert", style: "margin-top:0" }, h("b", {}, "Cannot cost this as typed: "), e.message + (out.children.length ? " The figures below are from before this change." : ""))); } }
     }, 160);
   };
   const doneNow = () => STEPS.map(st => st.done(sel));
@@ -332,8 +335,12 @@ PAGES.cost = async () => {
     return false;
   };
   const set = (name, value, repaint = true) => {
-    state.reopened = null;                  // once a choice changes, it is no longer the costing that was saved
+    if (!["Fabric code", "Description", "Supplier", "Quoted price (Rs/m)"].includes(name)) state.reopened = null;      // once a costed choice changes, it is no longer the costing that was saved
     const before = doneNow();
+    if (name === "Count system") {          // the same yarn, written in the new system: the typed numbers follow
+      const from = COUNT_TO_NE[sel["Count system"] || "English count (Ne)"], to = NE_TO_COUNT[value];
+      for (const f of ["Warp count", "Weft count"]) if (!blank(sel[f]) && sel[f] > 0 && from && to) sel[f] = Number(to(from(sel[f])).toPrecision(6));
+    }
     sel[name] = value;
     if (name === "Content") { let cleared = false; for (const y of ["Warp yarn", "Weft yarn"]) if (sel[y] && contentOfYarn(sel[y]) !== value) { sel[y] = ""; cleared = true; } if (cleared) toast(`Yarn cleared: choose a ${value.toLowerCase()} yarn in step 3`); }
     if (name === "Route") {                    // each route starts from its own defaults
@@ -465,7 +472,7 @@ function waiting(sel) {
 const CHARTS = [["bars", "Bars"], ["waterfall", "Waterfall"], ["pie", "Pie"], ["treemap", "Treemap"], ["line", "Line"]];
 const CHART_NOTE = { bars: "One bar per cost, from zero, largest at the top. Best for seeing what matters most.", waterfall: "Each step starts where the one before ended. Best for seeing how the price builds up.", pie: "Each group's share of the price.", treemap: "Area is rupees per metre; sub-costs sit inside their group. Best for seeing where the money is.", line: "The running total after each step." };
 function costView(res, sel) {
-  const title = [sel["Fabric code"], sel.Description].filter(v => !blank(v)).join(" — ");
+  const title = [[sel["Fabric code"], sel.Description].filter(v => !blank(v)).join(" \u2014 "), sel.Supplier].filter(v => !blank(v)).join(" \u00B7 ");
   let quote = null;
   if (res.quote !== null) {
     const above = res.gap >= 0;
@@ -478,7 +485,7 @@ function costView(res, sel) {
         h("button", { class: "btn primary", onclick: async e => { e.target.disabled = true; try { await postJSON("/api/save", payload(sel)); state.dash = null; toast("Saved to the dashboard"); } catch (err) { toast("Not saved: " + err.message); } e.target.disabled = false; } }, "Save to dashboard"),
         h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet"),
         h("button", { class: "btn", onclick: printSheet }, "Print"))),
-    h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${sel["Warp yarn"]} × ${sel["Weft yarn"]}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
+    h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} \u00D7 ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
     h("div", { class: "facts num" }, h("span", {}, `${rs(res.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(res.gsm, 0)} g/m²`), h("span", {}, `${fmt(res.finished_g_per_m, 0)} g per running metre`)),
     quote);
 
@@ -727,44 +734,54 @@ PAGES.compare = async () => {
   const startA = Math.max(0, sources.findIndex(s => s.id === state.cmp.a)), startB = sources.findIndex(s => s.id === state.cmp.b);
   const [fa, sa] = pickBox("cmp-a", "A", startA), [fb, sb] = pickBox("cmp-b", "B", startB >= 0 ? startB : (startA === 0 ? 1 : 0));
   const out = h("div", { "aria-live": "polite", style: "margin-top:16px" });
+  let turn = 0;
   const run = async () => {
+    const mine = ++turn;
     state.cmp = { a: sa.value, b: sb.value };
     const A = sources.find(s => s.id === sa.value), B = sources.find(s => s.id === sb.value);
     if (A.id === B.id) return out.replaceChildren(h("div", { class: "notice info" }, "Choose two different costings."));
     out.replaceChildren(h("p", { class: "empty" }, "Costing both..."));
-    try { const [ra, rb] = await Promise.all([A, B].map(async s => (await postJSON("/api/cost", s.inputs)).json())); out.replaceChildren(...compareView(A, ra, B, rb)); }
-    catch (e) { out.replaceChildren(h("div", { class: "notice err", role: "alert" }, "One of these can no longer be costed: " + e.message)); }
+    try { const [ra, rb] = await Promise.all([A, B].map(async s => (await postJSON("/api/cost", s.inputs)).json())); if (mine === turn) out.replaceChildren(...compareView(A, ra, B, rb)); }
+    catch (e) { if (mine === turn) out.replaceChildren(h("div", { class: "notice err", role: "alert" }, "One of these can no longer be costed: " + e.message)); }
   };
   sa.addEventListener("change", run); sb.addEventListener("change", run); run();
   return [...head, h("div", { class: "card" }, h("div", { class: "fields" }, fa, fb), h("div", { class: "row-actions" }, h("button", { class: "btn small", type: "button", onclick: () => { const t = sa.value; sa.value = sb.value; sb.value = t; run(); } }, "Swap A and B"))), out];
 };
 function compareView(A, ra, B, rb) {
-  const delta = (a, b) => { const dlt = b - a; return Math.abs(dlt) < 0.005 ? h("span", { class: "tag flat" }, "same") : h("span", { class: "tag " + (dlt > 0 ? "down" : "up") }, `${dlt > 0 ? "+" : "\u2212"}${fmt(Math.abs(dlt))}${a ? ` (${pct(Math.abs(dlt) / a)})` : ""}`); };
+  const delta = (a, b) => { const dlt = b - a; return Math.abs(dlt) < 0.005 ? h("span", { class: "tag flat" }, "same") : h("span", { class: "tag " + (dlt > 0 ? "down" : "up") }, `${dlt > 0 ? "+" : "\u2212"}${fmt(Math.abs(dlt))}${a ? ` (${dlt > 0 ? "+" : "\u2212"}${pct(Math.abs(dlt) / Math.abs(a))})` : ""}`); };
   const side = (tagText, S, r) => h("div", { class: "card hero" }, h("div", { class: "lbl" }, h("span", { class: "tag ok" }, tagText), " ", S.label),
     h("div", { class: "big num" }, `${rs(r.total_per_m)} / m`),
     h("div", { class: "facts" }, h("span", {}, [S.inputs.Route, S.inputs.Weave, `${S.inputs["Warp yarn"]} \u00D7 ${S.inputs["Weft yarn"]}`, `${S.inputs.EPI} \u00D7 ${S.inputs.PPI}`, `${S.inputs["Finished width (in)"]} in`].join(" \u00B7 "))),
     h("div", { class: "facts num" }, h("span", {}, `${rs(r.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(r.gsm, 0)} g/m\u00B2`)),
-    r.quote !== null ? h("div", { class: "quote" }, h("span", { class: "tag " + (r.gap >= 0 ? "down" : "up") }, `Quote ${rs(r.quote)}/m, ${pct(Math.abs(r.gap_pct))} ${r.gap >= 0 ? "above" : "below"} should-cost`)) : null,
+    r.quote !== null ? h("div", { class: "quote" }, h("span", { class: "tag flat" }, `Quote ${rs(r.quote)}/m, ${pct(Math.abs(r.gap_pct))} ${r.gap >= 0 ? "above" : "below"} its should-cost today`)) : null,
     r.placeholders.length ? h("div", { class: "quote" }, h("span", { class: "tag warn", title: r.placeholders.join(", ") }, "\u26A0 provisional: placeholder rates used")) : null);
   const dlt = rb.total_per_m - ra.total_per_m;
-  const verdict = h("div", { class: "notice info", style: "margin-top:16px" }, Math.abs(dlt) < 0.005 ? "A and B cost the same." : [h("b", {}, `B is ${rs(Math.abs(dlt))} per metre (${pct(Math.abs(dlt) / ra.total_per_m)}) ${dlt > 0 ? "dearer" : "cheaper"} than A. `),
-    (() => { const top = ra.buckets.map((b, i) => ({ name: b.name, d: rb.buckets[i].amount - b.amount })).filter(x => Math.abs(x.d) >= 0.005).sort((p, q) => Math.abs(q.d) - Math.abs(p.d)).slice(0, 3); return top.length ? "Most of it is " + top.map(x => `${x.name} (${x.d > 0 ? "+" : "\u2212"}${fmt(Math.abs(x.d))})`).join(", ") + "." : ""; })()]);
+  const build = ["Route", "Weave", "Warp yarn", "Weft yarn", "EPI", "PPI", "Finished width (in)", "Warp count", "Weft count", "Count system"];
+  const otherFabric = build.filter(k => String(A.inputs[k] ?? "") !== String(B.inputs[k] ?? ""));
+  const caution = otherFabric.length ? h("div", { class: "notice", style: "margin-top:16px" }, h("b", {}, "These are not the same fabric. "), `They differ in ${otherFabric.join(", ")}, so the difference below is the fabric as much as the supplier.`) : null;
+  const verdict = h("div", { class: "notice info", style: "margin-top:16px" }, Math.abs(dlt) < 0.005 ? "A and B have the same should-cost." : [h("b", {}, `B's should-cost is ${rs(Math.abs(dlt))} per metre (${pct(Math.abs(dlt) / ra.total_per_m)}) ${dlt > 0 ? "higher" : "lower"} than A's. `),
+    (() => { const top = ra.buckets.map((b, i) => ({ name: b.name, d: rb.buckets[i].amount - b.amount })).filter(x => Math.abs(x.d) >= 0.005).sort((p, q) => Math.abs(q.d) - Math.abs(p.d)).slice(0, 3); return top.length ? "Largest differences, B against A: " + top.map(x => `${x.name} ${x.d > 0 ? "+" : "\u2212"}${fmt(Math.abs(x.d))}`).join(", ") + "." : ""; })()]);
   const top = Math.max(...ra.buckets.map(b => Math.abs(b.amount)), ...rb.buckets.map(b => Math.abs(b.amount)), 0.01);
   const rows = [];
   ra.buckets.forEach((b, i) => {
     const c = rb.buckets[i], color = GROUP_COLOR[i % 8];
     const bars = h("div", { class: "cmp-bars", "aria-hidden": "true" }, h("div", { class: "cmp-bar", style: `width:${Math.abs(b.amount) / top * 100}%;background:var(${color})` }), h("div", { class: "cmp-bar b", style: `width:${Math.abs(c.amount) / top * 100}%;background:var(${color})` }));
-    rows.push(h("tr", { class: "grp" }, h("td", {}, b.name), h("td", { class: "cmp-cell" }, bars), h("td", { class: "n" }, fmt(b.amount)), h("td", { class: "n" }, fmt(c.amount)), h("td", { class: "n" }, delta(b.amount, c.amount))));
-    b.lines.forEach((l, j) => { const m = c.lines[j]; if (Math.abs(l.amount) >= 0.005 || Math.abs(m.amount) >= 0.005) rows.push(h("tr", {}, h("td", { style: "padding-left:26px;color:var(--muted)" }, l.name), h("td", {}), h("td", { class: "n" }, fmt(l.amount)), h("td", { class: "n" }, fmt(m.amount)), h("td", { class: "n" }, Math.abs(m.amount - l.amount) < 0.005 ? "" : (m.amount > l.amount ? "+" : "\u2212") + fmt(Math.abs(m.amount - l.amount))))); });
+    rows.push(h("tr", { class: "grp" }, h("td", {}, b.name), h("td", { class: "n" }, fmt(b.amount)), h("td", { class: "n" }, fmt(c.amount)), h("td", { class: "n" }, delta(b.amount, c.amount)), h("td", { class: "cmp-cell" }, bars)));
+    b.lines.forEach((l, j) => { const m = c.lines[j]; if (Math.abs(l.amount) >= 0.005 || Math.abs(m.amount) >= 0.005) rows.push(h("tr", {}, h("td", { style: "padding-left:26px;color:var(--muted)" }, l.name), h("td", { class: "n" }, fmt(l.amount)), h("td", { class: "n" }, fmt(m.amount)), h("td", { class: "n" }, Math.abs(m.amount - l.amount) < 0.005 ? "" : (m.amount > l.amount ? "+" : "\u2212") + fmt(Math.abs(m.amount - l.amount))), h("td", {}))); });
   });
-  rows.push(h("tr", { class: "grp" }, h("td", {}, "Should-cost"), h("td", {}), h("td", { class: "n" }, fmt(ra.total_per_m)), h("td", { class: "n" }, fmt(rb.total_per_m)), h("td", { class: "n" }, delta(ra.total_per_m, rb.total_per_m))));
+  rows.push(h("tr", { class: "grp" }, h("td", {}, "Should-cost"), h("td", { class: "n" }, fmt(ra.total_per_m)), h("td", { class: "n" }, fmt(rb.total_per_m)), h("td", { class: "n" }, delta(ra.total_per_m, rb.total_per_m)), h("td", {})));
+  if (ra.quote !== null || rb.quote !== null) {
+    const q = r => r.quote === null ? "\u2014" : fmt(r.quote), g = r => r.quote === null ? "\u2014" : (r.gap >= 0 ? "+" : "\u2212") + fmt(Math.abs(r.gap)) + ` (${r.gap >= 0 ? "+" : "\u2212"}${pct(Math.abs(r.gap_pct))})`;
+    rows.push(h("tr", { class: "grp" }, h("td", {}, "Supplier's quote"), h("td", { class: "n" }, q(ra)), h("td", { class: "n" }, q(rb)), h("td", { class: "n" }, ra.quote !== null && rb.quote !== null ? delta(ra.quote, rb.quote) : ""), h("td", {})));
+    rows.push(h("tr", {}, h("td", { style: "padding-left:26px;color:var(--muted)" }, "Quote against its own should-cost"), h("td", { class: "n" }, g(ra)), h("td", { class: "n" }, g(rb)), h("td", {}), h("td", {})));
+  }
   // a choice left blank means its default (the first value on its list), so blank against the default is not a difference
   const eff = (S, k) => { const v = S.inputs[k]; return blank(v) ? String((state.meta.lists[k] || [""])[0]) : String(v); };
   const keys = [...new Set([...Object.keys(A.inputs), ...Object.keys(B.inputs)])].filter(k => eff(A, k) !== eff(B, k));
   const differ = keys.length ? dataTable({ columns: ["Choice", "A", "B"], rows: keys.map(k => [k, String(A.inputs[k] ?? "\u2014"), String(B.inputs[k] ?? "\u2014")]) }, { label: "Choices that differ" }) : h("p", { class: "empty" }, "The two were built from the same choices.");
-  return [h("div", { class: "grid", style: "grid-template-columns:repeat(auto-fit,minmax(280px,1fr))" }, side("A", A, ra), side("B", B, rb)), verdict,
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Cost by group and sub-cost, Rs per metre"), h("span", { class: "sub", style: "margin:0" }, "Upper bar A, lower bar B")),
-      h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Cost"), h("th", {}, ""), h("th", { class: "n" }, "A"), h("th", { class: "n" }, "B"), h("th", { class: "n" }, "B against A"))), h("tbody", {}, rows)))),
+  return [h("div", { class: "grid", style: "grid-template-columns:repeat(auto-fit,minmax(280px,1fr))" }, side("A", A, ra), side("B", B, rb)), caution, verdict,
+    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Cost by group and sub-cost, Rs per metre"), h("span", { class: "sub", style: "margin:0" }, "Red: B is higher. Green: B is lower. Upper bar A, lower bar B")),
+      h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Cost"), h("th", { class: "n" }, "A"), h("th", { class: "n" }, "B"), h("th", { class: "n" }, "B minus A"), h("th", { class: "cmp-cell" }, ""))), h("tbody", {}, rows)))),
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Choices that differ")), differ)];
 }
 
