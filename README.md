@@ -19,6 +19,10 @@ streamlit run app.py
 The app needs only `data/Rate_Master.xlsx`. None of the source workbooks are needed to cost a fabric.
 On Windows, `Start RightPrice.bat` does the same on port 8502.
 
+To host it on Azure, follow [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md). The environment variable
+`RIGHTPRICE_DATA` moves the rate master, saved costings and imported price files to a folder that
+survives redeploys.
+
 ## Screens
 
 | Screen | What it does |

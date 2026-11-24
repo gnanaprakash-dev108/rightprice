@@ -12,7 +12,7 @@ import re
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE_DIR = os.path.join(HERE, "data", "price_sources")
+SOURCE_DIR = os.path.join(os.environ.get("RIGHTPRICE_DATA") or os.path.join(HERE, "data"), "price_sources")
 STAGE_COLS = ["Date", "Yarn", "Count", "Low Rs/kg", "High Rs/kg", "Source"]
 
 COUNT_RE = re.compile(r"(?<![\d/.])(\d{1,3}/\d{1,3}|\d{1,3})\s*(?:'s|s|ne|nm|d)?(?![\d/.])", re.I)
