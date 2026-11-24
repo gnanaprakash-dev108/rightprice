@@ -67,6 +67,7 @@ const ICON = {
   dashboard: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>',
   cost: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h2M13 12h2M9 16h2M13 16h2"/>',
   bulk: '<path d="M12 16V4m0 0-4 4m4-4 4 4M5 20h14"/>',
+  intake: '<path d="M12 4v12m0 0-4-4m4 4 4-4M5 20h14"/>',
   yarn: '<path d="M4 17l5-5 4 4 7-8M15 8h5v5"/>',
   cotton: '<circle cx="12" cy="9" r="4"/><circle cx="8" cy="14" r="3.5"/><circle cx="16" cy="14" r="3.5"/><path d="M12 17v4"/>',
   rates: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/>',
@@ -76,7 +77,7 @@ const ICON = {
 };
 const NAV = [
   ["Costing", [["dashboard", "Dashboard"], ["cost", "Cost a fabric"], ["bulk", "Bulk upload"]]],
-  ["Prices", [["yarn", "Yarn prices"], ["cotton", "Cotton prices"]]],
+  ["Prices", [["yarn", "Yarn prices"], ["cotton", "Cotton prices"], ["intake", "Bring in prices"]]],
   ["Rates", [["rates", "Rate tables"], ["ratecard", "Mill rate card"], ["settings", "Settings"]]],
   ["Analysis", [["pilot", "Pilot results"]]],
 ];
@@ -169,6 +170,38 @@ function dataTable(data, opts = {}) {
   };
   input.addEventListener("input", apply); if (opts.query) apply();
   return h("div", {}, h("div", { class: "card-head" }, input, count), table);
+}
+
+/* A table as inputs: change cells, add or remove rows, save the whole sheet back to the rate master.
+   The server checks it (numbers where numbers belong, no duplicate keys, the example still costs). */
+function editTable(t, sheet, done) {
+  const numeric = t.columns.map((c, i) => !(sheet === "Settings" && c === "Value") && t.rows.length > 0 && t.rows.every(r => blank(r[i]) || typeof r[i] === "number"));
+  const body = h("tbody");
+  const addRow = r => {
+    const tr = h("tr", {}, t.columns.map((c, i) => h("td", {}, h("input", { class: "cell" + (numeric[i] ? " n" : ""), type: numeric[i] ? "number" : "text", step: numeric[i] ? "any" : null, value: r ? (r[i] ?? "") : "", "aria-label": c }))),
+      h("td", {}, h("button", { class: "icon-btn sm", type: "button", "aria-label": "Remove this row", title: "Remove this row", onclick: () => tr.remove() }, "\u00D7")));
+    body.append(tr); return tr;
+  };
+  t.rows.forEach(addRow);
+  const msg = h("div", { "aria-live": "polite" });
+  const save = h("button", { class: "btn primary", type: "button", onclick: async () => {
+    const rows = [...body.rows].map(tr => [...tr.querySelectorAll("input")].map((inp, i) => inp.value.trim() === "" ? null : (numeric[i] ? Number(inp.value) : inp.value.trim())));
+    save.disabled = true;
+    try { await api("/api/table/" + sheet, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ columns: t.columns, rows }) }); state.meta = await getJSON("/api/meta"); state.dash = null; toast("Saved to the rate master"); done(); }
+    catch (e) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); save.disabled = false; }
+  } }, "Save");
+  return h("div", {},
+    h("div", { class: "table-wrap", tabindex: "0", role: "region", "aria-label": "Editing " + t.label }, h("table", { class: "edit" }, h("thead", {}, h("tr", {}, t.columns.map(c => h("th", { scope: "col" }, c)), h("th", {}, h("span", { class: "visually-hidden" }, "Remove")))), body)),
+    msg,
+    h("div", { class: "row-actions" }, save, h("button", { class: "btn", type: "button", onclick: () => { addRow(null).querySelector("input").focus(); } }, "Add a row"), h("button", { class: "btn", type: "button", onclick: done }, "Cancel")),
+    h("p", { class: "sub", style: "margin:12px 0 0" }, "Saving changes the rate master for every costing from now on. The first change of each day keeps a dated copy of the workbook beside it."));
+}
+function tableCard(sheet, title, opts = {}) {
+  const box = h("div"), editBtn = h("button", { class: "btn", type: "button" }, "Edit");
+  const view = async () => { editBtn.hidden = !state.meta.editable.includes(sheet); const t = await getJSON("/api/table/" + sheet); box.replaceChildren(dataTable(t, { filter: t.rows.length > 12, label: t.label, query: opts.query })); };
+  editBtn.addEventListener("click", async () => { editBtn.hidden = true; box.replaceChildren(editTable(await getJSON("/api/table/" + sheet), sheet, view)); });
+  const card = h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, title), h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, opts.extra, editBtn)), box);
+  return view().then(() => card);
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -449,13 +482,17 @@ PAGES.bulk = async () => {
 
 // ------------------------------------------------------------------ prices
 PAGES.yarn = async (query) => {
-  const [yr, mk, d] = await Promise.all([getJSON("/api/table/Yarn_Rates"), getJSON("/api/table/Market_Yarn"), state.dash || getJSON("/api/dashboard")]);
+  const [yrCard, mkCard, d] = await Promise.all([
+    tableCard("Yarn_Rates", "Yarn master", { query }),
+    tableCard("Market_Yarn", "Market reference", { extra: h("a", { class: "btn", href: "#intake" }, "Bring in prices") }),
+    getJSON("/api/dashboard")]);
+  state.dash = d;
   const cmp = { columns: ["Yarn key", "Master Rs/kg", "Market low", "Market high", "Position"],
     rows: d.yarns.filter(y => y.position).map(y => [y.key, y.rate, y.market_low, y.market_high, { inside: "Inside range", above: "Above market", below: "Below market" }[y.position]]) };
-  return [...pageHead("Yarn prices", "The yarn master is used in every costing. The market reference is for comparison only."),
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Yarn master"), h("a", { class: "btn", href: "/classic/" }, "Edit rates or bring in prices")), dataTable(yr, { filter: true, query, label: "Yarn master" })),
+  return [...pageHead("Yarn prices", "The yarn master is used in every costing; edit a rate and its date, then save. The market reference is for comparison only and is never used in a costing."),
+    yrCard,
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Master against market, combed compact cotton")), dataTable(cmp, { label: "Master against market", empty: "No yarn in the master has a market reference yet." })),
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Market reference")), dataTable(mk, { filter: true, label: "Market reference" }))];
+    mkCard];
 };
 
 PAGES.cotton = async () => {
@@ -476,10 +513,24 @@ PAGES.cotton = async () => {
   draw();
   return [...pageHead("Cotton prices", "Shankar-6 cotton, rupees per candy. One candy is 355.6 kg of lint."),
     h("div", { class: "grid g4" }, stat("Latest Shankar-6", "Rs " + fmt(last[1], 0), "per candy"), stat("As of", day(last[0]), age > 30 ? `${age} days old` : null), stat("Over 30 days", tag(chg(m1))), stat("Over 12 months", tag(chg(y1)))),
-    age > 30 ? h("div", { class: "notice" }, `The latest cotton price is ${age} days old. Newer rows can be added under Edit rates.`) : null,
+    age > 30 ? h("div", { class: "notice" }, `The latest cotton price is ${age} days old. Add a newer one below.`) : null,
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Shankar-6, Rs per candy"), chips), box, h("p", { class: "sub", style: "margin:12px 0 0" }, "Source: " + c.source)),
+    cottonForm(),
     h("details", { class: "card" }, h("summary", {}, "Table of the last 60 prices"), dataTable({ columns: ["Date", "Rs per candy"], rows: pts.slice(-60).reverse().map(p => [p[0].toISOString().slice(0, 10), p[1]]) }, { label: "Cotton prices" }))];
 };
+
+function cottonForm() {
+  const f = (id, label, attrs) => h("div", { class: "field" }, h("label", { for: id }, label), h("input", Object.assign({ id }, attrs)));
+  const msg = h("div", { "aria-live": "polite" });
+  return h("form", { class: "card", onsubmit: async e => {
+    e.preventDefault();
+    try { await postJSON("/api/cotton", { date: $("#cot-date").value, price: $("#cot-price").value, source: $("#cot-source").value }); toast("Cotton price added"); route(); }
+    catch (err) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, err.message)); }
+  } }, h("h3", {}, "Add a cotton price"),
+    h("div", { class: "fields", style: "grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end" },
+      f("cot-date", "Date", { type: "date", required: true, value: new Date().toISOString().slice(0, 10) }), f("cot-price", "Shankar-6, Rs per candy", { type: "number", min: "1", step: "any", required: true }), f("cot-source", "Source", { type: "text", placeholder: "Where the price is from" }),
+      h("button", { class: "btn primary", type: "submit" }, "Add price")), msg);
+}
 
 function lineChart(pts, unit) {
   const W = 900, H = 320, m = { l: 62, r: 16, t: 12, b: 28 };
@@ -506,6 +557,65 @@ function lineChart(pts, unit) {
   return el;
 }
 
+// ------------------------------------------------------------------ yarn price intake
+PAGES.intake = async () => {
+  const work = h("div", { "aria-live": "polite" });
+  const fail = e => work.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message));
+  const busy = () => work.replaceChildren(h("p", { class: "empty" }, "Reading..."));
+  const COLS = ["Date", "Yarn", "Count", "Low Rs/kg", "High Rs/kg", "Source"];
+  const review = (data) => {            // every source ends here: rows a person checks before they are added
+    const body = h("tbody");
+    const addRow = r => { const tr = h("tr", {}, COLS.map((c, i) => h("td", {}, h("input", { class: "cell" + (i === 3 || i === 4 ? " n" : ""), type: i === 3 || i === 4 ? "number" : "text", step: "any", value: r ? (r[i] ?? "") : (i === 0 ? new Date().toISOString().slice(0, 10) : ""), "aria-label": c }))), h("td", {}, h("button", { class: "icon-btn sm", type: "button", "aria-label": "Remove this row", onclick: () => tr.remove() }, "\u00D7"))); body.append(tr); return tr; };
+    data.rows.forEach(addRow);
+    const msg = h("div");
+    work.replaceChildren(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Review before adding")),
+      data.note ? h("div", { class: "notice info", style: "margin:0 0 14px" }, data.note) : null,
+      h("div", { class: "table-wrap", tabindex: "0", role: "region", "aria-label": "Rows to review" }, h("table", { class: "edit" }, h("thead", {}, h("tr", {}, COLS.map(c => h("th", { scope: "col" }, c)), h("th", {}))), body)), msg,
+      h("div", { class: "row-actions" },
+        h("button", { class: "btn primary", type: "button", onclick: async () => {
+          const rows = [...body.rows].map(tr => [...tr.querySelectorAll("input")].map(i => i.value.trim() === "" ? null : i.value.trim()));
+          try { const r = await (await postJSON("/api/intake/add", { rows, source: data.source })).json(); state.dash = null; toast(`${r.added} rows added to the market reference`); location.hash = "#yarn"; }
+          catch (e) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
+        } }, "Add to market reference"),
+        h("button", { class: "btn", type: "button", onclick: () => addRow(null).querySelector("input").focus() }, "Add a row"),
+        h("button", { class: "btn", type: "button", onclick: () => work.replaceChildren() }, "Discard")),
+      h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here.")));
+  };
+  const mapper = (data) => {            // a table was read: say which column is which
+    const names = Object.keys(data.sheets);
+    const pickSheet = h("select", { id: "map-sheet" }, names.map(n => h("option", { value: n }, n)));
+    const preview = h("div"), picks = h("div", { class: "fields", style: "grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:14px" });
+    const sel = {};
+    const draw = () => {
+      const t = data.sheets[pickSheet.value];
+      preview.replaceChildren(dataTable(t, { label: "First rows of the file" }));
+      picks.replaceChildren(...[["count", "Count column"], ["low", "Rate (or low) column"], ["high", "High rate column"], ["yarn", "Yarn description column"], ["date", "Date column"]].map(([k, label]) => {
+        sel[k] = h("select", { id: "map-" + k }, h("option", { value: "" }, k === "count" || k === "low" ? "Choose..." : "None"), t.columns.map(c => h("option", { value: c }, c)));
+        return h("div", { class: "field" }, h("label", { for: "map-" + k }, label), sel[k]);
+      }));
+    };
+    pickSheet.addEventListener("change", draw); draw();
+    const msg = h("div");
+    work.replaceChildren(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Which column is which?"), names.length > 1 ? h("div", { class: "field", style: "min-width:220px" }, h("label", { for: "map-sheet" }, "Sheet or table"), pickSheet) : null),
+      preview, picks, msg,
+      h("div", { class: "row-actions" }, h("button", { class: "btn primary", type: "button", onclick: async () => {
+        try { const r = await (await postJSON("/api/intake/map", { token: data.token, sheet: pickSheet.value, count: sel.count.value, low: sel.low.value, high: sel.high.value, yarn: sel.yarn.value, date: sel.date.value })).json(); review(Object.assign(r, { source: data.source })); }
+        catch (e) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
+      } }, "Send to review"))));
+  };
+  const got = d => d.kind === "tables" ? mapper(d) : review(d);
+  const file = h("input", { type: "file", id: "in-file", accept: ".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg,.webp" });
+  file.addEventListener("change", async () => { if (!file.files[0]) return; const fd = new FormData(); fd.append("file", file.files[0]); busy(); try { got(await (await api("/api/intake/file", { method: "POST", body: fd })).json()); } catch (e) { fail(e); } });
+  const inp = (id, label, attrs) => h("div", { class: "field" }, h("label", { for: id }, label), h("input", Object.assign({ id, type: "text" }, attrs)));
+  const send = (path, body) => async e => { e.preventDefault(); busy(); try { got(await (await postJSON(path, body())).json()); } catch (err) { fail(err); } };
+  return [...pageHead("Bring in yarn prices", "From a price list, a circular, a web page or a price service. Every route ends in a table you review; only then is anything added to the market reference."),
+    h("div", { class: "grid g3" },
+      h("div", { class: "card" }, h("h3", {}, "A file"), h("label", { for: "in-file", class: "sub", style: "display:block;margin-bottom:8px" }, "Excel, CSV, PDF or a picture of a price list"), file, h("p", { class: "sub", style: "margin:10px 0 0" }, "A scanned PDF or a picture cannot be read; it is kept as the source and you type its rates.")),
+      h("form", { class: "card", onsubmit: send("/api/intake/link", () => ({ url: $("#in-url").value })) }, h("h3", {}, "A web page"), inp("in-url", "Page address", { placeholder: "https://...", required: true }), h("div", { class: "row-actions" }, h("button", { class: "btn", type: "submit" }, "Read page")), h("p", { class: "sub", style: "margin:10px 0 0" }, "Pages behind a login cannot be read.")),
+      h("form", { class: "card", onsubmit: send("/api/intake/api", () => ({ url: $("#in-api").value, header_name: $("#in-hn").value, header_value: $("#in-hv").value })) }, h("h3", {}, "A price service (JSON)"), inp("in-api", "Endpoint address", { required: true }), h("div", { class: "fields", style: "margin-top:10px" }, inp("in-hn", "Header name", { placeholder: "x-api-key" }), inp("in-hv", "Header value", { type: "password", autocomplete: "off" })), h("div", { class: "row-actions" }, h("button", { class: "btn", type: "submit" }, "Call")), h("p", { class: "sub", style: "margin:10px 0 0" }, "The key is used for this one call and is not saved."))),
+    h("div", { style: "margin-top:16px" }, work)];
+};
+
 // ------------------------------------------------------------------ rates
 function tabbed(title, sub, sheets, first) {
   return async (want) => {
@@ -514,13 +624,16 @@ function tabbed(title, sub, sheets, first) {
     const open = async sheet => {
       [...chips.children].forEach(c => c.setAttribute("aria-selected", String(c.dataset.sheet === sheet)));
       box.replaceChildren(h("p", { class: "empty" }, "Loading..."));
+      current = sheet; editBtn.hidden = !state.meta.editable.includes(sheet);
       try { const t = await getJSON("/api/table/" + sheet); box.replaceChildren(dataTable(t, { filter: t.rows.length > 12, label: t.label })); }
       catch (e) { box.replaceChildren(h("div", { class: "notice err" }, e.message)); }
     };
+    let current;
+    const editBtn = h("button", { class: "btn", type: "button", onclick: async () => { editBtn.hidden = true; const sheet = current; box.replaceChildren(editTable(await getJSON("/api/table/" + sheet), sheet, () => open(sheet))); } }, "Edit this table");
     for (const s of sheets) chips.append(h("button", { class: "chip", role: "tab", "data-sheet": s, onclick: () => open(s) }, state.meta.tables[s]));
     await open(sheets.includes(want) ? want : first || sheets[0]);
     return [...pageHead(title, sub),
-      h("div", { class: "card" }, h("div", { class: "card-head" }, chips, h("a", { class: "btn", href: "/classic/" }, "Edit rates")), box,
+      h("div", { class: "card" }, h("div", { class: "card-head" }, chips, editBtn), box,
         h("div", { class: "notice info" }, "Basis shows where each number came from. ", h("span", { class: "tag warn" }, "⚠ Placeholder"), " marks a starting guess with no data behind it; the cost view warns whenever one is used."))];
   };
 }
