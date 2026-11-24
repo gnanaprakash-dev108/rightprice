@@ -3,7 +3,8 @@
 Works out what a woven fabric should cost ex-mill, in Rs per metre and Rs per kg, from its
 construction and a set of rate tables, and compares that with a quote or a purchase order price.
 
-Version 1 covers 100% cotton woven fabrics. Status, findings and open items are in
+Version 1 is calibrated for 100% cotton woven fabrics. Poly cotton and linen can be costed, but only
+on placeholder yarn rates and cotton's process rates, so their cost is provisional. Status, findings and open items are in
 [PROGRESS.md](PROGRESS.md).
 
 > **Keep this repository private.** `inputs/`, `data/plm_specs_for_po.csv` and `pilot/` contain
@@ -21,9 +22,9 @@ workbooks are needed to cost a fabric. On Windows, `Start RightPrice.bat` does t
 
 The front end is hand-built (`web/`, plain HTML, CSS and JavaScript, no build step) and reads its
 numbers from `server.py`. The costing has not moved: every number still comes from `engine.py` and
-`masters.py`, every rate from the rate master workbook, and there is no database. The earlier
-Streamlit screens stay reachable at `/classic` (the "Edit rates" link); rate editing and the yarn
-price intake still live there until they are rebuilt.
+`masters.py`, every rate from the rate master workbook, and there is no database. Rates are edited
+and yarn prices brought in from the new screens. The earlier Streamlit screens stay reachable at
+`/classic` ("Earlier screens" in the left panel) as a fallback.
 
 To host it on Azure, follow [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md). The environment variable
 `RIGHTPRICE_DATA` moves the rate master, saved costings and imported price files to a folder that
@@ -37,9 +38,10 @@ switched in the header; the search box finds yarns, saved costings, rate tables 
 | Screen | What it does |
 |---|---|
 | Dashboard | Saved costings as cards, quote gap, cotton yarn rates against the market, supplier cost ratios |
-| Cost a fabric | Drop-downs for every cost driver; a waterfall from yarn to the final price, switchable between cost groups and every sub-cost; table of every line; rates used |
+| Cost a fabric | Numbered steps on the left (fabric content, route, yarn, dyeing, construction, finish), each deciding what the next asks; live cost on the right; chart switchable between bars, waterfall, pie, treemap and line, by cost group or every sub-cost |
 | Bulk upload | Excel template with the same drop-downs; costs every row and rejects values not on a list |
-| Yarn prices | Yarn master, market reference, master against market. Editing and the price intake are under `/classic` |
+| Yarn prices | Yarn master and market reference, both editable; master against market |
+| Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference |
 | Cotton prices | Shankar-6 history and chart |
 | Rate tables | Weaving, sizing, dyeing, finishing, print method, dobby, weft, rate card quantity, defaults, weave list, content groups |
 | Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |
@@ -77,6 +79,7 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `server.py` | The web server: serves `web/`, answers its requests, and passes `/classic` through to the Streamlit screens |
 | `web/` | The front end: `index.html`, `app.css`, `app.js` |
 | `app.py` | The earlier Streamlit screens, now at `/classic` |
+| `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
 | `check_server.py` | Checks the server gives the engine's numbers and refuses bad input. Must print `ALL OK` |
 | `grouping.py` | Folds blend spellings into 17 content groups and weave names into 7 weave groups |
 | `price_import.py` | Yarn price intake from Excel, PDF, image, link or API |
