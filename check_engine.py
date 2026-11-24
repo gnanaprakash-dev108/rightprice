@@ -23,6 +23,8 @@ CASES = {  # values copied from the Earlier Qualities sheet; yarn rate = overrid
 
 
 def rate_card_checks(m):
+    pdt = m["Piece_Dyeing"].set_index("Route")["Rs per kg greige"]
+    PRINT_RATE_PER_KG, PREP_RATE_PER_KG = float(pdt["Printed"]), float(pdt["RFD / Bleached"])
     """The mill rate card items: each is a fixed amount on top of the price, and none is on by default."""
     ex = masters.EXAMPLE_ROW
     base = masters.cost(ex, m)["total_per_m"]
@@ -59,7 +61,12 @@ def rate_card_checks(m):
         ("Order size slab alone still applies", total(small) > base * 1.05, True),
         ("Digital print is Rs 37 above rotary",
          total(pr, **{"Print method": "Digital"}) - total(pr, **{"Print method": "Rotary"}), 37),
-        ("Printed fabric defaults to rotary", total(pr), total(pr, **{"Print method": "Rotary"})),
+        ("Printed fabric, no method chosen, stays on the printing rate per kg",
+         masters.cost(pr, m)["inputs"]["piece_dye_rate"], PRINT_RATE_PER_KG),
+        ("Printed fabric, no method chosen, has no charge per metre", masters.cost(pr, m)["inputs"]["print_per_m"], 0),
+        ("Rotary on a printed fabric is preparation plus Rs 18", total(pr, **{"Print method": "Rotary"}),
+         engine.compute(dict(masters.cost(pr, m)["inputs"], piece_dye_rate=PREP_RATE_PER_KG, print_per_m=18,
+                             labels={}))["total_per_m"]),
         ("Print over yarn dyed adds Rs 18", total(ex, **{"Print method": "Rotary"}) - base, 18),
     ]
     ok = True
@@ -68,7 +75,6 @@ def rate_card_checks(m):
         ok &= good
         print(f"  {name}: {got if isinstance(got, bool) else round(got, 3)}  {'OK' if good else 'MISMATCH'}")
     refusals = [
-        ("Printed fabric without a method", error(pr, **{"Print method": "No print"}), "required for a printed"),
         ("Dobby shafts on a twill", error(ex, Weave="Twill-2/1", **{"Dobby shafts": "9 to 12"}), "dobby weaves only"),
         ("Small-lot band on piece dyed",
          error(pr, Route="Piece Dyed", **{"Rate card quantity": "500 to 599 m"}), "yarn dyed"),

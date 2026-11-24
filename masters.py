@@ -135,7 +135,8 @@ def resolve(sel, masters):
     piece_shade = pick("Piece shade", L["Piece shade"], "Medium")
     # Mill rate card choices. The first value on each list is the one that charges nothing.
     printed = route == "Printed"
-    method = pick("Print method", L["Print method"], "Rotary" if printed else L["Print method"][0])
+    method = pick("Print method", L["Print method"], L["Print method"][0])
+    card_print = method != L["Print method"][0]
     shafts = pick("Dobby shafts", L["Dobby shafts"], L["Dobby shafts"][0])
     beam = pick("Top beam", L["Top beam"], L["Top beam"][0])
     weft_opt = pick("Weft (yarn dyed)", L["Weft (yarn dyed)"], L["Weft (yarn dyed)"][0])
@@ -217,20 +218,21 @@ def resolve(sel, masters):
     if not yd:
         pdn = masters["Piece_Dyeing"]
         shade = piece_shade if route == "Piece Dyed" else "Any"
-        hit = pdn[(pdn["Route"] == route) & (pdn["Shade"] == shade)]
+        # A print costed by rate card method carries preparation only; the method adds the printing.
+        look = "RFD / Bleached" if printed and card_print else route
+        hit = pdn[(pdn["Route"] == look) & (pdn["Shade"] == shade)]
         if hit.empty:
             raise ValueError(f"No piece dyeing rate for {route} / {shade}")
         inp["piece_dye_rate"] = float(hit["Rs per kg greige"].iloc[0])
-        item = "Preparation for print" if printed else "Piece dyeing"
+        item = ("Preparation for print" if card_print else "Printing") if printed else "Piece dyeing"
         labels["piece_dye_name"] = item
-        note(item, f"{route}, {shade}", inp["piece_dye_rate"], "Rs/kg greige", hit["Basis"].iloc[0])
+        note(item, f"{look}, {shade}", inp["piece_dye_rate"], "Rs/kg greige", hit["Basis"].iloc[0])
 
-    # Print method, Rs per metre. A printed fabric must have one; a print over yarn dyed cloth may.
-    if printed and method == L["Print method"][0]:
-        raise ValueError("'Print method' is required for a printed fabric")
+    # Print method, Rs per metre, only when one is chosen. Without it a printed fabric stays on the
+    # printing rate per kg above. It can also be set for a print over yarn dyed cloth.
     pm = masters["Print_Methods"].set_index("Print method").loc[method]
     inp["print_per_m"] = float(pm["Rs per metre"])
-    if method != L["Print method"][0]:
+    if card_print:
         labels["print_per_m"] = method
         note("Print method", method, inp["print_per_m"], "Rs/m", pm["Basis"])
 
@@ -383,9 +385,10 @@ def make_template(masters):
         "Columns with a drop-down accept only values from the Lists sheet.",
         "Yarn dyeing shades default to Medium for yarn dyed fabrics and Undyed for the rest.",
         "Leave reed space blank to use finished width x the reed space factor in Settings.",
-        "Mill rate card columns are optional. Left blank: no dobby or top beam charge, weft dyed, rotary for a "
-        "printed fabric, and the order size slab for quantity.",
-        "Print method is required in effect only for printed fabrics; it can also be set for a print over yarn dyed cloth.",
+        "Mill rate card columns are optional. Left blank: no dobby or top beam charge, weft dyed, the printing "
+        "rate per kg for a printed fabric, and the order size slab for quantity.",
+        "Print method Rotary or Digital replaces the printing rate per kg with the rate card's charge per metre; "
+        "it can also be set for a print over yarn dyed cloth.",
         "Dobby shafts and Top beam are for dobby weaves only. Weft (yarn dyed) is read only for yarn dyed fabrics.",
         "Rate card quantity, when filled, takes the place of Order size, so quantity is never charged twice. "
         "Bands below 800 m are for yarn dyed fabrics only.",

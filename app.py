@@ -210,10 +210,10 @@ def page_cost(m):
         wv_over = st.number_input("Weaving rate override (Rs/pick), 0 = use table", min_value=0.0, value=0.0,
                                   step=0.01, format="%.3f")
         st.markdown("**Mill rate card upcharges**")
-        pm = L["Print method"]
-        method = st.selectbox("Print method", pm[1:] if printed else pm, key=f"pm{printed}",
-                              help="Rs per metre from the mill rate card. Required for a printed fabric; "
-                                   "can be set for a print over yarn dyed cloth.")
+        method = st.selectbox("Print method", L["Print method"],
+                              help="Optional. Not selected: a printed fabric is costed on the calibrated printing "
+                                   "rate per kg. Rotary or Digital: the mill rate card's Rs per metre is used "
+                                   "instead. Can also be set for a print over yarn dyed cloth.")
         shafts = st.selectbox("Dobby shafts", L["Dobby shafts"], disabled=not dobby, key=f"sh{dobby}")
         beam = st.selectbox("Top beam", L["Top beam"], disabled=not dobby, key=f"tb{dobby}")
 

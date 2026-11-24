@@ -10,8 +10,9 @@ Mill rate card inputs, and what the PLM list and the purchase orders can tell us
   Rate card quantity  read from the purchase-order metres of the fabric code (quantity_band)
   Weft (yarn dyed)    partly: a check or a horizontal stripe has a dyed weft. PLM does not say
                       for vertical stripes, solids and textures; those are left as dyed.
-  Print method        not in PLM. Every print is costed as rotary; the sheet 'Rate card steps'
-                      shows the result if every print were digital.
+  Print method        not in PLM, so none is set: every print stays on the calibrated printing
+                      rate per kg. The sheet 'Rate card steps' shows the result if every print
+                      were rotary, or digital.
   Dobby shafts, top beam   not in PLM. Left at up to 8 shafts, no top beam.
 """
 import os
@@ -227,14 +228,13 @@ def build_inputs():
         fkey = norm(s["finish_name"]).lstrip("f")
         yd, metres = route == "Yarn Dyed", g.loc[code, "qty"]
         weft, weft_basis = weft_from_plm(s) if yd else (None, "")
-        over_print = yd and "with print" in s["pattern_name"].lower()
         rows.append({"Fabric code": code,
                      "Description": f"{s['blend_name']} {s['warpcount']}x{s['weftcount']} / {epi:g}x{ppi:g} {s['weavetype_name']}",
                      "Supplier": g.loc[code, "Supplier"], "Route": route, "Weave": weave,
                      "Finish": fin_by_norm.get(fkey, "Normal"), "Warp yarn": warp, "Weft yarn": weft_yarn,
                      "Weft (yarn dyed)": weft, "Weft read from": weft_basis,
-                     "Print method": "Rotary" if route == "Printed" or over_print else None,
-                     "Print method read from": "Not in PLM; rotary assumed" if route == "Printed" or over_print else "",
+                     "Print method": None,
+                     "Print method read from": "Not in PLM; left on the printing rate per kg" if route == "Printed" else "",
                      "Rate card quantity": quantity_band(route, metres), "PLM pattern": s["pattern_name"],
                      "PLM pattern details": s["patterndetails_name"],
                      "EPI": epi, "PPI": ppi, "Finished width (in)": round(width, 1),
@@ -269,12 +269,13 @@ def steps(inp, m, wg):
     """The same fabrics costed with the rate card inputs switched on one at a time."""
     slab_only = inp.assign(**{"Rate card quantity": None})
     all_dyed = slab_only.assign(**{"Weft (yarn dyed)": None})
-    printed = inp["Print method"].notna()
+    printed = inp["Route"] == "Printed"
     unknown = inp["Weft read from"].str.startswith("PLM does not say")
     variants = [
-        ("1. Print rotary, finishes from the card; weft dyed, order size slabs", all_dyed),
+        ("1. Finishes from the card; weft dyed, order size slabs, printing per kg", all_dyed),
         ("2. ...and weft from the PLM pattern", slab_only),
         ("3. ...and rate card quantity bands in place of the slabs (the pilot result)", inp),
+        ("What if: as 3, every print rotary", inp.assign(**{"Print method": inp["Print method"].where(~printed, "Rotary")})),
         ("What if: as 3, every print digital", inp.assign(**{"Print method": inp["Print method"].where(~printed, "Digital")})),
         ("What if: as 3, weft undyed wherever PLM does not say",
          inp.assign(**{"Weft (yarn dyed)": inp["Weft (yarn dyed)"].where(~unknown, "Undyed")})),
@@ -332,8 +333,8 @@ def main():
     yd = ok[ok["Route"] == "Yarn Dyed"]
     read = pd.concat([
         pd.DataFrame({"Input": "Weft (yarn dyed)", "Set as": yd["Weft (yarn dyed)"], "Read from": yd["Weft read from"]}),
-        pd.DataFrame({"Input": "Print method", "Set as": ok["Print method"], "Read from": ok["Print method read from"]}
-                     ).dropna(subset=["Set as"]),
+        pd.DataFrame({"Input": "Print method", "Set as": "Not selected (printing rate per kg)",
+                      "Read from": ok["Print method read from"]})[ok["Route"] == "Printed"],
         pd.DataFrame({"Input": "Rate card quantity", "Set as": ok["Rate card quantity"],
                       "Read from": "Purchase-order metres of the fabric code, 1 Aug to 23 Nov"}),
         pd.DataFrame({"Input": "Finish", "Set as": ok["Finish"].where(ok["Finish mapped"], "Normal (finish not recognised)"),

@@ -69,14 +69,14 @@ yarn-dyed oxford −2.7%, 46%; piece-dyed satin 3.1%, 57%; piece-dyed twill 4.3%
 
 1. **Yarn-dyed plain is over-costed**, by 14% before the rate card and 10% after (220 fabrics, mostly
    Amsler and slub). The undyed-weft explanation does not hold: checks are over-costed as much as stripes.
-2. **Prints**: twill and plain were over-costed (−6% and −22%) on one rate per kg. On the card's
-   rotary rate every print type is now under-costed. See "What did not improve".
+2. **Printed twill and plain are over-costed** (−7% and −22%) on the rate per kg. The card's rotary
+   and digital charges are optional and do not fix it. See "What did not improve".
 3. **Yarn-dyed jacquard is under-costed by 42%**; too few fabrics to set a rate.
 4. **Fabrics in 2/100 yarn are bought at about double the should-cost** (23 fabrics); the spec is
    probably missing a premium cotton or finish.
 5. **Rajapalayam sits 8% below should-cost** across 289 fabrics while Arvind, NSL and Vardhman are within 4%.
    Mill tier is still set to zero.
-6. **43 placeholder rates remain** (46 before the rate card), mostly finishes. Four yarn rates are placeholders: Cotton 20S and
+6. **42 placeholder rates remain** (46 before the rate card), mostly finishes. Four yarn rates are placeholders: Cotton 20S and
    Slub 20S, 24S, 30S.
 7. **66 fabrics have a finish the tool does not recognise** (303 before) and are costed as Normal.
 8. **328 cotton fabrics are not costed** because one direction mixes yarns ("40s + 40s melange").
@@ -101,17 +101,20 @@ figures are the price change for one extra end or pick.
 - New rate master sheets: `Print_Methods`, `Dobby_Charges`, `Weft_Options`, `Quantity_Terms`; a new
   column in `Finishing_Rates`; one new row in `Settings`. Added by `python rate_card.py`.
   Backup: `data/Rate_Master before rate card 20261124-0914.xlsx`.
-- The printing rate of Rs 390 per kg is gone. A printed fabric now carries preparation at Rs 60 per kg
-  (a placeholder, equal to RFD) plus the print method in Rs per metre.
+- **Printing keeps the calibrated Rs 390 per kg by default.** Print method is optional: only when
+  Rotary or Digital is chosen does the card's Rs per metre take the place of the per-kg rate, and
+  the cloth then carries preparation at the RFD rate (Rs 60 per kg, a placeholder). A first version
+  made rotary the default; that under-costed every print by 10% to 35% and was withdrawn.
 - Every card item is added to the price and not marked up. Each is its own second-level line in a new
   bucket, "Upcharges and quantity terms".
 - Defaults charge nothing. `check_engine.py` prints ALL OK: the seven V1 qualities match to the paisa,
-  and 21 further checks confirm each card item adds what the card says.
+  and 22 further checks confirm each card item adds what the card says.
 - Order size and the card's quantity terms are reconciled by using one or the other, never both
   (see "Quantity" below).
-- The live server keeps its own rate master. The app now adds the rate card tables to it the first
-  time it opens after the merge, after saving a dated backup beside it; rates edited on the server
-  are kept. Tested against a copy of the pre-rate-card master with one edited rate.
+- The live server keeps its own rate master. The app adds the rate card tables to it the first time
+  it opens after the merge, after saving a dated backup beside it; every rate on the server,
+  including the printing rate, is kept. Tested against a copy of the pre-rate-card master with one
+  edited rate.
 
 ### What the pilot could and could not set from PLM
 
@@ -120,7 +123,7 @@ figures are the price change for one extra end or pick.
 | Finish | Yes | PLM finish name. Unrecognised finishes fell from 303 to 66 |
 | Rate card quantity | Yes | Metres of the fabric code across all orders, 1 Aug to 23 Nov. Not the size of one order, and split deliveries cannot be told apart |
 | Weft (yarn dyed) | Partly | 357 checks and horizontal stripes: dyed. 5 chambrays: undyed, by definition. **560 stripes, solids and textures: PLM does not say; left as dyed** |
-| Print method | **No** | Not in PLM. All 222 prints costed as rotary |
+| Print method | **No** | Not in PLM. None is set, so all 219 prints stay on the printing rate per kg |
 | Dobby shafts, top beam | **No** | Not in PLM. All 394 dobbies left at no charge |
 
 ### Results
@@ -129,13 +132,10 @@ figures are the price change for one extra end or pick.
 
 | | Before | After |
 |---|---|---|
-| All: median gap | −0.5% | 3.0% |
-| All: within 5% / 10% / 20% | 28% / 48% / 79% | 26% / 49% / 72% |
-| Held-back: median gap | −1.5% | 4.3% |
-| Held-back: within 5% / 10% / 20% | 27% / 47% / 78% | 24% / 47% / 71% |
-| All except printed (1,363): median gap | −0.5% | 1.6% |
-| All except printed: within 5% / 10% / 20% | 27% / 48% / 80% | 29% / 54% / 79% |
-| Held-back except printed (434): within 5% / 10% / 20% | 26% / 47% / 79% | 27% / 51% / 78% |
+| All: median gap | −0.5% | 1.5% |
+| All: within 5% / 10% / 20% | 28% / 48% / 79% | 30% / 53% / 79% |
+| Held-back: median gap | −1.5% | 0.7% |
+| Held-back: within 5% / 10% / 20% | 27% / 47% / 78% | 27% / 51% / 77% |
 
 The known over-costed groups:
 
@@ -143,45 +143,42 @@ The known over-costed groups:
 |---|---|---|---|---|---|
 | Yarn-dyed plain | 220 | −13.9% → −10.4% | 7% → 14% | 19% → 38% | 86% → 90% |
 | Yarn-dyed plain, held-back | 71 | −13.9% → −10.4% | 6% → 16% | 20% → 35% | 86% → 90% |
-| Printed twill | 64 | −6.1% → 27.2% | 0% → 0% | 9% → 8% | 50% → 42% |
-| Printed twill, held-back | 20 | −10.4% → 22.0% | 0% → 0% | 5% → 10% | 55% → 50% |
-| Printed plain | 23 | −22.3% → 10.0% | 39% → 35% | 39% → 57% | 43% → 61% |
-| Printed plain, held-back | 10 | −25.6% → 6.6% | 20% → 40% | 20% → 70% | 30% → 80% |
+| Printed twill | 64 | −6.1% → −7.0% | 0% → 0% | 9% → 13% | 50% → 53% |
+| Printed twill, held-back | 20 | −10.4% → −10.5% | 0% → 0% | 5% → 5% | 55% → 55% |
+| Printed plain | 23 | −22.3% → −22.3% | 39% → 26% | 39% → 39% | 43% → 43% |
+| Printed plain, held-back | 10 | −25.6% → −25.0% | 20% → 10% | 20% → 20% | 30% → 30% |
 
 Other types, all fabrics, median gap and share within 10%: yarn-dyed dobby −1.7% → 1.4%, 47% → 58%;
-yarn-dyed twill −0.2% → 3.1%, 70% → 70%; yarn-dyed oxford −2.6% → −0.8%, 46% → 39%;
+yarn-dyed twill −0.2% → 3.1%, 70% → 70%; yarn-dyed oxford −2.6% → −0.7%, 46% → 39%;
 piece-dyed plain 0.2% → 2.0%, 67% → 72%; piece-dyed twill 4.3% → 5.2%, 52% → 52%;
-piece-dyed satin 3.1% → 5.1%, 57% → 57%; **printed satin 0.1% → 34.8%, 75% → 17%**.
+piece-dyed satin 3.1% → 5.1%, 57% → 57%; printed satin 0.1% → 0.1%, 75% → 70%.
 
 Step by step (sheet "Rate card steps" in `pilot/Pilot_Results.xlsx`), all fabrics:
 
 | Inputs | Median gap | Within 10% | Within 20% |
 |---|---|---|---|
 | Before | −0.5% | 48% | 79% |
-| Print as rotary, finishes from the card | 1.0% | 45% | 74% |
-| ...and weft from the PLM pattern | 1.0% | 45% | 74% |
-| ...and rate card quantity in place of slabs (the result) | 3.0% | 49% | 72% |
-| What if every print were digital | 2.2% | 50% | 79% |
-| What if weft were undyed wherever PLM does not say | 6.6% | 48% | 69% |
+| Finishes from the card | −0.5% | 50% | 80% |
+| ...and weft from the PLM pattern | −0.5% | 50% | 80% |
+| ...and rate card quantity in place of slabs (the result) | 1.5% | 53% | 79% |
+| What if every print were rotary | 3.1% | 49% | 72% |
+| What if every print were digital | 2.3% | 50% | 79% |
+| What if weft were undyed wherever PLM does not say | 3.5% | 52% | 75% |
 
 ### What did not improve
 
-1. **Prints got worse.** They moved from over-costed to under-costed by 10% to 35%. The purchase
-   prices imply a print charge of about Rs 80 per metre (middle half Rs 43 to 90) on top of the tool's
-   greige and preparation cost, above even the card's digital Rs 55. Only one print in six sits nearer
-   rotary than digital. Either most of these prints are digital and priced above the card, or the
-   cloth under the print is under-costed (preparation is a Rs 60 per kg placeholder). Printed satin,
-   which fitted at Rs 390 per kg, is the largest loss. Assuming every print is digital brings printed
-   twill to 3.2% but leaves satin well under.
+1. **Printed twill and plain are still over-costed** (−7% and −22%), as before the rate card. The
+   card's print charges are not the fix as they stand: with every print on rotary all print types
+   become under-costed by 10% to 35% (twill 27%, satin 35%), and with every print on digital twill
+   fits (3.2%) but satin does not. Either the cloth under a print is costed too low when the card's
+   method is used (preparation is a Rs 60 per kg placeholder), or these prints are priced above the card.
 2. **Yarn-dyed plain is still over-costed by 10%.** The weft input did almost nothing, because the
    over-costing is the same on checks, where the weft is certainly dyed, as on stripes. Of the 220
    fabrics, 175 are Amsler 24s or slub 24s from two mills. The gain that did come was from quantity
-   bands and finishes. Even with every unknown weft undyed the group is at −6.8%. The Amsler and slub
-   yarn rates, and the higher wastage, overhead and margin given to yarn-dyed plain (5%, 5%, 8% against
-   3%, 4%, 7% for twill), are the next places to look.
-3. **Overall fit is flat to worse.** Within 10% is unchanged at 48% to 49%; within 20% fell from 79%
-   to 72%, nearly all of it prints. Leaving prints out, within 10% rose from 48% to 54%.
-4. **Yarn-dyed oxford** within 10% fell from 46% to 39% although its median improved.
+   bands and finishes. The Amsler and slub yarn rates, and the higher wastage, overhead and margin
+   given to yarn-dyed plain (5%, 5%, 8% against 3%, 4%, 7% for twill), are the next places to look.
+3. **Yarn-dyed oxford** within 10% fell from 46% to 39% although its median improved.
+4. **Yarn-dyed twill** median moved from −0.2% to 3.1% and its share within 5% fell from 46% to 35%.
 5. **The whole level moved up about 2 points** because the card's quantity terms price a mid-size
    order lower than the slabs did. The weaving rates were calibrated with the slabs in place.
 
@@ -204,14 +201,14 @@ gave, so adding the card's terms on top would count quantity twice.
 
 - Order size, added to the card's bands: below 1,000 m +7 points; 1,000 to 3,000 m +0; 3,000 m and above +0.
 - Weaving, piece-dyed twill: Rs 0.18 → 0.25 per pick. Piece-dyed satin: Rs 0.22 → 0.29.
+- Printing: Rs 390 → 395 per kg, in effect no change.
 - No change proposed for yarn-dyed plain: closing the gap through weaving would need Rs 0.04 per pick.
-- Printing: no proposal; the sheet shows the implied charge beside the card.
-- Held-back third with the draft: median 4.3% → 1.8%, within 5% / 10% / 20% 24% / 47% / 71% → 27% / 47% / 72%.
+- Held-back third with the draft: median 0.7% → −1.6%, within 5% / 10% / 20% 27% / 51% / 77% → 29% / 51% / 78%.
 
 ## Open
 
-1. Print method for the 222 prints, and a mill cost sheet for one print. Until then the tool
-   under-costs prints.
+1. Print method for the 219 prints, and a mill cost sheet for one print, before Rotary or Digital
+   is used as a matter of course.
 2. Whether stripes and solids are woven with an undyed weft: 560 fabrics.
 3. Dobby shaft counts and top beam: not in PLM. The yarn-dyed dobby weaving rate (Rs 0.45 against
    0.32 for twill) may already hold part of the shaft charge.
@@ -220,8 +217,6 @@ gave, so adding the card's terms on top would count quantity twice.
 6. 66 finishes still not recognised: Others 17, ETI Clat 14, ETI + Baby Skin 9, Stain Repellent 8.
 7. "Not applicable for 40s quality" is read as warp and weft both 40s single.
 8. The draft above awaits a decision.
-9. After merging, confirm on the live site that the rate card drop-downs appear and that
-   `Rate_Master before rate card <date>.xlsx` exists in `/home/rightprice-data`.
 
 ## Next steps, in order
 

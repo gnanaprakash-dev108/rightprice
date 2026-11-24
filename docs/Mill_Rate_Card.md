@@ -96,7 +96,7 @@ Not applicable for 40s quality, split deliveries or EOSS.
 | 4. Minimum order upcharge | Drop-down "Rate card quantity", bands 500 to 799 m, yarn dyed only | `Quantity_Terms` |
 | 5. Chambray | Drop-down "Weft (yarn dyed)": Dyed, Undyed, or "Chambray, dyed weft" at Rs 10 per metre in place of the per-kg dyeing | `Weft_Options` |
 | 6. Volume discount | Drop-down "Rate card quantity", bands from 2,000 m. No discount when warp and weft are both 40s | `Quantity_Terms` |
-| 7. Print upcharges | Drop-down "Print method". Replaces the single printing rate per kg; the cloth still carries preparation at the RFD rate (a placeholder) | `Print_Methods`, `Piece_Dyeing` |
+| 7. Print upcharges | Drop-down "Print method", optional. Not selected: a printed fabric stays on the calibrated printing rate per kg. Rotary or Digital: the card's Rs per metre is used instead, and the cloth carries preparation at the RFD rate (a placeholder) | `Print_Methods`, `Piece_Dyeing` |
 
 Rules that follow from the card:
 

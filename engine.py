@@ -143,7 +143,7 @@ def compute(inp):
         {"name": "Margin", "lines": [
             line("Mill margin", f"{margin:.1%} on cost", margin_cost)]},
         {"name": UPCHARGE_BUCKET, "lines": [
-            line("Print method", label("print_per_m", "No print") + ", Rs/m, not marked up", print_pm),
+            line("Print method", label("print_per_m", "Not selected") + ", Rs/m, not marked up", print_pm),
             line("Dobby shafts", label("dobby_shaft_per_m", "Up to 8") + ", Rs/m, not marked up", shaft_pm),
             line("Top beam", label("top_beam_per_m", "No") + ", Rs/m, not marked up", beam_pm),
             line("Weft dyeing, flat charge", label("weft_dye_per_m", "None") + ", Rs/m, not marked up", weft_pm),

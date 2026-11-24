@@ -55,7 +55,12 @@ def main():
             log.append(f"Weaving {r['Route']} {r['Weave group']}: kept, no longer a placeholder")
     m["Weaving_Rates"] = wr
 
-    # Printing: nothing to apply. The print method rates are the mill rate card's (sheet Print_Methods).
+    pr = p["Printing"].iloc[0]
+    pdt = m["Piece_Dyeing"].copy()
+    if float(pr["Proposed"]) != float(pr["Current"]):
+        pdt.loc[pdt["Route"] == "Printed", ["Rs per kg greige", "Basis"]] = [float(pr["Proposed"]), BASIS]
+        log.append(f"Printing: {pr['Current']:g} -> {pr['Proposed']:g} Rs/kg greige")
+    m["Piece_Dyeing"] = pdt
 
     masters.save(m)
     print("\n".join(log))

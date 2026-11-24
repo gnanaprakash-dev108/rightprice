@@ -1,7 +1,8 @@
 """Builds the mill rate card (docs/Mill_Rate_Card.md) into the rate master.
 
 Adds the tables behind the rate card drop-downs and leaves every other rate as it is:
-  * Print_Methods    print method, Rs per metre (replaces the single printing rate per kg)
+  * Print_Methods    print method, Rs per metre. Optional: a printed fabric keeps the calibrated
+                     printing rate per kg unless Rotary or Digital is chosen
   * Dobby_Charges    dobby shafts and top beam, Rs per metre
   * Weft_Options     dyed or undyed weft for yarn-dyed fabrics, and the chambray dyed weft charge
   * Quantity_Terms   small-lot upcharge and volume discount by quantity band
@@ -20,9 +21,14 @@ QTY_SETTING = "Order size slabs with rate card quantity"
 NO_QTY = "Not applied"
 
 
+NO_PRINT_METHOD = "Not selected"
+
+
 def print_methods():
-    return pd.DataFrame([("No print", 0, NS), ("Rotary", 18, CARD), ("Digital", 55, CARD)],
-                        columns=["Print method", "Rs per metre", "Basis"])
+    rows = [(NO_PRINT_METHOD, 0, NS, "A printed fabric is costed on the printing rate per kg in Piece_Dyeing"),
+            ("Rotary", 18, CARD, "In place of the printing rate per kg; the cloth carries preparation at the RFD rate"),
+            ("Digital", 55, CARD, "In place of the printing rate per kg; the cloth carries preparation at the RFD rate")]
+    return pd.DataFrame(rows, columns=["Print method", "Rs per metre", "Basis", "Note"])
 
 
 def dobby_charges():
@@ -78,7 +84,6 @@ CARD_FINISHES = [
 def apply(m):
     """Add the rate card tables to a rate master held in memory. Returns the list of changes made."""
     log = []
-    first_time = "Print_Methods" not in m
     for name, make in (("Print_Methods", print_methods), ("Dobby_Charges", dobby_charges),
                        ("Weft_Options", weft_options), ("Quantity_Terms", quantity_terms)):
         if name not in m:
@@ -102,18 +107,6 @@ def apply(m):
                 fr = pd.concat([fr, pd.DataFrame([row])], ignore_index=True)
         m["Finishing_Rates"] = fr
         log.append(f"Finishing_Rates: column '{FIN_UP}' added; {len(CARD_FINISHES)} finishes set from the card")
-
-    if first_time:      # the single printing rate per kg gives way to the print method per metre
-        pdt = m["Piece_Dyeing"].copy()
-        rfd = pdt[pdt["Route"] == "RFD / Bleached"]["Rs per kg greige"]
-        hit = pdt["Route"] == "Printed"
-        if hit.any() and len(rfd):
-            old = float(pdt.loc[hit, "Rs per kg greige"].iloc[0])
-            pdt.loc[hit, "Rs per kg greige"] = float(rfd.iloc[0])
-            pdt.loc[hit, "Basis"] = "Placeholder: preparation before printing, set equal to RFD / Bleached"
-            m["Piece_Dyeing"] = pdt
-            log.append(f"Piece_Dyeing, Printed: Rs {old:g} per kg (printing) replaced by Rs {float(rfd.iloc[0]):g} "
-                       "per kg for preparation; printing itself is now the print method, Rs per metre")
 
     st = m["Settings"]
     if not (st["Setting"] == QTY_SETTING).any():
