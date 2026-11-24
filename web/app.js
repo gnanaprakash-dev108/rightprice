@@ -82,7 +82,7 @@ const NAV = [
   ["Analysis", [["pilot", "Pilot results"]]],
 ];
 const PAGES = {};
-const state = { meta: null, sel: null, chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
+const state = { meta: null, sel: null, visited: new Set(), chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
 
 function buildNav() {
   const nav = $("#nav");
@@ -281,7 +281,7 @@ const STEPS = [
   { id: "fabric", title: "Fabric", need: "Choose the fabric", done: s => !!s.Content, sum: s => s.Content },
   { id: "route", title: "How it is coloured", need: "Choose yarn dyed, piece dyed, bleached or printed", done: s => !!s.Route, sum: s => s.Route },
   { id: "yarn", title: "Yarn", need: "Choose the warp and weft yarn", done: s => !!s["Warp yarn"] && !!s["Weft yarn"], sum: s => `${s["Warp yarn"]} × ${s["Weft yarn"]}` },
-  { id: "dye", title: s => ({ "Yarn Dyed": "Yarn dyeing", "Piece Dyed": "Piece dyeing", Printed: "Printing", "RFD / Bleached": "Bleaching" }[s.Route] || "Dyeing"), done: () => true, sum: s => ["Warp yarn dyeing", "Weft (yarn dyed)", "Piece shade", "Print method"].filter(f => fieldOn(s, f) && s[f]).map(f => s[f]).join(" \u00B7 ") },
+  { id: "dye", title: s => ({ "Yarn Dyed": "Yarn dyeing", "Piece Dyed": "Piece dyeing", Printed: "Printing", "RFD / Bleached": "Bleaching" }[s.Route] || "Dyeing"), done: () => true, sum: s => [["Warp yarn dyeing", "warp "], ["Weft (yarn dyed)", "weft "], ["Weft yarn dyeing", "weft shade "], ["Piece shade", ""], ["Print method", "print: "]].filter(([f]) => fieldOn(s, f) && s[f]).map(([f, p]) => p + s[f]).join(" \u00B7 ") },
   { id: "cons", title: "Weave and construction", need: "Choose the weave and type EPI, PPI and width", done: s => !!s.Weave && s.EPI > 0 && s.PPI > 0 && s["Finished width (in)"] > 0, sum: s => `${s.Weave} · ${s.EPI} × ${s.PPI} · ${s["Finished width (in)"]} in` },
   { id: "finish", title: "Finish, mill and order", done: () => true, sum: s => [s.Finish, fieldOn(s, "Order size") ? s["Order size"] : s["Rate card quantity"]].filter(Boolean).join(" \u00B7 ") },
   { id: "name", title: "Name and compare (optional)", done: () => true, sum: s => [s["Fabric code"], s["Quoted price (Rs/m)"] ? "quote Rs " + s["Quoted price (Rs/m)"] : ""].filter(Boolean).join(" \u00B7 ") },
@@ -313,11 +313,12 @@ PAGES.cost = async () => {
   const set = (name, value, repaint = true) => {
     const before = doneNow();
     sel[name] = value;
-    if (name === "Content") for (const y of ["Warp yarn", "Weft yarn"]) if (sel[y] && contentOfYarn(sel[y]) !== value) sel[y] = "";
+    if (name === "Content") { let cleared = false; for (const y of ["Warp yarn", "Weft yarn"]) if (sel[y] && contentOfYarn(sel[y]) !== value) { sel[y] = ""; cleared = true; } if (cleared) toast(`Yarn cleared: choose a ${value.toLowerCase()} yarn in step 3`); }
     if (name === "Route") {                    // each route starts from its own defaults
-      for (const f of ["Warp yarn dyeing", "Weft yarn dyeing", "Weft (yarn dyed)", "Piece shade", "Print method"]) delete sel[f];
-      if (value === "Yarn Dyed") Object.assign(sel, { "Warp yarn dyeing": "Medium", "Weft yarn dyeing": "Medium", "Weft (yarn dyed)": L["Weft (yarn dyed)"][0] });
-      if (value === "Piece Dyed") sel["Piece shade"] = "Medium";
+      // choices made for another route are kept, out of sight, in case the buyer comes back to it
+      const fill = (f, v) => { if (blank(sel[f])) sel[f] = v; };
+      if (value === "Yarn Dyed") { fill("Warp yarn dyeing", "Medium"); fill("Weft yarn dyeing", "Medium"); fill("Weft (yarn dyed)", L["Weft (yarn dyed)"][0]); }
+      if (value === "Piece Dyed") fill("Piece shade", "Medium");
       if (value !== "Yarn Dyed" && M.small_lot_bands.includes(sel["Rate card quantity"])) { sel["Rate card quantity"] = L["Rate card quantity"][0]; toast("Quantity band cleared: bands below 800 m are for yarn dyed fabrics only"); }
     }
     if (name === "Warp yarn" && !sel["Weft yarn"]) sel["Weft yarn"] = value;      // most fabrics use one yarn both ways
@@ -341,7 +342,10 @@ PAGES.cost = async () => {
     const input = h("input", { id: idOf(name), type: o.text ? "text" : "number", value: sel[name] ?? "", step: o.step || (o.text ? null : "any"), min: o.text ? null : "0", inputmode: o.text ? null : "decimal", placeholder: o.placeholder });
     let wasDone = doneNow();
     input.addEventListener("input", () => { set(name, o.text ? input.value : (input.value === "" ? "" : Number(input.value)), false); });
-    input.addEventListener("change", () => { const before = wasDone; wasDone = doneNow(); if (advance(before)) paint(null, true); });   // typing finished the step: open the next
+    input.addEventListener("change", () => {      // typing finished (or unfinished) the step: unlock what follows, keep the buyer where they are
+      const before = wasDone.join(); wasDone = doneNow();
+      if (wasDone.join() !== before) setTimeout(() => { const id = document.activeElement && document.activeElement.id; paint(); const el = id && document.getElementById(id); if (el) el.focus({ preventScroll: true }); }, 0);
+    });
     return wrap(name, o.label, input, o.hint, o.wide);
   };
   const chipset = (name, values, label) => h("div", { class: "field wide" }, h("span", { class: "lbl", id: idOf(name) + "-l" }, label),
@@ -359,10 +363,10 @@ PAGES.cost = async () => {
       if (fieldOn(sel, "Weft (yarn dyed)")) f.push(pick("Weft (yarn dyed)", "Weft (yarn dyed)", { label: "Weft: dyed or undyed" }));
       if (fieldOn(sel, "Weft yarn dyeing")) f.push(pick("Weft yarn dyeing", "Yarn shade", { label: "Weft shade" }));
       if (fieldOn(sel, "Piece shade")) f.push(pick("Piece shade", "Piece shade"));
-      if (fieldOn(sel, "Print method")) f.push(pick("Print method", "Print method", sel.Route === "Printed" ? { hint: "Not selected = the printing rate per kg" } : { label: "Print over the cloth", hint: "Leave at Not selected for no print" }));
+      if (fieldOn(sel, "Print method")) f.push(pick("Print method", "Print method", sel.Route === "Printed" ? { hint: "Not selected = the calibrated printing rate per kg. Rotary or Digital uses the mill rate card instead", wide: true } : { label: "Print over the cloth", hint: "Leave at Not selected for no print" }));
       return f.length ? f : [h("p", { class: "sub wide", style: "margin:0" }, "Bleached only: nothing to choose here.")];
     },
-    cons: () => [pick("Weave", "Weave", { blank: "Choose..." }), pick("Pattern", "Pattern"),
+    cons: () => [pick("Weave", "Weave", { blank: "Choose..." }), pick("Pattern", "Pattern", { hint: "No price uplift is set for any pattern yet" }),
       typed("EPI", { label: "Ends per inch (EPI)" }), typed("PPI", { label: "Picks per inch (PPI)" }), typed("Finished width (in)", { label: "Finished width (inch)" }), typed("Reed space (in)", { label: "Reed space (inch)", hint: "Blank = from width" }),
       fieldOn(sel, "Dobby shafts") ? pick("Dobby shafts", "Dobby shafts") : null, fieldOn(sel, "Top beam") ? pick("Top beam", "Top beam") : null],
     finish: () => [pick("Finish", "Finish", { wide: true }), pick("Loom type", "Loom type"), pick("Mill tier", "Mill tier"),
@@ -379,9 +383,11 @@ PAGES.cost = async () => {
     if (!state.openStep || !STEPS.some(st => st.id === state.openStep)) state.openStep = (STEPS.find(st => !st.done(sel)) || {}).id || null;
     flow.replaceChildren(...STEPS.map((st, i) => {
       const title = typeof st.title === "function" ? st.title(sel) : st.title;
-      const mine = reachable, done = mine && st.done(sel), open = mine && state.openStep === st.id;
-      if (mine && !done) reachable = false;
-      const sum = done && !open ? st.sum(sel) : "";
+      const open = reachable && state.openStep === st.id;
+      if (open) state.visited.add(st.id);
+      const mine = reachable, done = mine && st.done(sel) && (!!st.need || state.visited.has(st.id));
+      if (mine && !st.done(sel)) reachable = false;
+      const sum = mine && st.done(sel) && !open ? ((done ? "" : "default: ") + st.sum(sel)).replace(/^default: $/, "") : "";
       const head = [h("span", { class: "step-n", "aria-hidden": "true" }, done ? "\u2713" : String(i + 1)), h("h2", {}, title), sum ? h("span", { class: "step-sum" }, sum) : null, mine ? h("span", { class: "step-caret", html: svg('<path d="m6 9 6 6 6-6"/>', 14) }) : null];
       const next = STEPS[i + 1];
       return h("section", { class: "step" + (mine ? "" : " locked") + (done ? " done" : "") + (open ? " open" : ""), "aria-label": `Step ${i + 1}: ${title}` },
@@ -394,8 +400,8 @@ PAGES.cost = async () => {
   paint(); recalc();
 
   const actions = h("div", { class: "row-actions", style: "margin:0 0 12px" },
-    h("button", { class: "btn", type: "button", onclick: () => { state.sel = blankSel(); state.openStep = null; route(); } }, "New fabric"),
-    h("button", { class: "btn", type: "button", onclick: () => { state.sel = exampleSel(); state.openStep = null; route(); } }, "Load the example"));
+    h("button", { class: "btn", type: "button", onclick: () => { state.sel = blankSel(); state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
+    h("button", { class: "btn", type: "button", onclick: () => { state.sel = exampleSel(); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
   // the two panes take exactly the height left on the screen, so the page itself does not scroll
   const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
   const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
@@ -436,7 +442,7 @@ function costView(res, sel) {
     const fn = { bars: barsChart, waterfall, pie: pieChart, treemap: treemapChart, line: buildLine }[state.chart];
     box.replaceChildren(fn(res));
     if (negative && (state.chart === "pie" || state.chart === "treemap")) box.append(h("p", { class: "sub", style: "margin:10px 0 0" }, "A discount cannot be drawn as an area, so it is left out of this view. The bars and the waterfall show it."));
-    note.textContent = CHART_NOTE[state.chart];
+    note.textContent = state.chart === "pie" && state.wfMode === "all" ? "Each sub-cost's share of the price; sub-costs of one group share its colour." : CHART_NOTE[state.chart];
   };
   const seg = (items, key, label) => { const g = h("div", { class: "seg", role: "group", "aria-label": label }); for (const [v, text] of items) g.append(h("button", { type: "button", "aria-pressed": String(state[key] === v), onclick: () => { state[key] = v; state.wfOpen.clear(); [...g.children].forEach(b => b.setAttribute("aria-pressed", String(b.textContent === text))); draw(); } }, text)); return g; };
   const zero = h("input", { type: "checkbox", id: "zero" }); zero.checked = state.showZero;
@@ -478,7 +484,9 @@ const itemTip = (it, total) => () => `<b>${it.name}</b>${it.group !== it.name ? 
 /* Bars: one bar per group from zero, with its name, share and rupees beside it. A group opens
    into its sub-costs on a click; 'All sub-costs' opens every group. */
 function barsChart(res) {
-  const total = res.total_per_m, top = Math.max(...res.buckets.map(b => Math.abs(b.amount)), 0.01);
+  const total = res.total_per_m;
+  // with a quote on the chart, every bar shares the scale of the quote and the should-cost
+  const top = res.quote !== null ? Math.max(total, res.quote) : Math.max(...res.buckets.map(b => Math.abs(b.amount)), 0.01);
   const box = h("div", { class: "bars", role: "list" });
   const row = (name, amount, color, cls, tipFn, button) => {
     const bar = h("div", { class: "bar" + (amount < 0 ? " neg" : ""), style: `width:${Math.max(0.6, Math.abs(amount) / top * 62)}%;background-color:var(${color})` });
@@ -495,7 +503,7 @@ function barsChart(res) {
   });
   if (res.quote !== null) {
     box.append(h("div", { class: "wf-sep", role: "presentation" }));
-    const top2 = Math.max(total, res.quote);
+    const top2 = top;
     for (const [name, v, cls] of [["Should-cost", total, "totalbar"], ["Supplier's quote", res.quote, "quotebar"]])
       box.append(h("div", { class: "bar-row grp" }, h("div", { class: "bar " + cls, style: `width:${v / top2 * 62}%` }), h("span", { class: "bar-text" }, h("span", { class: "bar-name" }, name), h("span", { class: "bar-amt num" }, `${rs(v)} / m`))));
   }
@@ -538,13 +546,14 @@ function treemapChart(res) {
   const place = (el, r, bw, bh) => { el.style.cssText += `left:${r.x / bw * 100}%;top:${r.y / bh * 100}%;width:${r.w / bw * 100}%;height:${r.h / bh * 100}%;`; return el; };
   for (const g of splitRects(groups, 0, 0, W, H)) {
     const cell = place(h("div", { class: "tm-group", role: "listitem", tabindex: "0", style: `background-color:var(${g.color});` }), g, W, H);
-    const label = h("div", { class: "tm-label" }, h("b", {}, g.b.name), h("span", { class: "num" }, `${fmt(g.b.amount)} · ${pct(g.b.pct, 0)}`));
+    const fits = (r, bw, bh) => r.w / bw * (g.w / W) > 0.085 && r.h / bh * (g.h / H) > 0.11;      // room for a label, as a share of the whole chart
+    const label = h("div", { class: "tm-label" }, h("b", {}, g.b.name), h("span", { class: "num" }, `${fmt(g.b.amount)} \u00B7 ${pct(g.b.pct, 0)}`));
     if (state.wfMode === "groups") { cell.append(label); withTip(cell, () => `<b>${g.b.name}</b>${rs(g.b.amount)} per metre · ${pct(g.b.pct)} of the price`); }
     else {
       const inner = h("div", { class: "tm-inner" });
       const kids = g.b.lines.filter(l => l.amount > 0.005).map(l => ({ l, v: l.amount })).sort((p, q) => q.v - p.v);
       for (const k of splitRects(kids, 0, 0, g.w, g.h)) {
-        const kid = place(h("div", { class: "tm-kid", tabindex: "0" }, h("div", { class: "tm-label" }, h("b", {}, k.l.name), h("span", { class: "num" }, fmt(k.l.amount)))), k, g.w, g.h);
+        const kid = place(h("div", { class: "tm-kid", tabindex: "0", "aria-label": `${k.l.name}, ${fmt(k.l.amount)} rupees per metre` }, fits(k, g.w, g.h) ? h("div", { class: "tm-label" }, h("b", {}, k.l.name), h("span", { class: "num" }, fmt(k.l.amount))) : null), k, g.w, g.h);
         withTip(kid, itemTip({ name: k.l.name, group: g.b.name, amount: k.l.amount, basis: k.l.basis }, total)); inner.append(kid);
       }
       cell.removeAttribute("tabindex"); cell.append(inner);
@@ -556,7 +565,7 @@ function treemapChart(res) {
 
 function buildLine(res) {
   const items = chartItems(res, false), total = res.total_per_m;
-  const W = 900, H = 340, m = { l: 56, r: 20, t: 16, b: state.wfMode === "all" ? 120 : 84 };
+  const narrow = innerWidth < 700, W = narrow ? 430 : 760, H = narrow ? 380 : 360, m = { l: 46, r: 16, t: 20, b: state.wfMode === "all" ? 130 : 100 };
   let run = 0; const pts = items.map(it => { run += it.amount; return { it, y: run }; });
   const top = Math.max(...pts.map(p => p.y), total, 1), n = pts.length;
   const X = i => m.l + (n === 1 ? 0.5 : i / (n - 1)) * (W - m.l - m.r), Y = v => m.t + (1 - v / top) * (H - m.t - m.b);
@@ -568,7 +577,7 @@ function buildLine(res) {
   pts.forEach((p, i) => {
     const c = document.createElementNS(ns, "circle"); c.setAttribute("cx", X(i)); c.setAttribute("cy", Y(p.y)); c.setAttribute("r", 6); c.setAttribute("class", "pt"); c.style.fill = `var(${p.it.color})`; c.setAttribute("tabindex", "0");
     withTip(c, () => `<b>${p.it.name}</b>+${fmt(p.it.amount)} → running total ${rs(p.y)}`); s.append(c);
-    const t = document.createElementNS(ns, "text"); t.setAttribute("class", "axis-text"); t.setAttribute("text-anchor", "end"); t.setAttribute("transform", `translate(${X(i) + 4} ${H - m.b + 16}) rotate(-40)`); t.textContent = p.it.name.length > 24 ? p.it.name.slice(0, 23) + "…" : p.it.name; s.append(t);
+    const t = document.createElementNS(ns, "text"); t.setAttribute("class", "axis-text"); t.setAttribute("text-anchor", "end"); t.setAttribute("transform", `translate(${X(i) + 4} ${H - m.b + 16}) rotate(-50)`); const cut = narrow ? 15 : 22; t.textContent = p.it.name.length > cut ? p.it.name.slice(0, cut - 1) + "\u2026" : p.it.name; if (!(narrow && n > 12 && i % 2)) s.append(t);
   });
   const end = document.createElementNS(ns, "text"); end.setAttribute("class", "pie-small"); end.setAttribute("x", X(n - 1)); end.setAttribute("y", Y(pts[n - 1].y) - 12); end.setAttribute("text-anchor", "end"); end.textContent = `Rs ${fmt(total)} / m`; s.append(end);
   return el;
@@ -646,7 +655,7 @@ PAGES.bulk = async () => {
         dataTable(b.results, { filter: true, label: "Bulk results", onRow: r => {
           if (r[cols.indexOf("Error")]) return toast("This row was rejected: " + r[cols.indexOf("Error")]);
           const i = b.results.rows.indexOf(r);
-          state.sel = selFromRow(b.inputs[i]); state.openStep = null;
+          state.sel = selFromRow(b.inputs[i]); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id));
           location.hash = "#cost";
         } })));
   };
