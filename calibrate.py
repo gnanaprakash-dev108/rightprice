@@ -2,22 +2,26 @@
 
 Two thirds of the costed fabrics (chosen by a fixed rule on the fabric code) are
 used to work out proposals; the other third is held back to test them.
+The fabrics carry the mill rate card inputs that pilot.py reads from PLM and the purchase orders.
 Order of work:
-  1. order-size premium, from yarn-dyed and piece-dyed fabrics
+  1. order-size premium, from yarn-dyed and piece-dyed fabrics. The rate card quantity bands stay
+     switched on, so what is proposed is only what the card leaves unexplained: slabs to be ADDED
+     to the bands, not the present slabs that take their place.
   2. weaving rate per route and weave group (the rate that closes the median gap)
-  3. one printing rate, with weaving held at the piece-dyed rate for the same weave
+  3. one printing rate per kg, with weaving held at the piece-dyed rate for the same weave. No
+     print method is set (PLM does not hold it), so prints are costed on that rate.
 The rate master on disk is only read. Output: pilot/Proposed_Rate_Changes.xlsx
 Run: python calibrate.py
 """
 import os
 import warnings
-import zlib
 
 import pandas as pd
 
 import engine
 import masters
 import pilot
+import rate_card
 
 warnings.filterwarnings("ignore")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +51,10 @@ def evaluate(m, inp):
             continue
         price = sel["Quoted price (Rs/m)"]
         mult = (1 + i["process_wastage"] + i["overhead"]) * (1 + i["margin"]) / (1 - i["shrinkage"])
-        delta = (price - i["extra_per_m"]) / mult - res["base"]      # Rs/m missing from the base cost
+        # undo the quantity terms, then the rate card rupees per metre, then the mark-up
+        before_qty = (price + i.get("volume_discount_per_m", 0.0)) / (1 + i.get("small_lot_pct", 0.0))
+        upcharges = before_qty - (price - res["total_per_m"]) / (1 + i.get("small_lot_pct", 0.0)) - res["marked_up"]
+        delta = (before_qty - i["extra_per_m"] - upcharges) / mult - res["base"]   # Rs/m missing from the base cost
         rows.append({"Fabric code": sel["Fabric code"], "Supplier": sel["Supplier"], "Route": sel["Route"],
                      "Weave group": wg[sel["Weave"]], "Warp yarn": sel["Warp yarn"],
                      "Order size": sel["Order size"], "PO metres": sel["PO metres"],
@@ -56,7 +63,7 @@ def evaluate(m, inp):
                      "Weaving rate": i["weaving_rate"], "Implied weaving rate": i["weaving_rate"] + delta / i["ppi"],
                      "Implied yarn dyeing": i["warp_dye"] + delta / res["greige_kg"],
                      "Implied piece dye or print": i["piece_dye_rate"] + delta / res["greige_kg"],
-                     "Train": zlib.crc32(str(sel["Fabric code"]).encode()) % 3 != 0})
+                     "Train": not pilot.held_back(sel["Fabric code"])})
     return pd.DataFrame(rows)
 
 
@@ -71,9 +78,15 @@ def main():
     m0, inp, _, _ = pilot.build_inputs()
     inp = inp.copy()
     inp["Order size"] = inp["PO metres"].map(slab_of)
+    current = evaluate(m0, inp)             # the tool as it stands: a quantity band replaces the slab
+    slab_now = m0["Order_Slab"].set_index("Order size")["Overhead add (points)"]
     m0 = dict(m0)
     m0["Order_Slab"] = pd.DataFrame([(s[0], 0.0, "Not set") for s in SLABS],
                                     columns=["Order size", "Overhead add (points)", "Basis"])
+    st = m0["Settings"].copy()              # slabs added to the rate card quantity bands, starting from zero
+    st["Value"] = st["Value"].astype(object)
+    st.loc[st["Setting"] == rate_card.QTY_SETTING, "Value"] = "Added"
+    m0["Settings"] = st
     base = evaluate(m0, inp)
     train0 = base[base["Train"]]
 
@@ -94,7 +107,10 @@ def main():
         slab_tbl.loc[slab_tbl["Order size"] == name, ["Overhead add (points)", "Basis"]] = [pts, "Pilot proposal"]
         slab_rows.append({"Order size": name, "Training fabrics": len(e),
                           "Median gap above large orders %": round(e.median() * 100, 1) if len(e) else None,
-                          "Current overhead add (points)": 0.0, "Proposed overhead add (points)": pts})
+                          "Current overhead add (points)": float(slab_now.get(name, 0.0)),
+                          "Current slab is used": "Only where no rate card quantity band is set",
+                          "Proposed overhead add (points)": pts,
+                          "Proposed slab is used": "Added to the rate card quantity band"})
     m1["Order_Slab"] = slab_tbl
 
     # ---- 2. weaving rate per route and weave group
@@ -163,19 +179,20 @@ def main():
     # ---- 4. test on the held-back third
     d3 = evaluate(m3, inp)
     test_rows = []
-    for label, before, after in [("All held-back fabrics", base[~base["Train"]], d3[~d3["Train"]]),
-                                 ("Training fabrics (for comparison)", base[base["Train"]], d3[d3["Train"]])]:
+    for label, before, after in [("All held-back fabrics", current[~current["Train"]], d3[~d3["Train"]]),
+                                 ("Training fabrics (for comparison)", current[current["Train"]], d3[d3["Train"]])]:
         test_rows.append({"Set": label, "Rates": "Current", **fit(before)})
         test_rows.append({"Set": label, "Rates": "Proposed", **fit(after)})
     by_cell = []
-    b, a = base[~base["Train"]], d3[~d3["Train"]]
+    b, a = current[~current["Train"]], d3[~d3["Train"]]
     for key, cb in b.groupby(["Route", "Weave group"]):
         ca = a[(a["Route"] == key[0]) & (a["Weave group"] == key[1])]
         if len(cb) >= 8:
             fb, fa = fit(cb), fit(ca)
             by_cell.append({"Route": key[0], "Weave group": key[1], "Held-back fabrics": len(cb),
                             "Median gap % current": fb["Median gap %"], "Median gap % proposed": fa["Median gap %"],
-                            "Within 10% current": fb["Within 10%"], "Within 10% proposed": fa["Within 10%"]})
+                            "Within 10% current": fb["Within 10%"], "Within 10% proposed": fa["Within 10%"],
+                            "Within 20% current": fb["Within 20%"], "Within 20% proposed": fa["Within 20%"]})
     by_cell = pd.DataFrame(by_cell).sort_values("Held-back fabrics", ascending=False)
 
     # ---- diagnostics that point away from process rates
@@ -188,7 +205,7 @@ def main():
     yarn = yarn[yarn["Training fabrics"] >= 10].sort_values("Training fabrics", ascending=False).reset_index()
     sup = d3.groupby("Supplier").agg(**{"Fabrics": ("Gap", "size"), "PO metres": ("PO metres", "sum"),
                                         "Median gap % current rates": ("Gap", lambda s: 0.0)})
-    sup["Median gap % current rates"] = base.groupby("Supplier")["Gap"].median().mul(100).round(1)
+    sup["Median gap % current rates"] = current.groupby("Supplier")["Gap"].median().mul(100).round(1)
     sup["Median gap % proposed rates"] = d3.groupby("Supplier")["Gap"].median().mul(100).round(1)
     sup = sup[sup["Fabrics"] >= 10].sort_values("Fabrics", ascending=False).reset_index()
 
@@ -202,6 +219,13 @@ def main():
         "A weaving proposal is made only with 20 or more training fabrics, a median gap outside 3%, and a result "
         f"between Rs {WEAVE_BAND[0]:.2f} and Rs {WEAVE_BAND[1]:.2f} per pick.",
         "Yarn dyeing (Rs 150/kg) and piece dyeing (Rs 160/kg) were held at the V1 workbook values.",
+        "Mill rate card inputs are on, as pilot.py sets them: finishes and quantity bands from the data, weft dyed "
+        "unless PLM shows otherwise, no print method, no dobby shaft or top beam charge.",
+        "'Current' in the held-back test is the tool as it stands: a rate card quantity band takes the place of "
+        "the order size slab. 'Proposed' adds the slabs on the 'Order size' sheet to the bands (Settings: "
+        f"'{rate_card.QTY_SETTING}' = Added) and uses the weaving proposals.",
+        "The order size slabs proposed here are only right together with that setting. apply_proposals.py sets both.",
+        "No print method is set, so prints are costed on the printing rate per kg, as before the rate card.",
         "Sheets: Order size, Weaving, Printing, Held-back test, Held-back by cell, By yarn, By supplier.",
     ]})
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

@@ -32,7 +32,7 @@ survives redeploys.
 | Bulk upload | Excel template with the same drop-downs; costs every row and rejects values not on a list |
 | Yarn prices | Yarn master (editable), market reference, and price intake from Excel, PDF, image, web link or API |
 | Cotton prices | Shankar-6 history and chart |
-| Rate tables | Weaving, sizing, dyeing, finishing, defaults, weave list, content groups |
+| Rate tables | Weaving, sizing, dyeing, finishing, print method, dobby, weft, rate card quantity, defaults, weave list, content groups |
 | Settings | Shrinkage, reed space factor, mill tiers, order size slabs |
 
 ## The calculation
@@ -44,10 +44,18 @@ warp kg/m = EPI x finished width x K x (1 + warp crimp) x (1 + warp wastage) / w
 weft kg/m = PPI x reed space x K x (1 + weft wastage) / weft Ne
 base      = yarn + yarn dyeing + sizing + weaving + finishing + piece dyeing
 price     = base / (1 - shrinkage) x (1 + process wastage + overhead) x (1 + margin) + extra
+price     = (price + rate card upcharges in Rs/m) x (1 + small-lot upcharge) - volume discount
 ```
 
+The second price line is the mill rate card ([docs/Mill_Rate_Card.md](docs/Mill_Rate_Card.md)): print
+method, dobby shafts, top beam, chambray dyed weft and finish upcharges in Rs per metre, then the
+quantity terms. Every one is optional and zero by default, so the V1 arithmetic is untouched. They
+are charged on the price and are not marked up. A rate card quantity band takes the place of the
+order size slab, so quantity is never charged twice.
+
 K = 0.00059, shrinkage = 4%. `python check_engine.py` confirms the engine reproduces the seven
-qualities in the V1 workbook to the paisa; run it after any change to `engine.py` or `masters.py`.
+qualities in the V1 workbook to the paisa and that each rate card item adds what the card says; run
+it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 
 ## Files
 
@@ -60,6 +68,7 @@ qualities in the V1 workbook to the paisa; run it after any change to `engine.py
 | `price_import.py` | Yarn price intake from Excel, PDF, image, link or API |
 | `paths.py` | Finds the source workbooks (`inputs/`, or the env variable `SHOULD_COST_INPUTS`) |
 | `check_engine.py` | Regression check against the V1 workbook |
+| `rate_card.py` | The mill rate card tables. `python rate_card.py` adds them to the rate master after saving a dated backup; safe to run twice |
 | `build_masters.py` | Creates a starting rate master. **`--force` overwrites `data/Rate_Master.xlsx` and loses the calibration; do not use it on a calibrated master.** |
 | `plm_extract.py` | Streams the PLM fabric list and writes specs for purchase-order codes |
 | `refresh_groups.py` | Adds content groups and PLM weave types to the rate master |
@@ -86,5 +95,5 @@ See [docs/INPUT_FILES.md](docs/INPUT_FILES.md) for what each source file is and 
 ## Rates and their basis
 
 Every rate carries a Basis: `V1 workbook`, `Pilot calibration <date>`, `Pilot-checked`,
-`Market circular`, `Placeholder` (a starting guess with no data behind it) or `Not set`.
+`Market circular`, `Mill rate card <date>`, `Placeholder` (a starting guess with no data behind it) or `Not set`.
 The app warns whenever a costing uses a placeholder.

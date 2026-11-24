@@ -10,6 +10,7 @@ import shutil
 import pandas as pd
 
 import masters
+import rate_card
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROPOSALS = os.path.join(HERE, "pilot", "Proposed_Rate_Changes.xlsx")
@@ -31,6 +32,12 @@ def main():
                                     "Basis": BASIS})
     for _, r in slabs.iterrows():
         log.append(f"Order size {r['Order size']}: overhead add {r['Proposed overhead add (points)']:g} points")
+    if "Proposed slab is used" in slabs.columns:      # drafted with the rate card quantity bands switched on
+        st = m["Settings"].copy()
+        st["Value"] = st["Value"].astype(object)
+        st.loc[st["Setting"] == rate_card.QTY_SETTING, "Value"] = "Added"
+        m["Settings"] = st
+        log.append(f"Settings: '{rate_card.QTY_SETTING}' = Added, because these slabs are what the bands leave over")
 
     wr = m["Weaving_Rates"].copy()
     for _, r in p["Weaving"].iterrows():
