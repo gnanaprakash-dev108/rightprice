@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RightPrice - fabric should-cost</title>
+<meta name="description" content="What a woven fabric should cost ex-mill, in rupees per metre and per kg.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2310b981'/%3E%3Cpath d='M9 22V10h7a4 4 0 0 1 0 8h-4m4 0 4 4' fill='none' stroke='%23fff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script>
+  // set the theme before first paint so the page does not flash
+  (function () {
+    var t = null; try { t = localStorage.getItem("rp-theme"); } catch (e) {}
+    if (!t) t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+  <aside class="side" id="side" aria-label="Pages">
+    <a class="brand" href="#dashboard">
+      <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18V6h6a3.5 3.5 0 0 1 0 7H8m4 0 4 5"/></svg></span>
+      <span><b>RightPrice</b><small>Fabric should-cost</small></span>
+    </a>
+    <nav id="nav"></nav>
+    <p class="side-foot">Ex-mill &middot; woven &middot; 100% cotton</p>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <div class="content">
+    <header class="top">
+      <button class="icon-btn menu" id="menu" aria-label="Open the page list" aria-expanded="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <div class="search">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="Search a yarn, saved costing, rate table or page..." autocomplete="off" aria-label="Search" aria-controls="search-results" aria-expanded="false" role="combobox">
+        <div class="search-results" id="search-results" role="listbox" hidden></div>
+      </div>
+      <div class="top-right">
+        <span class="pill" id="today"></span>
+        <a class="pill link" href="/classic/" title="The earlier screens: edit rates, bring in yarn prices">Edit rates</a>
+        <button class="icon-btn" id="theme" aria-label="Switch between light and dark"></button>
+      </div>
+    </header>
+    <main id="main" tabindex="-1"></main>
+  </div>
+</div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
