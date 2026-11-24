@@ -336,6 +336,20 @@ a purchase price.
   screen from its own icon. It still needs the internet and the sign-in; nothing is kept offline.
 - After a deploy the browser now fetches the new screens by itself; no hard refresh.
 
+**Four additions asked for on 24 Nov 2026 (night):**
+
+- **Count systems.** In the yarn step a count can be typed in Ne, Nm, tex, denier, linen lea or
+  worsted count. It changes the weight of yarn in the cloth; the rate per kg stays the yarn's. The
+  bulk template has the same three columns. This is a typed input beyond EPI, PPI, width and reed
+  space, added on request.
+- **Compare**, a page of its own under Costing: two saved costings (or the fabric open on Cost a
+  fabric) side by side on today's rates, with every group and sub-cost, the difference, a sentence
+  naming the three largest differences, and the choices that differ.
+- **What has moved.** A saved costing keeps its cost and the rates it used. Opened again, it shows
+  what it cost then, what it costs now, and each rate that changed.
+- **Print.** A Print button lays the result out for paper or PDF: light colours, inputs and menus
+  left off, every table opened, dated.
+
 **Read but not built: `inputs/Fabric Costing_Final.xlsx`** (the earlier prototype, sent again on
 24 Nov). Its rates are placeholders (most cells are 1 or 10), so only its logic is of use. What it
 has that RightPrice does not:
@@ -343,7 +357,7 @@ has that RightPrice does not:
 | In the workbook | In RightPrice today | Worth building? |
 |---|---|---|
 | Yarn price from a fibre blend (% of each fibre x fibre price) plus spinning stages | Yarn rate looked up per yarn | Only if fibre prices are tracked; a bought-yarn rate is firmer |
-| Count systems: Ne, Nm, Tex, Denier, Worsted, Lea | Ne only on screen (the engine converts Nm, Tex, Denier) | Yes, small: a count-system choice for linen (lea) and filament (denier) |
+| Count systems: Ne, Nm, Tex, Denier, Worsted, Lea | Built 24 Nov: all six can be typed | Done |
 | Weaving cost from the loom: speed x weave speed factor x efficiency, against loom cost per hour | A rate per pick by weave and route, calibrated on purchase orders | As a cross-check beside the calibrated rate, once real loom costs per hour are known |
 | Shaft count as a multiplier on weaving | Rate card shaft charge in Rs per metre | Already covered |
 | Sizing as pick-up % x size cost per kg | A rate per kg of warp | Same result; no change needed |

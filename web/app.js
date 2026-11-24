@@ -67,6 +67,7 @@ const ICON = {
   dashboard: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>',
   cost: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h2M13 12h2M9 16h2M13 16h2"/>',
   bulk: '<path d="M12 16V4m0 0-4 4m4-4 4 4M5 20h14"/>',
+  compare: '<path d="M9 4v16M15 4v16M4 8h5M4 16h5M15 8h5M15 16h5"/>',
   intake: '<path d="M12 4v12m0 0-4-4m4 4 4-4M5 20h14"/>',
   yarn: '<path d="M4 17l5-5 4 4 7-8M15 8h5v5"/>',
   cotton: '<circle cx="12" cy="9" r="4"/><circle cx="8" cy="14" r="3.5"/><circle cx="16" cy="14" r="3.5"/><path d="M12 17v4"/>',
@@ -76,7 +77,7 @@ const ICON = {
   pilot: '<path d="M5 20V10M10 20V4M15 20v-8M20 20v-5"/>',
 };
 const NAV = [
-  ["Costing", [["dashboard", "Dashboard"], ["cost", "Cost a fabric"], ["bulk", "Bulk upload"]]],
+  ["Costing", [["dashboard", "Dashboard"], ["cost", "Cost a fabric"], ["compare", "Compare"], ["bulk", "Bulk upload"]]],
   ["Prices", [["yarn", "Yarn prices"], ["cotton", "Cotton prices"], ["intake", "Bring in prices"]]],
   ["Rates", [["rates", "Rate tables"], ["ratecard", "Mill rate card"], ["settings", "Settings"]]],
   ["Analysis", [["pilot", "Pilot results"]]],
@@ -239,7 +240,7 @@ PAGES.dashboard = async () => {
   const cols = d.saved.columns, ix = n => cols.indexOf(n);
   const savedCards = d.saved.rows.slice(0, 12).map((r, n) => {
     const gap = r[ix("Gap %")], item = (d.saved_items || [])[n] || {};
-    const open = item.inputs ? h("button", { class: "btn small", type: "button", onclick: () => { state.sel = selFromRow(item.inputs); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); location.hash = "#cost"; } }, "Open") : null;
+    const open = item.inputs ? h("button", { class: "btn small", type: "button", onclick: () => { state.sel = selFromRow(item.inputs); state.reopened = item.then ? { then: item.then, on: item.saved_on } : null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); location.hash = "#cost"; } }, "Open") : null;
     const del = item.id ? h("button", { class: "btn small", type: "button", onclick: async e => {
       if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Delete: sure?"; setTimeout(() => { if (e.target.isConnected) { e.target.dataset.sure = ""; e.target.textContent = "Delete"; } }, 4000); return; }
       try { await api("/api/saved/" + item.id, { method: "DELETE" }); state.dash = null; toast("Saved costing deleted"); route(); } catch (err) { toast(err.message); }
@@ -331,6 +332,7 @@ PAGES.cost = async () => {
     return false;
   };
   const set = (name, value, repaint = true) => {
+    state.reopened = null;                  // once a choice changes, it is no longer the costing that was saved
     const before = doneNow();
     sel[name] = value;
     if (name === "Content") { let cleared = false; for (const y of ["Warp yarn", "Weft yarn"]) if (sel[y] && contentOfYarn(sel[y]) !== value) { sel[y] = ""; cleared = true; } if (cleared) toast(`Yarn cleared: choose a ${value.toLowerCase()} yarn in step 3`); }
@@ -376,7 +378,11 @@ PAGES.cost = async () => {
     fabric: () => [chipset("Content", M.contents, "Fabric content"),
       sel.Content && sel.Content !== M.contents[0] ? h("div", { class: "notice wide", style: "margin:0" }, "Yarn rates for this content are placeholders, and the weaving, dyeing and finishing rates were measured on 100% cotton. Treat the cost as provisional.") : null],
     route: () => [chipset("Route", L.Route, "Route")],
-    yarn: () => { const opts = yarnOptions(); return opts.length ? [pick("Warp yarn", null, { options: opts, blank: "Choose...", wide: true }), pick("Weft yarn", null, { options: opts, blank: "Choose...", wide: true })] : [h("div", { class: "notice wide", style: "margin:0" }, "No yarn of this content is in the yarn master yet. Add one under Yarn prices.")]; },
+    yarn: () => { const opts = yarnOptions(); return opts.length ? [pick("Warp yarn", null, { options: opts, blank: "Choose...", wide: true }), pick("Weft yarn", null, { options: opts, blank: "Choose...", wide: true }),
+      h("details", { class: "wide more", open: state.countOpen || !blank(sel["Warp count"]) || !blank(sel["Weft count"]) || null, ontoggle: e => { state.countOpen = e.target.open; } }, h("summary", {}, "Type a different count (optional)"),
+        h("div", { class: "fields", style: "margin-top:10px" }, pick("Count system", "Count system", { wide: true, hint: "Ne for cotton, lea for linen, denier for filament" }),
+          typed("Warp count", { hint: "Blank = the yarn's own" }), typed("Weft count", { hint: "Blank = the yarn's own" }),
+          h("p", { class: "sub wide", style: "margin:0;font-size:12px" }, "A typed count changes the weight of yarn in the cloth. The rate per kg stays that of the yarn chosen above.")))] : [h("div", { class: "notice wide", style: "margin:0" }, "No yarn of this content is in the yarn master yet. Add one under Yarn prices.")]; },
     dye: () => {
       const f = [];
       if (fieldOn(sel, "Warp yarn dyeing")) f.push(pick("Warp yarn dyeing", "Yarn shade", { label: "Warp shade" }));
@@ -420,8 +426,8 @@ PAGES.cost = async () => {
   paint(); recalc();
 
   const actions = h("div", { class: "row-actions", style: "margin:0" },
-    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
-    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.reopened = null; state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.reopened = null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
   // the two panes take exactly the height left on the screen, so the page itself does not scroll
   const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
   const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
@@ -429,6 +435,25 @@ PAGES.cost = async () => {
   split.firstChild.prepend(h("div", { class: "pane-head" }, h("h1", {}, "Cost a fabric"), actions));
   return [h("p", { class: "sub cost-intro" }, "Work down the steps on the left; each choice decides what the next step asks. The cost on the right updates as you go."), split];
 };
+
+/* A saved costing opened again is costed on today's rates. Say what it cost then, what it costs now,
+   and which rates behind it have changed. */
+function movedCard(res, re) {
+  const then = re.then, diff = res.total_per_m - then.total_per_m, same = Math.abs(diff) < 0.005;
+  const was = Object.fromEntries((then.rates || []).map(u => [u.Item, u]));
+  const show = u => `${typeof u.Value === "number" ? fmt(u.Value, Math.abs(u.Value) < 10 ? 3 : 2).replace(/\.?0+$/, "") : u.Value}${u.Unit ? " " + u.Unit : ""}`;
+  const rates = res.rates_used.filter(u => was[u.Item] && (String(was[u.Item].Value) !== String(u.Value) || String(was[u.Item].Choice) !== String(u.Choice)))
+    .map(u => h("tr", {}, h("td", {}, u.Item), h("td", {}, show(was[u.Item])), h("td", {}, show(u)), h("td", { class: "wrap" }, String(was[u.Item].Choice) !== String(u.Choice) ? `${was[u.Item].Choice} \u2192 ${u.Choice}` : String(u.Choice))));
+  const groupWas = Object.fromEntries(then.buckets.map(b => [b.name, b.amount]));
+  const groups = res.buckets.filter(b => Math.abs(b.amount - (groupWas[b.name] ?? 0)) >= 0.005)
+    .map(b => h("tr", {}, h("td", {}, b.name), h("td", { class: "n" }, fmt(groupWas[b.name] ?? 0)), h("td", { class: "n" }, fmt(b.amount)), h("td", { class: "n" }, (b.amount >= (groupWas[b.name] ?? 0) ? "+" : "") + fmt(b.amount - (groupWas[b.name] ?? 0)))));
+  return h("div", { class: "card moved" },
+    h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, `Since it was saved on ${day(re.on)}`),
+      h("span", { class: "tag " + (same ? "flat" : diff > 0 ? "down" : "up") }, same ? "no change" : `${diff > 0 ? "\u25B2" : "\u25BC"} ${rs(Math.abs(diff))} (${pct(Math.abs(diff) / then.total_per_m)}) ${diff > 0 ? "dearer" : "cheaper"}`)),
+    h("p", { class: "sub", style: "margin:0 0 10px" }, same ? `It cost ${rs(then.total_per_m)} per metre then and costs the same on today's rates.` : `It cost ${rs(then.total_per_m)} per metre then and costs ${rs(res.total_per_m)} on today's rates.`),
+    rates.length ? h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Rate that changed"), h("th", {}, "Then"), h("th", {}, "Now"), h("th", {}, "Choice"))), h("tbody", {}, rates))) : (same ? null : h("p", { class: "sub", style: "margin:0" }, "No single rate in the list differs; a table behind the costing (for example crimp, wastage or a setting) has changed.")),
+    groups.length ? h("details", { style: "margin-top:10px" }, h("summary", { style: "cursor:pointer;color:var(--muted)" }, "By cost group, Rs per metre"), h("div", { class: "table-wrap tall", style: "margin-top:8px" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Group"), h("th", { class: "n" }, "Then"), h("th", { class: "n" }, "Now"), h("th", { class: "n" }, "Change"))), h("tbody", {}, groups)))) : null);
+}
 
 function waiting(sel) {
   const todo = STEPS.filter(st => st.need);
@@ -451,7 +476,8 @@ function costView(res, sel) {
       h("div", {}, h("div", { class: "lbl" }, title ? title + " · " : "", "ex-mill should-cost"), h("div", { class: "big num" }, `${rs(res.total_per_m)} / m`)),
       h("div", { class: "row-actions", style: "margin:0" },
         h("button", { class: "btn primary", onclick: async e => { e.target.disabled = true; try { await postJSON("/api/save", payload(sel)); state.dash = null; toast("Saved to the dashboard"); } catch (err) { toast("Not saved: " + err.message); } e.target.disabled = false; } }, "Save to dashboard"),
-        h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet"))),
+        h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet"),
+        h("button", { class: "btn", onclick: printSheet }, "Print"))),
     h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${sel["Warp yarn"]} × ${sel["Weft yarn"]}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
     h("div", { class: "facts num" }, h("span", {}, `${rs(res.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(res.gsm, 0)} g/m²`), h("span", {}, `${fmt(res.finished_g_per_m, 0)} g per running metre`)),
     quote);
@@ -492,8 +518,24 @@ function costView(res, sel) {
   const used = { columns: ["Item", "Choice", "Value", "Unit", "Basis"], rows: res.rates_used.map(u => [u.Item, u.Choice, u.Value, u.Unit, u.Basis]) };
   const ratesView = h("details", { class: "card" }, h("summary", {}, "Rates used and where each came from"), dataTable(used, { label: "Rates used" }));
   const odd = (res.warnings || []).length ? h("div", { class: "notice err", role: "alert" }, h("b", {}, "Check what was typed. "), res.warnings.join(" ")) : null;
+  const moved = state.reopened ? movedCard(res, state.reopened) : null;
+  const chosen = Object.entries(payload(sel)).filter(([k]) => !["Fabric code", "Description", "Supplier"].includes(k));
+  const choices = h("details", { class: "card" }, h("summary", {}, "Choices behind this cost"), dataTable({ columns: ["Choice", "Value"], rows: chosen.map(([k, v]) => [k, String(v)]) }, { label: "Choices behind this cost" }));
   const warn = res.placeholders.length ? h("div", { class: "notice", role: "status" }, h("b", {}, "Provisional. "), "Placeholder rates were used for: " + res.placeholders.join(", ") + ". These are starting guesses with no data behind them.") : null;
-  return [hero, odd, warn, chart, tableView, ratesView].filter(Boolean);
+  return [hero, odd, moved, warn, chart, tableView, choices, ratesView].filter(Boolean);
+}
+
+/* Print the cost on paper or to PDF: the result pane only, in light colours, with every table opened. */
+function printSheet() {
+  const root = document.documentElement, theme = root.dataset.theme;
+  const closed = [...document.querySelectorAll(".cost-out details:not([open])")];
+  closed.forEach(d => { d.open = true; });
+  root.dataset.theme = "light"; document.body.classList.add("printing");
+  const stamp = h("p", { class: "print-stamp" }, `RightPrice ex-mill should-cost \u00B7 printed ${day(new Date())} \u00B7 on the rates in the rate master that day`);
+  $(".cost-out").prepend(stamp);
+  const done = () => { root.dataset.theme = theme; document.body.classList.remove("printing"); closed.forEach(d => { d.open = false; }); stamp.remove(); removeEventListener("afterprint", done); };
+  addEventListener("afterprint", done);
+  setTimeout(() => print(), 60);
 }
 
 // the steps a chart draws: groups, or every sub-cost, each with its group's colour
@@ -669,6 +711,61 @@ function waterfall(res) {
   }
   box.append(h("div", { class: "wf-axis", "aria-hidden": "true" }, h("span", {}, "Rs 0"), h("span", { class: "mid" }, `Rs ${fmt(peak / 2, 0)}`), h("span", {}, `Rs ${fmt(peak, 0)}/m`)));
   return box;
+}
+
+// ------------------------------------------------------------------ compare two costings
+PAGES.compare = async () => {
+  const d = state.dash = await getJSON("/api/dashboard");
+  const cols = d.saved.columns, ix = n => cols.indexOf(n);
+  const sources = [];
+  if (state.sel && ready(state.sel)) sources.push({ id: "now", label: "On the Cost a fabric page now" + (state.sel["Fabric code"] ? ": " + state.sel["Fabric code"] : ""), inputs: payload(state.sel) });
+  d.saved.rows.forEach((r, n) => { const it = (d.saved_items || [])[n] || {}; if (it.inputs) sources.push({ id: it.id, label: [r[ix("Fabric code")], r[ix("Supplier")], r[ix("Description")], "saved " + day(r[ix("Saved on")])].filter(v => !blank(v)).join(" \u00B7 "), inputs: it.inputs }); });
+  const head = pageHead("Compare", "Two costings side by side, both on today's rates: two suppliers' quotes for one fabric, or one fabric built two ways.");
+  if (sources.length < 2) return [...head, h("div", { class: "card" }, h("p", { class: "empty" }, "Comparing needs two costings. Cost a fabric and press Save to dashboard, twice; a fabric open on the Cost a fabric page counts as one."), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric"))];
+  const pickBox = (id, label, start) => { const sel = h("select", { id }, sources.map(s => h("option", { value: s.id }, s.label))); sel.value = sources[start].id; return [h("div", { class: "field" }, h("label", { for: id }, label), sel), sel]; };
+  state.cmp = state.cmp || {};
+  const startA = Math.max(0, sources.findIndex(s => s.id === state.cmp.a)), startB = sources.findIndex(s => s.id === state.cmp.b);
+  const [fa, sa] = pickBox("cmp-a", "A", startA), [fb, sb] = pickBox("cmp-b", "B", startB >= 0 ? startB : (startA === 0 ? 1 : 0));
+  const out = h("div", { "aria-live": "polite", style: "margin-top:16px" });
+  const run = async () => {
+    state.cmp = { a: sa.value, b: sb.value };
+    const A = sources.find(s => s.id === sa.value), B = sources.find(s => s.id === sb.value);
+    if (A.id === B.id) return out.replaceChildren(h("div", { class: "notice info" }, "Choose two different costings."));
+    out.replaceChildren(h("p", { class: "empty" }, "Costing both..."));
+    try { const [ra, rb] = await Promise.all([A, B].map(async s => (await postJSON("/api/cost", s.inputs)).json())); out.replaceChildren(...compareView(A, ra, B, rb)); }
+    catch (e) { out.replaceChildren(h("div", { class: "notice err", role: "alert" }, "One of these can no longer be costed: " + e.message)); }
+  };
+  sa.addEventListener("change", run); sb.addEventListener("change", run); run();
+  return [...head, h("div", { class: "card" }, h("div", { class: "fields" }, fa, fb), h("div", { class: "row-actions" }, h("button", { class: "btn small", type: "button", onclick: () => { const t = sa.value; sa.value = sb.value; sb.value = t; run(); } }, "Swap A and B"))), out];
+};
+function compareView(A, ra, B, rb) {
+  const delta = (a, b) => { const dlt = b - a; return Math.abs(dlt) < 0.005 ? h("span", { class: "tag flat" }, "same") : h("span", { class: "tag " + (dlt > 0 ? "down" : "up") }, `${dlt > 0 ? "+" : "\u2212"}${fmt(Math.abs(dlt))}${a ? ` (${pct(Math.abs(dlt) / a)})` : ""}`); };
+  const side = (tagText, S, r) => h("div", { class: "card hero" }, h("div", { class: "lbl" }, h("span", { class: "tag ok" }, tagText), " ", S.label),
+    h("div", { class: "big num" }, `${rs(r.total_per_m)} / m`),
+    h("div", { class: "facts" }, h("span", {}, [S.inputs.Route, S.inputs.Weave, `${S.inputs["Warp yarn"]} \u00D7 ${S.inputs["Weft yarn"]}`, `${S.inputs.EPI} \u00D7 ${S.inputs.PPI}`, `${S.inputs["Finished width (in)"]} in`].join(" \u00B7 "))),
+    h("div", { class: "facts num" }, h("span", {}, `${rs(r.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(r.gsm, 0)} g/m\u00B2`)),
+    r.quote !== null ? h("div", { class: "quote" }, h("span", { class: "tag " + (r.gap >= 0 ? "down" : "up") }, `Quote ${rs(r.quote)}/m, ${pct(Math.abs(r.gap_pct))} ${r.gap >= 0 ? "above" : "below"} should-cost`)) : null,
+    r.placeholders.length ? h("div", { class: "quote" }, h("span", { class: "tag warn", title: r.placeholders.join(", ") }, "\u26A0 provisional: placeholder rates used")) : null);
+  const dlt = rb.total_per_m - ra.total_per_m;
+  const verdict = h("div", { class: "notice info", style: "margin-top:16px" }, Math.abs(dlt) < 0.005 ? "A and B cost the same." : [h("b", {}, `B is ${rs(Math.abs(dlt))} per metre (${pct(Math.abs(dlt) / ra.total_per_m)}) ${dlt > 0 ? "dearer" : "cheaper"} than A. `),
+    (() => { const top = ra.buckets.map((b, i) => ({ name: b.name, d: rb.buckets[i].amount - b.amount })).filter(x => Math.abs(x.d) >= 0.005).sort((p, q) => Math.abs(q.d) - Math.abs(p.d)).slice(0, 3); return top.length ? "Most of it is " + top.map(x => `${x.name} (${x.d > 0 ? "+" : "\u2212"}${fmt(Math.abs(x.d))})`).join(", ") + "." : ""; })()]);
+  const top = Math.max(...ra.buckets.map(b => Math.abs(b.amount)), ...rb.buckets.map(b => Math.abs(b.amount)), 0.01);
+  const rows = [];
+  ra.buckets.forEach((b, i) => {
+    const c = rb.buckets[i], color = GROUP_COLOR[i % 8];
+    const bars = h("div", { class: "cmp-bars", "aria-hidden": "true" }, h("div", { class: "cmp-bar", style: `width:${Math.abs(b.amount) / top * 100}%;background:var(${color})` }), h("div", { class: "cmp-bar b", style: `width:${Math.abs(c.amount) / top * 100}%;background:var(${color})` }));
+    rows.push(h("tr", { class: "grp" }, h("td", {}, b.name), h("td", { class: "cmp-cell" }, bars), h("td", { class: "n" }, fmt(b.amount)), h("td", { class: "n" }, fmt(c.amount)), h("td", { class: "n" }, delta(b.amount, c.amount))));
+    b.lines.forEach((l, j) => { const m = c.lines[j]; if (Math.abs(l.amount) >= 0.005 || Math.abs(m.amount) >= 0.005) rows.push(h("tr", {}, h("td", { style: "padding-left:26px;color:var(--muted)" }, l.name), h("td", {}), h("td", { class: "n" }, fmt(l.amount)), h("td", { class: "n" }, fmt(m.amount)), h("td", { class: "n" }, Math.abs(m.amount - l.amount) < 0.005 ? "" : (m.amount > l.amount ? "+" : "\u2212") + fmt(Math.abs(m.amount - l.amount))))); });
+  });
+  rows.push(h("tr", { class: "grp" }, h("td", {}, "Should-cost"), h("td", {}), h("td", { class: "n" }, fmt(ra.total_per_m)), h("td", { class: "n" }, fmt(rb.total_per_m)), h("td", { class: "n" }, delta(ra.total_per_m, rb.total_per_m))));
+  // a choice left blank means its default (the first value on its list), so blank against the default is not a difference
+  const eff = (S, k) => { const v = S.inputs[k]; return blank(v) ? String((state.meta.lists[k] || [""])[0]) : String(v); };
+  const keys = [...new Set([...Object.keys(A.inputs), ...Object.keys(B.inputs)])].filter(k => eff(A, k) !== eff(B, k));
+  const differ = keys.length ? dataTable({ columns: ["Choice", "A", "B"], rows: keys.map(k => [k, String(A.inputs[k] ?? "\u2014"), String(B.inputs[k] ?? "\u2014")]) }, { label: "Choices that differ" }) : h("p", { class: "empty" }, "The two were built from the same choices.");
+  return [h("div", { class: "grid", style: "grid-template-columns:repeat(auto-fit,minmax(280px,1fr))" }, side("A", A, ra), side("B", B, rb)), verdict,
+    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Cost by group and sub-cost, Rs per metre"), h("span", { class: "sub", style: "margin:0" }, "Upper bar A, lower bar B")),
+      h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Cost"), h("th", {}, ""), h("th", { class: "n" }, "A"), h("th", { class: "n" }, "B"), h("th", { class: "n" }, "B against A"))), h("tbody", {}, rows)))),
+    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Choices that differ")), differ)];
 }
 
 // ------------------------------------------------------------------ bulk upload

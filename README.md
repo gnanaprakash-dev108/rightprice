@@ -42,6 +42,7 @@ full-screen view.
 |---|---|
 | Dashboard | Saved costings as cards, quote gap, cotton yarn rates against the market, supplier cost ratios |
 | Cost a fabric | Numbered steps on the left (fabric content, route, yarn, dyeing, construction, finish), each deciding what the next asks; live cost on the right; chart switchable between bars, waterfall, pie, treemap and line, by cost group or every sub-cost |
+| Compare | Two costings side by side on today's rates: every group and sub-cost, the difference, and the choices that differ |
 | Bulk upload | Excel template with the same drop-downs; costs every row and rejects values not on a list |
 | Yarn prices | Yarn master and market reference, both editable; master against market |
 | Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference |
