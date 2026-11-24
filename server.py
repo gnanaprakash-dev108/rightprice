@@ -145,6 +145,7 @@ def meta():
         "example": masters.EXAMPLE_ROW,
         "template_columns": [{"name": c, "list": l, "required": r} for c, l, r in masters.TEMPLATE_COLUMNS],
         "tables": TABLES,
+        "small_lot_bands": m["Quantity_Terms"][m["Quantity_Terms"]["Small-lot upcharge %"] > 0]["Quantity band"].tolist(),
         "placeholders": placeholder_count(m),
     }
 
