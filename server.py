@@ -128,6 +128,9 @@ def sanity(inp, res):
         out.append(f"Reed space {inp['reed_in']:g} inch is narrower than the finished width {w:g} inch.")
     elif inp["reed_in"] > w * 1.35:
         out.append(f"Reed space {inp['reed_in']:g} inch is more than 35% wider than the finished width {w:g} inch.")
+    for name, key in (("Warp", "warp_ne"), ("Weft", "weft_ne")):
+        if not 4 <= inp[key] <= 200:
+            out.append(f"{name} count works out at Ne {inp[key]:.4g}, outside 4 to 200. Check the count and the count system.")
     if not 40 <= res["gsm"] <= 600:
         out.append(f"The fabric works out at about {res['gsm']:.0f} g/m2, outside 40 to 600. Check the counts, EPI and PPI.")
     return out

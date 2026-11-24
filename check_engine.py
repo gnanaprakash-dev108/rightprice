@@ -90,7 +90,9 @@ def rate_card_checks(m):
             ("Count typed as Ne 40 changes nothing", total(ex, **{"Warp count": 40, "Weft count": 40}), base),
             ("Count typed as Tex 14.7625 changes nothing",
              total(ex, **{"Count system": "Tex", "Warp count": 14.7625, "Weft count": 14.7625}), base),
-            ("A finer typed count lowers the cost", total(ex, **{"Warp count": 50}) < base, True)]
+            ("A finer typed count lowers the cost", total(ex, **{"Warp count": 50}) < base, True),
+            ("Tex 14.76 (Ne 40.007) stays in the Ne 40 sizing band",
+             masters.cost(dict(ex, **{"Count system": "Tex", "Warp count": 14.76}), m)["inputs"]["sizing_rate"], 30)]
     for name, got, want in conv:
         good = got is want if isinstance(want, bool) else abs(got - want) < 0.005
         ok &= good
