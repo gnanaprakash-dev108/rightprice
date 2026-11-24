@@ -1,0 +1,45 @@
+{
+ "name": "RightPrice - fabric should-cost",
+ "short_name": "RightPrice",
+ "description": "What a woven fabric should cost ex-mill, in rupees per metre and per kg.",
+ "start_url": "./#cost",
+ "scope": "./",
+ "display": "standalone",
+ "orientation": "any",
+ "background_color": "#0a111e",
+ "theme_color": "#0a111e",
+ "icons": [
+  {
+   "src": "icons/icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icons/icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "any"
+  },
+  {
+   "src": "icons/icon-maskable-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ],
+ "shortcuts": [
+  {
+   "name": "Cost a fabric",
+   "url": "./#cost"
+  },
+  {
+   "name": "Dashboard",
+   "url": "./#dashboard"
+  },
+  {
+   "name": "Yarn prices",
+   "url": "./#yarn"
+  }
+ ]
+}

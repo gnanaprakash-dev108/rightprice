@@ -82,14 +82,14 @@ const NAV = [
   ["Analysis", [["pilot", "Pilot results"]]],
 ];
 const PAGES = {};
-const state = { meta: null, sel: null, visited: new Set(), chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
+const state = { meta: null, sel: null, visited: new Set(), bySize: true, chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
 
 function buildNav() {
   const nav = $("#nav");
   for (const [group, items] of NAV) {
     nav.append(h("div", { class: "nav-group" }, group));
     for (const [id, label] of items)
-      nav.append(h("a", { class: "nav-link", href: "#" + id, "data-page": id, html: svg(ICON[id]) + `<span>${label}</span>` }));
+      nav.append(h("a", { class: "nav-link", href: "#" + id, "data-page": id, title: label, html: svg(ICON[id]) + `<span>${label}</span>` }));
   }
 }
 function route() {
@@ -109,6 +109,16 @@ function route() {
   }).catch(e => { if (route.token === token) main.replaceChildren(h("div", { class: "notice err" }, "This page could not be loaded: " + e.message)); });
 }
 function pageHead(title, sub) { return [h("h1", {}, title), h("p", { class: "sub" }, sub)]; }
+
+// display preferences, kept in this browser: a pinned left panel and a tall header both cost space
+const PREFS = { pin: false, roomy: false };
+function loadPrefs() { try { Object.assign(PREFS, JSON.parse(localStorage.getItem("rp-display") || "{}")); } catch (e) { /* private window */ } applyPrefs(); }
+function applyPrefs() {
+  document.body.classList.toggle("rail", !PREFS.pin);
+  document.body.classList.toggle("compact", !PREFS.roomy);
+  const b = $("#pin"); if (b) { b.setAttribute("aria-pressed", String(PREFS.pin)); b.title = PREFS.pin ? "Unpin: fold the panel to icons" : "Pin the panel open"; }
+}
+function setPref(key, value) { PREFS[key] = value; try { localStorage.setItem("rp-display", JSON.stringify(PREFS)); } catch (e) { /* private window */ } applyPrefs(); dispatchEvent(new Event("resize")); }
 
 // phone menu
 function closeMenu() { $("#side").classList.remove("open"); $("#scrim").hidden = true; $("#menu").setAttribute("aria-expanded", "false"); }
@@ -405,15 +415,15 @@ PAGES.cost = async () => {
   };
   paint(); recalc();
 
-  const actions = h("div", { class: "row-actions", style: "margin:0 0 12px" },
-    h("button", { class: "btn", type: "button", onclick: () => { state.sel = blankSel(); state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
-    h("button", { class: "btn", type: "button", onclick: () => { state.sel = exampleSel(); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
+  const actions = h("div", { class: "row-actions", style: "margin:0" },
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
   // the two panes take exactly the height left on the screen, so the page itself does not scroll
   const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
   const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
   addEventListener("resize", fit); requestAnimationFrame(fit); setTimeout(fit, 300);
-  return [h("div", { class: "cost-head" }, h("div", {}, h("h1", {}, "Cost a fabric"), h("p", { class: "sub", style: "margin:0" }, "Work down the steps on the left; each choice decides what the next step asks. The cost on the right updates as you go.")), actions),
-    split];
+  split.firstChild.prepend(h("div", { class: "pane-head" }, h("h1", {}, "Cost a fabric"), actions));
+  return [h("p", { class: "sub cost-intro" }, "Work down the steps on the left; each choice decides what the next step asks. The cost on the right updates as you go."), split];
 };
 
 function waiting(sel) {
@@ -424,7 +434,7 @@ function waiting(sel) {
 }
 
 const CHARTS = [["bars", "Bars"], ["waterfall", "Waterfall"], ["pie", "Pie"], ["treemap", "Treemap"], ["line", "Line"]];
-const CHART_NOTE = { bars: "One bar per cost group, from zero. Best for comparing the groups with each other.", waterfall: "Each step starts where the one before ended. Best for seeing how the price builds up.", pie: "Each group's share of the price.", treemap: "Area is rupees per metre; sub-costs sit inside their group. Best for seeing where the money is.", line: "The running total after each step." };
+const CHART_NOTE = { bars: "One bar per cost, from zero, largest at the top. Best for seeing what matters most.", waterfall: "Each step starts where the one before ended. Best for seeing how the price builds up.", pie: "Each group's share of the price.", treemap: "Area is rupees per metre; sub-costs sit inside their group. Best for seeing where the money is.", line: "The running total after each step." };
 function costView(res, sel) {
   const title = [sel["Fabric code"], sel.Description].filter(v => !blank(v)).join(" — ");
   let quote = null;
@@ -453,11 +463,14 @@ function costView(res, sel) {
   const seg = (items, key, label) => { const g = h("div", { class: "seg", role: "group", "aria-label": label }); for (const [v, text] of items) g.append(h("button", { type: "button", "aria-pressed": String(state[key] === v), onclick: () => { state[key] = v; state.wfOpen.clear(); [...g.children].forEach(b => b.setAttribute("aria-pressed", String(b.textContent === text))); draw(); } }, text)); return g; };
   const zero = h("input", { type: "checkbox", id: "zero" }); zero.checked = state.showZero;
   zero.addEventListener("change", () => { state.showZero = zero.checked; draw(); });
+  const big = h("input", { type: "checkbox", id: "bysize" }); big.checked = state.bySize;
+  big.addEventListener("change", () => { state.bySize = big.checked; draw(); });
   draw();
   const chart = h("div", { class: "card" },
     h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Where the price comes from"), note),
       h("div", { style: "display:flex;gap:10px 14px;align-items:center;flex-wrap:wrap" }, seg(CHARTS, "chart", "Chart"), seg([["groups", "Groups"], ["all", "All sub-costs"]], "wfMode", "Level of detail"),
-        h("label", { for: "zero", style: "color:var(--muted);display:flex;gap:6px;align-items:center;min-height:38px" }, zero, "Lines at zero"))),
+        h("label", { for: "bysize", class: "opt", title: "Bars and pie: largest cost at the top. Waterfall and line always follow the order the price is built in." }, big, "Largest first"),
+        h("label", { for: "zero", class: "opt" }, zero, "Lines at zero"))),
     box,
     h("div", { class: "legend", "aria-hidden": "true" }, res.buckets.map((b, i) => h("span", {}, h("i", { style: `background:var(${GROUP_COLOR[i % 8]})` }), b.name))));
 
@@ -486,6 +499,7 @@ function chartItems(res, positiveOnly) {
   });
   return items.filter(it => positiveOnly ? it.amount > 0.005 : (state.showZero || Math.abs(it.amount) >= 0.005));
 }
+const bySize = (list, get) => state.bySize ? [...list].sort((p, q) => Math.abs(get(q)) - Math.abs(get(p))) : list;
 const itemTip = (it, total) => () => `<b>${it.name}</b>${it.group !== it.name ? it.group + "<br>" : ""}${rs(it.amount)} per metre · ${pct(total ? it.amount / total : 0)} of the price${it.basis && it.group !== it.name ? "<br>" + it.basis : ""}`;
 
 /* Bars: one bar per group from zero, with its name, share and rupees beside it. A group opens
@@ -501,11 +515,11 @@ function barsChart(res) {
     const el = h("div", { class: "bar-row " + cls, role: "listitem", tabindex: button ? null : "0" }, bar, text);
     withTip(el, tipFn); box.append(el);
   };
-  res.buckets.forEach((b, i) => {
+  bySize(res.buckets.map((b, i) => ({ b, i })), g => g.b.amount).forEach(({ b, i }) => {      // colour stays with the group, whatever the order
     const color = GROUP_COLOR[i % 8], open = state.wfMode === "all" || state.wfOpen.has(b.name);
     const btn = h("button", { type: "button", class: "bar-name", "aria-expanded": String(open), onclick: () => { open ? state.wfOpen.delete(b.name) : state.wfOpen.add(b.name); box.replaceWith(barsChart(res)); } }, h("span", { class: "caret", html: svg('<path d="m9 6 6 6-6 6"/>', 10) }), b.name);
     row(b.name, b.amount, color, "grp", () => `<b>${b.name}</b>${rs(b.amount)} per metre · ${pct(b.pct)} of the price`, btn);
-    if (open) for (const l of b.lines.filter(l => state.showZero || Math.abs(l.amount) >= 0.005))
+    if (open) for (const l of bySize(b.lines.filter(l => state.showZero || Math.abs(l.amount) >= 0.005), l => l.amount))
       row(l.name, l.amount, color, "sub-row", itemTip({ name: l.name, group: b.name, amount: l.amount, basis: l.basis }, total));
   });
   if (res.quote !== null) {
@@ -518,7 +532,7 @@ function barsChart(res) {
 }
 
 function pieChart(res) {
-  const items = chartItems(res, true), sum = items.reduce((a, it) => a + it.amount, 0) || 1, total = res.total_per_m;
+  const items = bySize(chartItems(res, true), it => it.amount), sum = items.reduce((a, it) => a + it.amount, 0) || 1, total = res.total_per_m;
   const R = 100, r = 58, C = 110;
   let a0 = -Math.PI / 2;
   const g = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -844,7 +858,17 @@ PAGES.rates = (w) => tabbed("Rate tables", "Every drop-down choice looks up a nu
   ["Weaving_Rates", "Weaving_Uplifts", "Sizing_Rates", "Yarn_Dyeing", "Piece_Dyeing", "Finishing_Rates", "Class_Defaults", "Weaves", "Content_Groups"])(w);
 PAGES.ratecard = (w) => tabbed("Mill rate card", "Optional upcharges from the mill rate card of 23 Nov 2026. Each is rupees per metre on the price and is not marked up. Which mill the card is from is not confirmed.",
   ["Print_Methods", "Dobby_Charges", "Weft_Options", "Quantity_Terms", "Finishing_Rates"])(w);
-PAGES.settings = (w) => tabbed("Settings", "Calculation settings, mill tiers and order size slabs. Method: the corrected method of the V1 workbook; price basis ex-mill, so freight is left out.",
+function displayCard() {
+  const toggle = (id, label, hint, key, invert) => { const box = h("input", { type: "checkbox", id }); box.checked = invert ? !PREFS[key] : PREFS[key]; box.addEventListener("change", () => setPref(key, invert ? !box.checked : box.checked)); return h("label", { for: id, class: "opt-row" }, box, h("span", {}, h("b", {}, label), h("small", {}, hint))); };
+  return h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Display, on this device")),
+    h("div", { class: "grid g3" },
+      h("div", {}, toggle("pref-pin", "Pin the left panel open", "Unpinned, it folds to a strip of icons and opens when the pointer or keyboard reaches it.", "pin"),
+        toggle("pref-compact", "Compact header and headings", "Gives the page more room. Turn off for larger headings.", "roomy", true)),
+      h("div", { style: "grid-column:span 2" }, h("h3", {}, "Use it like an app on a phone"),
+        h("p", { class: "sub", style: "margin:0" }, h("b", {}, "Android (Chrome): "), "open the site, tap the three dots, then \u201CAdd to Home screen\u201D or \u201CInstall app\u201D. ", h("b", {}, "iPhone (Safari): "), "tap Share, then \u201CAdd to Home Screen\u201D. It then opens full screen from its own icon. It still needs the internet and your sign-in; nothing is stored on the phone."))));
+}
+PAGES.settings = async (w) => { const nodes = await settingsTables(w); nodes.splice(2, 0, displayCard()); return nodes; };
+const settingsTables = (w) => tabbed("Settings", "Calculation settings, mill tiers and order size slabs. Method: the corrected method of the V1 workbook; price basis ex-mill, so freight is left out.",
   ["Settings", "Mill_Tier", "Order_Slab", "Supplier_Benchmarks"])(w);
 
 // ------------------------------------------------------------------ pilot
@@ -907,7 +931,8 @@ function setupSearch() {
 
 // ------------------------------------------------------------------ start
 (async function start() {
-  buildNav(); paintThemeButton();
+  buildNav(); paintThemeButton(); loadPrefs();
+  $("#pin").addEventListener("click", () => setPref("pin", !PREFS.pin));
   $("#today").textContent = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   try { state.meta = await getJSON("/api/meta"); }
   catch (e) { $("#main").replaceChildren(h("div", { class: "notice err" }, "The rate master could not be read: " + e.message)); return; }

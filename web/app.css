@@ -309,3 +309,45 @@ button.bar-name[aria-expanded="true"] .caret { transform: rotate(90deg); }
 table.edit { min-width: 100%; }
 .table-wrap:has(table.edit) { max-height: 52vh; }
 @media (max-width: 820px) { .seg { flex-wrap: wrap; } .seg button { padding: 8px 11px; } }
+
+/* ---------- room: a left panel that folds to icons, a compact header, full-width pages */
+main { max-width: none; }
+.side { transition: width .16s ease; }
+.pin { position: absolute; top: 20px; right: 10px; }
+.pin[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.side { position: sticky; }
+.opt { color: var(--muted); display: flex; gap: 6px; align-items: center; min-height: 38px; white-space: nowrap; }
+.opt-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; cursor: pointer; }
+.opt-row input { margin-top: 3px; }
+.opt-row small { display: block; color: var(--muted); }
+.pane-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 0 10px; border-bottom: 1px solid var(--border); position: sticky; top: -6px; background: var(--panel); z-index: 2; }
+.pane-head h1 { font-size: 17px; margin: 0; }
+.cost-intro { margin: 0 0 10px; }
+@media (min-width: 821px) {
+  body.rail .shell { grid-template-columns: 60px minmax(0, 1fr); }
+  body.rail .side { width: 60px; overflow: hidden; z-index: 30; padding-left: 8px; padding-right: 8px; }
+  body.rail .side:hover, body.rail .side:focus-within { width: 236px; overflow-y: auto; box-shadow: 8px 0 30px rgba(0,0,0,.28); padding-left: 12px; padding-right: 12px; }
+  body.rail .side:not(:hover):not(:focus-within) .brand-text, body.rail .side:not(:hover):not(:focus-within) .nav-link span,
+  body.rail .side:not(:hover):not(:focus-within) .side-foot, body.rail .side:not(:hover):not(:focus-within) .pin { display: none; }
+  body.rail .side:not(:hover):not(:focus-within) .nav-group { height: 1px; margin: 9px 8px; background: var(--border); overflow: hidden; color: transparent; }
+  body.rail .side:not(:hover):not(:focus-within) .nav-link { justify-content: center; padding: 9px 0; }
+  body.rail .side:not(:hover):not(:focus-within) .brand { padding: 4px 5px 18px; }
+}
+@media (max-width: 820px) { .pin { display: none; } }
+body.compact .top { padding: 8px 16px; }
+body.compact .search input { height: 36px; }
+body.compact .search > svg { top: 10px; }
+body.compact .icon-btn:not(.sm) { width: 36px; height: 36px; }
+body.compact .pill { padding: 6px 10px; }
+body.compact main { padding: 2px 16px 40px; }
+body.compact main > h1 { font-size: 19px; margin-bottom: 2px; }
+body.compact main > .sub { margin-bottom: 12px; font-size: 13px; }
+body.compact .cost-intro { display: none; }
+body.compact main:has(.cost-split) { padding-bottom: 8px; }
+body:not(.compact) .pane-head h1 { display: none; }
+/* opened from a phone's home screen: keep clear of the notch and the home bar */
+@supports (padding: env(safe-area-inset-top)) {
+  .top { padding-top: max(8px, env(safe-area-inset-top)); }
+  main { padding-bottom: max(40px, env(safe-area-inset-bottom)); }
+  .side { padding-top: max(18px, env(safe-area-inset-top)); }
+}

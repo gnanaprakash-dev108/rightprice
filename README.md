@@ -34,6 +34,9 @@ survives redeploys.
 
 The left panel groups the pages under Costing, Prices, Rates and Analysis. Light and dark are
 switched in the header; the search box finds yarns, saved costings, rate tables and pages.
+The left panel folds to icons and opens on hover; pin it open, or turn the compact header off, under
+Settings > Display. On a phone, "Add to Home screen" in the browser gives it its own icon and a
+full-screen view.
 
 | Screen | What it does |
 |---|---|

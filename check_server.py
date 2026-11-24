@@ -44,6 +44,11 @@ def main():
                 ["/api/table/" + s for s in meta["tables"]]:
             check(f"GET {path}", c.get(path).status_code == 200)
         check("Unknown table refused", c.get("/api/table/Nope").status_code == 404)
+        man = c.get("/manifest.webmanifest")
+        check("Phone home-screen files are served",
+              man.status_code == 200 and man.json()["display"] == "standalone"
+              and all(c.get("/" + i["src"]).status_code == 200 for i in man.json()["icons"])
+              and c.get("/icons/icon-180.png").status_code == 200)
         home = c.get("/")
         check("Page asks the browser for the current script, not a stored copy",
               "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"

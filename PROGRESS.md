@@ -323,6 +323,37 @@ a purchase price.
 - `.github/workflows/checks.yml` runs `check_engine.py`, `check_server.py` and a parse of the front
   end script on every pull request. It deploys nothing.
 
+**Room on the screen, and use from a phone (24 Nov 2026, night):**
+
+- The left panel folds to a strip of icons and opens when the pointer or the keyboard reaches it. A
+  pin keeps it open. The header and headings are compact. Both are switches under Settings >
+  Display and are remembered per device. Pages use the full width.
+- On Cost a fabric the heading row is gone; "New fabric" and "Load the example" sit at the top of
+  the steps. The example now fits one screen at 1440x900 with nothing scrolled.
+- Bars and pie list costs largest first, with a switch back to the order the price is built in.
+  Waterfall and line always keep the build order.
+- The site can be added to a phone's home screen (web app manifest and icons) and then opens full
+  screen from its own icon. It still needs the internet and the sign-in; nothing is kept offline.
+- After a deploy the browser now fetches the new screens by itself; no hard refresh.
+
+**Read but not built: `inputs/Fabric Costing_Final.xlsx`** (the earlier prototype, sent again on
+24 Nov). Its rates are placeholders (most cells are 1 or 10), so only its logic is of use. What it
+has that RightPrice does not:
+
+| In the workbook | In RightPrice today | Worth building? |
+|---|---|---|
+| Yarn price from a fibre blend (% of each fibre x fibre price) plus spinning stages | Yarn rate looked up per yarn | Only if fibre prices are tracked; a bought-yarn rate is firmer |
+| Count systems: Ne, Nm, Tex, Denier, Worsted, Lea | Ne only on screen (the engine converts Nm, Tex, Denier) | Yes, small: a count-system choice for linen (lea) and filament (denier) |
+| Weaving cost from the loom: speed x weave speed factor x efficiency, against loom cost per hour | A rate per pick by weave and route, calibrated on purchase orders | As a cross-check beside the calibrated rate, once real loom costs per hour are known |
+| Shaft count as a multiplier on weaving | Rate card shaft charge in Rs per metre | Already covered |
+| Sizing as pick-up % x size cost per kg | A rate per kg of warp | Same result; no change needed |
+| Process loss % on dyeing and on finishing separately | One process wastage % | Not without data |
+| Overheads as named lines (electricity, rent, utilities, maintenance), packing, shipping, marketing | One overhead % and one margin % | Not for an ex-mill should-cost |
+| GSM = (EPI / warp count + PPI / weft count) x 25.64 | Weight worked out from the yarn in the cloth | Same idea; the tool's is the fuller version |
+| Minimum order quantity noted, not calculated | Order size slabs and rate card quantity bands | Already covered |
+
+The Scribd document linked from that workbook could not be opened from the build session.
+
 **Open on the front end:**
 
 1. Real yarn rates for poly cotton and linen, and process rates for those fabrics.
