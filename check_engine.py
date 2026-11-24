@@ -84,6 +84,17 @@ def rate_card_checks(m):
         good = want in got
         ok &= good
         print(f"  {name} refused: {'OK' if good else 'MISMATCH'} - {got}")
+    conv = [("Nm 68 is Ne 40.16", engine.to_ne(68, "Metric count (Nm)"), 68 / 1.6934), ("Tex 14.76 is Ne 40", engine.to_ne(14.7625, "Tex"), 40),
+            ("Denier 75 is Ne 70.87", engine.to_ne(75, "Denier"), 5315 / 75), ("Lea 40 is Ne 14.29", engine.to_ne(40, "Lea (linen)"), 40 * 300 / 840),
+            ("Worsted 60 is Ne 40", engine.to_ne(60, "Worsted count (Nw)"), 40), ("Ne 40 is Ne 40", engine.to_ne(40, "English count (Ne)"), 40),
+            ("Count typed as Ne 40 changes nothing", total(ex, **{"Warp count": 40, "Weft count": 40}), base),
+            ("Count typed as Tex 14.7625 changes nothing",
+             total(ex, **{"Count system": "Tex", "Warp count": 14.7625, "Weft count": 14.7625}), base),
+            ("A finer typed count lowers the cost", total(ex, **{"Warp count": 50}) < base, True)]
+    for name, got, want in conv:
+        good = got is want if isinstance(want, bool) else abs(got - want) < 0.005
+        ok &= good
+        print(f"  {name}: {got if isinstance(got, bool) else round(got, 3)}  {'OK' if good else 'MISMATCH'}")
     lines = [l["name"] for b in undyed["buckets"] if b["name"] == engine.UPCHARGE_BUCKET for l in b["lines"]]
     good = len(lines) == 7
     ok &= good

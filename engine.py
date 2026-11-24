@@ -19,15 +19,30 @@ K_DEFAULT = 0.00059  # kg per end-metre for Ne 1, as in the V1 workbook
 UPCHARGE_BUCKET = "Upcharges and quantity terms"
 
 
+# Count systems a yarn count can be typed in. The first is the one the yarn master uses.
+COUNT_SYSTEMS = ["English count (Ne)", "Metric count (Nm)", "Tex", "Denier", "Lea (linen)", "Worsted count (Nw)"]
+
+
 def to_ne(count, system="Ne"):
-    """Convert a count in another system to English cotton count (Ne)."""
+    """Convert a count in another system to English cotton count (Ne).
+
+    Ne is hanks of 840 yards per pound. Nm is km per kg; tex is grams per km; denier is grams per
+    9 km; a linen lea is 300 yards and a worsted hank 560 yards, both per pound.
+    """
     count = float(count)
-    if system == "Nm":
+    if count <= 0:
+        raise ValueError("A yarn count must be above zero")
+    name = str(system).strip().lower()
+    if "nm" in name or name.startswith("metric"):
         return count / 1.6934
-    if system == "Denier":
+    if name.startswith("denier"):
         return 5315.0 / count
-    if system == "Tex":
+    if name.startswith("tex"):
         return 590.5 / count
+    if name.startswith("lea"):
+        return count * 300.0 / 840.0
+    if name.startswith("worsted") or name == "nw":
+        return count * 560.0 / 840.0
     return count
 
 

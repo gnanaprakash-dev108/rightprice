@@ -85,6 +85,7 @@ def lists(masters):
         "Piece shade": ["Light", "Medium", "Dark"],
         "Mill tier": masters["Mill_Tier"]["Mill tier"].tolist(),
         "Order size": masters["Order_Slab"]["Order size"].tolist(),
+        "Count system": list(engine.COUNT_SYSTEMS),
         "Print method": masters["Print_Methods"]["Print method"].tolist(),
         "Dobby shafts": dc[dc["Type"] == "Dobby shafts"]["Value"].tolist(),
         "Top beam": dc[dc["Type"] == "Top beam"]["Value"].tolist(),
@@ -166,6 +167,7 @@ def resolve(sel, masters):
 
     # Yarn
     yr = masters["Yarn_Rates"].set_index("Yarn key")
+    system = pick("Count system", L["Count system"], L["Count system"][0])
     for side in ("Warp", "Weft"):
         key = pick(f"{side} yarn", L["Yarn"])
         row = yr.loc[key]
@@ -174,8 +176,15 @@ def resolve(sel, masters):
         if rate is None:
             rate, basis = float(row["Rate Rs/kg"]), f"{row['Basis']}, {row['Rate date']}"
         count = _num(sel.get(f"{side} count override (Ne)")) or float(row["Count Ne (resultant)"])
+        typed = _num(sel.get(f"{side} count"))      # a count typed in the chosen system takes the place of the yarn's own
+        label = f"{key} (Ne {count:g})"
+        if typed is not None:
+            if typed <= 0:
+                raise ValueError(f"'{side} count' must be a number above zero")
+            count = engine.to_ne(typed, system)
+            label = f"{key}, count typed as {typed:g} {system} = Ne {count:.2f}"
         inp[f"{side.lower()}_rate"], inp[f"{side.lower()}_ne"] = rate, count
-        note(f"{side} yarn", f"{key} (Ne {count:g})", rate, "Rs/kg", basis)
+        note(f"{side} yarn", label, rate, "Rs/kg", basis)
 
     # Yarn dyeing
     ydt = masters["Yarn_Dyeing"].set_index("Shade")
@@ -333,6 +342,7 @@ TEMPLATE_COLUMNS = [  # (column, list name or None, required)
     ("Fabric code", None, True), ("Description", None, False), ("Supplier", None, False),
     ("Route", "Route", True), ("Weave", "Weave", True), ("Pattern", "Pattern", False),
     ("Finish", "Finish", False), ("Warp yarn", "Yarn", True), ("Weft yarn", "Yarn", True),
+    ("Count system", "Count system", False), ("Warp count", None, False), ("Weft count", None, False),
     ("Warp yarn dyeing", "Yarn shade", False), ("Weft yarn dyeing", "Yarn shade", False),
     ("Piece shade", "Piece shade", False), ("EPI", None, True), ("PPI", None, True),
     ("Finished width (in)", None, True), ("Reed space (in)", None, False),
@@ -388,6 +398,8 @@ def make_template(masters):
         "Columns with a drop-down accept only values from the Lists sheet.",
         "Yarn dyeing shades default to Medium for yarn dyed fabrics and Undyed for the rest.",
         "Leave reed space blank to use finished width x the reed space factor in Settings.",
+        "Warp count and Weft count are optional. Blank: the count of the yarn chosen. Filled: that count, in the "
+        "Count system chosen (English Ne when blank), is used for the weight; the yarn's rate per kg is unchanged.",
         "Mill rate card columns are optional. Left blank: no dobby or top beam charge, weft dyed, the printing "
         "rate per kg for a printed fabric, and the order size slab for quantity.",
         "Print method Rotary or Digital replaces the printing rate per kg with the rate card's charge per metre; "
