@@ -78,9 +78,9 @@ yarn-dyed oxford −2.7%, 46%; piece-dyed satin 3.1%, 57%; piece-dyed twill 4.3%
    Mill tier is still set to zero.
 6. **48 placeholder rates remain**, mostly finishes; six are the poly cotton and linen yarns added on 24 Nov. Four yarn rates are placeholders: Cotton 20S and
    Slub 20S, 24S, 30S.
-7. **66 fabrics have a finish the tool does not recognise** (303 before) and are costed as Normal.
-8. **328 cotton fabrics are not costed** because one direction mixes yarns ("40s + 40s melange").
-   60 more carry dye method "Solid", not yet mapped.
+7. **44 fabrics have a finish the tool does not recognise** (303 at the start) and are costed as Normal.
+8. **265 cotton fabrics are not costed** because one direction mixes yarns ("40s + 40s melange") or
+   the count cannot be read. 328 before the count fix of 24 Nov.
 9. **2,428 woven fabrics are blends** and outside version 1. Largest groups by purchase-order codes:
    polyester viscose 2,866, cotton with stretch 1,206, CVC 1,163.
 10. **Dollar purchases, per-kg purchases and knits** are not covered.
@@ -218,6 +218,51 @@ gave, so adding the card's terms on top would count quantity twice.
 7. "Not applicable for 40s quality" is read as warp and weft both 40s single.
 8. The draft above awaits a decision.
 
+## Pilot coverage, 24 Nov 2026 (after the rate card)
+
+Three changes to how `pilot.py` reads PLM, none to any rate:
+
+- **Yarn counts written "40/1", "(40/1)", "30/1s", "60comp" are now read.** A corrupted character in
+  the script had been dropping every "40/1" fabric.
+- **Dye method "Solid" with a solid pattern is read as piece dyed** (50 fabrics), as the mill rate
+  card words it. This is an assumption. "Solid" with a print pattern (6) is still left out.
+- **ETI Clat, ETI + Baby Skin and ETI + Silver Nano are costed as ETI.** Unrecognised finishes: 66 → 44.
+
+Fabrics costed rose from 1,582 to 1,696. The 114 new fabrics had no part in any calibration, and
+they fit better than the rest: median gap −1.8%, 54% within 5%, 70% within 10%, 91% within 20%.
+
+| | 1,582 fabrics | 1,696 fabrics |
+|---|---|---|
+| All: median gap | 1.5% | 1.0% |
+| All: within 5% / 10% / 20% | 30% / 53% / 79% | 31% / 54% / 79% |
+| Held-back third: median gap | 0.7% | −0.4% |
+| Held-back third: within 5% / 10% / 20% | 27% / 51% / 77% | 28% / 52% / 78% |
+
+Still not costed: 265 with a yarn count the tool cannot read (mostly two yarns in one direction,
+"40s + 40s melange"), 53 with no plausible width, 15 with no EPI or PPI, 8 with an unmapped dye method.
+
+Calibration draft, rerun, not applied: order size below 1,000 m +5.5 points on top of the card's
+bands (was +7); piece-dyed twill Rs 0.18 → 0.25 per pick and satin 0.22 → 0.29 as before; printing
+Rs 390 → 410 per kg. Held-back third with the draft: median −1.6%, within 5% / 10% / 20% 30% / 54% / 79%.
+
+### Yarn-dyed plain: what would close the 10% gap
+
+223 fabrics, 175 of them Amsler 24s or slub 24s, from Arvind (−9.8%) and Rajapalayam (−12.3%).
+Three what-ifs, each on its own, nothing applied:
+
+| What if | Median gap | Within 10% |
+|---|---|---|
+| As it stands | −10.4% | 39% |
+| Yarn-dyed plain given twill's wastage, overhead and margin (3%, 4%, 7% in place of 5%, 5%, 8%) | −6.1% | 78% |
+| Amsler and slub 24s priced as plain 24s (Rs 315 in place of 372) | −2.7% | 77% |
+| Both | 1.9% | 77% |
+| Weaving at Rs 0.20 per pick in place of 0.32 | −6.2% | 77% |
+
+With everything else held, the purchase prices imply an Amsler or slub 24s yarn rate of about
+Rs 298 per kg (middle half Rs 285 to 316), against Rs 372 in the yarn master. The purchase data
+cannot tell these explanations apart: each one alone lifts the share within 10% to about 78%. A
+current quote for Amsler 24s yarn would settle it, and it is the cheapest thing to get.
+
 ## New front end (started 24 Nov 2026)
 
 The "no new web stack" rule was lifted by decision on 24 Nov 2026. The costing engine, the rate
@@ -267,6 +312,16 @@ master and every rate are untouched; only the screens changed.
 Rs 750, 900, 1,200. They are guesses, not market figures. Weaving, sizing, dyeing and finishing
 rates for those fabrics are the ones measured on 100% cotton. None of this has been checked against
 a purchase price.
+
+**Added 24 Nov 2026, evening:**
+
+- A saved costing keeps the choices behind it. From the dashboard it can be opened again in Cost a
+  fabric, where it is re-costed on the rates of the day, or deleted.
+- The cost view warns when what was typed looks like a slip: width outside 30 to 130 inches, EPI or
+  PPI outside 20 to 400, reed space narrower than the cloth or more than 35% wider, weight outside
+  40 to 600 g/m2. The cost is still shown.
+- `.github/workflows/checks.yml` runs `check_engine.py`, `check_server.py` and a parse of the front
+  end script on every pull request. It deploys nothing.
 
 **Open on the front end:**
 

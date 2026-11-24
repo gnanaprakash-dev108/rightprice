@@ -105,7 +105,10 @@ FINISH_ALIASES = {"regular": "Normal", "normal": "Normal", "etieasytoiron": "F- 
                   "liquidammonia+easycare": "F- LA+Easy Care", "la+eti+soft": "F- LA + ETI",
                   "la+soft": "F- LA Liquid Ammonia", "brushed1side": "F- Brushed-1 side", "peach": "F- PEACH",
                   "onesidepeach": "F- PEACH", "peach+frfd": "F- PEACH", "carbonpeach": "F- Carbonium",
-                  "emerise": "F- Emerised", "silkprotein": "F- Silk Protein / Silk Touch"}
+                  "emerise": "F- Emerised", "silkprotein": "F- Silk Protein / Silk Touch",
+                  # ETI with an add-on the rate card does not price: costed as ETI alone
+                  "eticlat": "F- ETI Easy to Iron", "eti+babyskin": "F- ETI Easy to Iron",
+                  "eti+silvernano": "F- ETI Easy to Iron"}
 QUANTITY_BANDS = [(500, 600, "500 to 599 m"), (600, 700, "600 to 699 m"), (700, 800, "700 to 799 m"),
                   (800, 2000, "800 to 1,999 m"), (2000, 4000, "2,000 to 3,999 m"),
                   (4000, 6000.5, "4,000 to 6,000 m"), (6000.5, 1e12, "Above 6,000 m")]
@@ -153,7 +156,9 @@ def plm_count(txt, yarn_by_count):
         return yarn_by_count.get(("ams" if mm.group(2).startswith("ams") else "slub", int(mm.group(1))))
     t = re.sub(r"^(cm|cpt|cw|ne)", "", t)
     t = re.sub(r"(s|ne|'s)$", "", t)
-    t = re.sub(r"^(\d+)/1$", r"", t)
+    t = re.sub(r"(cmp|comp)$", "", t)                # compact: the yarn master's cotton counts are combed compact
+    t = re.sub(r"s$", "", t)
+    t = re.sub(r"^(\d+)/1$", r"\1", t)               # 40/1 is single 40s
     if re.fullmatch(r"\d+", t):
         return yarn_by_count.get((kind, int(t)))
     mm = re.fullmatch(r"2/(\d+)", t) or re.fullmatch(r"(\d+)/2", t)
@@ -198,6 +203,11 @@ def build_inputs():
             continue
         why = None
         route = PLM_ROUTE.get(s["dyemethod_name"].lower())
+        route_from = "PLM dye method"
+        if route is None and s["dyemethod_name"].lower() == "solid" and s["pattern_name"].lower() in ("solid", "textured"):
+            # 'Solid' with a solid pattern is read as piece dyed, as on the mill rate card ("piece dyed (solid)").
+            # 'Solid' with a print pattern is left out: it could be either.
+            route, route_from = "Piece Dyed", "Assumed: dye method 'Solid' with a solid pattern is piece dyed"
         wg = grouping.weave_group(s["weavetype_name"])
         weave = s["weavetype_name"] if s["weavetype_name"] in tool_weaves else GROUP_WEAVE.get(wg)
         warp, weft_yarn = plm_count(s["warpcount"], ybc), plm_count(s["weftcount"], ybc)
@@ -235,6 +245,7 @@ def build_inputs():
                      "Weft (yarn dyed)": weft, "Weft read from": weft_basis,
                      "Print method": None,
                      "Print method read from": "Not in PLM; left on the printing rate per kg" if route == "Printed" else "",
+                     "Route read from": route_from,
                      "Rate card quantity": quantity_band(route, metres), "PLM pattern": s["pattern_name"],
                      "PLM pattern details": s["patterndetails_name"],
                      "EPI": epi, "PPI": ppi, "Finished width (in)": round(width, 1),
@@ -303,7 +314,7 @@ def main():
     res = masters.cost_many(inp, m)
     extra = ["Route", "Weave", "Finish", "Finish as written", "Finish mapped", "Warp yarn", "Weft yarn", "EPI",
              "PPI", "Finished width (in)", "PO metres", "PO lines", "Order size", "Rate card quantity",
-             "Weft (yarn dyed)", "Weft read from", "Print method", "Print method read from", "PLM pattern",
+             "Weft (yarn dyed)", "Weft read from", "Print method", "Print method read from", "Route read from", "PLM pattern",
              "PLM pattern details"]
     res = pd.concat([res, inp[extra]], axis=1).rename(columns={"Quoted Rs/m": "PO price Rs/m",
                                                                 "Gap Rs/m": "PO minus should-cost Rs/m",

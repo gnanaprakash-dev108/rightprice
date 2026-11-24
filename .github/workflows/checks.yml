@@ -1,0 +1,28 @@
+# Runs on every pull request, so nothing is merged unless the engine still matches the V1 workbook
+# and the server still gives the engine's numbers. It deploys nothing.
+name: Checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install packages
+        run: pip install -r requirements.txt
+      - name: Engine matches the V1 workbook
+        run: python check_engine.py
+      - name: Server gives the engine's numbers
+        run: python check_server.py
+      - name: Front end script parses
+        run: node --check web/app.js

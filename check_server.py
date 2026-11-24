@@ -44,6 +44,10 @@ def main():
                 ["/api/table/" + s for s in meta["tables"]]:
             check(f"GET {path}", c.get(path).status_code == 200)
         check("Unknown table refused", c.get("/api/table/Nope").status_code == 404)
+        home = c.get("/")
+        check("Page asks the browser for the current script, not a stored copy",
+              "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"
+              and c.get("/app.js").headers["cache-control"] == "no-cache")
         tpl = c.get("/api/template").content
         b = c.post("/api/bulk", files={"file": ("t.xlsx", io.BytesIO(tpl))}).json()
         cols = b["results"]["columns"]
@@ -51,6 +55,19 @@ def main():
               len(b["results"]["rows"]) == 1 and b["rejected"] == 0
               and abs(b["results"]["rows"][0][cols.index("Should-cost Rs/m")] - 181.40) < 0.01)
         check("Cost sheet download", c.post("/api/cost-sheet", json=masters.EXAMPLE_ROW).content[:2] == b"PK")
+        check("No warning on the example fabric", r["warnings"] == [])
+        odd = c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Finished width (in)": 5, "Reed space (in)": 4})).json()
+        check("Implausible width and reed space warned about", len(odd["warnings"]) >= 2, str(len(odd["warnings"])))
+
+        # saved costings: saved with their choices, listed newest first, deleted by id
+        sid = c.post("/api/save", json=dict(masters.EXAMPLE_ROW, **{"Quoted price (Rs/m)": 200})).json()["id"]
+        d = c.get("/api/dashboard").json()
+        check("Saved costing listed with its choices",
+              d["saved_count"] == 1 and d["saved_items"][0]["id"] == sid and d["saved_items"][0]["inputs"]["EPI"] == 132
+              and "Inputs" not in d["saved"]["columns"])
+        check("Saved costing deleted", c.delete(f"/api/saved/{sid}").status_code == 200
+              and c.get("/api/dashboard").json()["saved_count"] == 0)
+        check("Deleting it twice refused", c.delete(f"/api/saved/{sid}").status_code == 404)
 
         # editing the rate master (on the temporary copy)
         yr = c.get("/api/table/Yarn_Rates").json()
