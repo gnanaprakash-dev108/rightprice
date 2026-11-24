@@ -313,6 +313,16 @@ Rs 750, 900, 1,200. They are guesses, not market figures. Weaving, sizing, dyein
 rates for those fabrics are the ones measured on 100% cotton. None of this has been checked against
 a purchase price.
 
+**Added 24 Nov 2026, evening:**
+
+- A saved costing keeps the choices behind it. From the dashboard it can be opened again in Cost a
+  fabric, where it is re-costed on the rates of the day, or deleted.
+- The cost view warns when what was typed looks like a slip: width outside 30 to 130 inches, EPI or
+  PPI outside 20 to 400, reed space narrower than the cloth or more than 35% wider, weight outside
+  40 to 600 g/m2. The cost is still shown.
+- `.github/workflows/checks.yml` runs `check_engine.py`, `check_server.py` and a parse of the front
+  end script on every pull request. It deploys nothing.
+
 **Open on the front end:**
 
 1. Real yarn rates for poly cotton and linen, and process rates for those fabrics.

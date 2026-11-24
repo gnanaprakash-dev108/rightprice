@@ -223,19 +223,25 @@ PAGES.dashboard = async () => {
     h("div", { class: "meta" }, y.market_low !== null ? `Market Rs ${fmt(y.market_low, 0)}–${fmt(y.market_high, 0)} · ` : "", "rate of ", day(y.date))));
 
   const cols = d.saved.columns, ix = n => cols.indexOf(n);
-  const savedCards = d.saved.rows.slice(0, 8).map(r => {
-    const gap = r[ix("Gap %")];
+  const savedCards = d.saved.rows.slice(0, 12).map((r, n) => {
+    const gap = r[ix("Gap %")], item = (d.saved_items || [])[n] || {};
+    const open = item.inputs ? h("button", { class: "btn small", type: "button", onclick: () => { state.sel = selFromRow(item.inputs); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); location.hash = "#cost"; } }, "Open") : null;
+    const del = item.id ? h("button", { class: "btn small", type: "button", onclick: async e => {
+      if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Delete: sure?"; setTimeout(() => { if (e.target.isConnected) { e.target.dataset.sure = ""; e.target.textContent = "Delete"; } }, 4000); return; }
+      try { await api("/api/saved/" + item.id, { method: "DELETE" }); state.dash = null; toast("Saved costing deleted"); route(); } catch (err) { toast(err.message); }
+    } }, "Delete") : null;
     return h("div", { class: "card price-card" },
       h("div", { class: "name" }, String(r[ix("Fabric code")] ?? "")),
       h("div", { class: "big num" }, `Rs ${fmt(r[ix("Should-cost Rs/m")])}/m`),
       blank(gap) ? h("span", { class: "tag flat" }, "no quote") : h("span", { class: "tag " + (gap > 0 ? "down" : "up") }, `${gap > 0 ? "▲" : "▼"} quote ${Math.abs(gap).toFixed(1)}% ${gap > 0 ? "above" : "below"}`),
-      h("div", { class: "meta" }, [r[ix("Description")], r[ix("Supplier")], blank(r[ix("Saved on")]) ? null : "saved " + day(r[ix("Saved on")])].filter(v => !blank(v)).join(" · ")));
+      h("div", { class: "meta" }, [r[ix("Description")], r[ix("Supplier")], blank(r[ix("Saved on")]) ? null : "saved " + day(r[ix("Saved on")])].filter(v => !blank(v)).join(" · ")),
+      open || del ? h("div", { class: "row-actions", style: "margin-top:10px" }, open, del) : null);
   });
   return [
     ...pageHead("Dashboard", "Saved costings, the yarn and cotton rates behind them, and how the yarn master sits against the market."),
     stats,
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Saved costings"), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric")),
-      savedCards.length ? h("div", { class: "grid cards" }, savedCards) : h("p", { class: "empty" }, "Nothing saved yet. Cost a fabric and press Save to dashboard."),
+      savedCards.length ? h("div", { class: "grid cards" }, savedCards) : h("p", { class: "empty" }, "Nothing saved yet. Cost a fabric and press Save to dashboard. A saved costing can be opened again and re-costed on the rates of the day."),
       d.saved.rows.length ? h("details", { style: "margin-top:14px" }, h("summary", { style: "cursor:pointer;color:var(--muted)" }, `All ${d.saved.rows.length} saved costings as a table`), h("div", { style: "margin-top:12px" }, dataTable(d.saved, { filter: true, label: "Saved costings" }))) : null),
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Cotton yarn rates in the yarn master"), h("a", { href: "#yarn" }, "All yarn prices")),
       h("div", { class: "grid cards" }, yarnCards)),
@@ -465,8 +471,9 @@ function costView(res, sel) {
     h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Line"), h("th", { class: "n" }, "Rs/m"), h("th", { class: "n" }, "Share"), h("th", {}, "How it is worked out"))), h("tbody", {}, lineRows))));
   const used = { columns: ["Item", "Choice", "Value", "Unit", "Basis"], rows: res.rates_used.map(u => [u.Item, u.Choice, u.Value, u.Unit, u.Basis]) };
   const ratesView = h("details", { class: "card" }, h("summary", {}, "Rates used and where each came from"), dataTable(used, { label: "Rates used" }));
+  const odd = (res.warnings || []).length ? h("div", { class: "notice err", role: "alert" }, h("b", {}, "Check what was typed. "), res.warnings.join(" ")) : null;
   const warn = res.placeholders.length ? h("div", { class: "notice", role: "status" }, h("b", {}, "Provisional. "), "Placeholder rates were used for: " + res.placeholders.join(", ") + ". These are starting guesses with no data behind them.") : null;
-  return [hero, warn, chart, tableView, ratesView].filter(Boolean);
+  return [hero, odd, warn, chart, tableView, ratesView].filter(Boolean);
 }
 
 // the steps a chart draws: groups, or every sub-cost, each with its group's colour

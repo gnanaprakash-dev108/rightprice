@@ -10,6 +10,7 @@ intake still live there). This server starts Streamlit beside itself and passes 
 import asyncio
 import datetime as dt
 import io
+import json
 import math
 import os
 import subprocess
@@ -106,7 +107,7 @@ def records(df, limit=None):
 
 def read_log():
     if os.path.exists(masters.LOG_PATH):
-        return pd.read_csv(masters.LOG_PATH)
+        return pd.read_csv(masters.LOG_PATH, dtype={"Id": str})
     return pd.DataFrame(columns=LOG_COLS)
 
 
@@ -115,8 +116,26 @@ def placeholder_count(m):
                for df in m.values() if "Basis" in df.columns)
 
 
+def sanity(inp, res):
+    """Things a typing slip usually causes. The cost is still shown; these say why it may be wrong."""
+    w, out = inp["width_in"], []
+    if not 30 <= w <= 130:
+        out.append(f"Finished width {w:g} inch is outside 30 to 130. Widths are in inches, not centimetres.")
+    for name, key in (("EPI", "epi"), ("PPI", "ppi")):
+        if not 20 <= inp[key] <= 400:
+            out.append(f"{name} {inp[key]:g} is outside 20 to 400.")
+    if inp["reed_in"] < w:
+        out.append(f"Reed space {inp['reed_in']:g} inch is narrower than the finished width {w:g} inch.")
+    elif inp["reed_in"] > w * 1.35:
+        out.append(f"Reed space {inp['reed_in']:g} inch is more than 35% wider than the finished width {w:g} inch.")
+    if not 40 <= res["gsm"] <= 600:
+        out.append(f"The fabric works out at about {res['gsm']:.0f} g/m2, outside 40 to 600. Check the counts, EPI and PPI.")
+    return out
+
+
 def result_json(res):
     return {
+        "warnings": sanity(res["inputs"], res),
         "total_per_m": res["total_per_m"], "per_kg": res["per_kg"], "gsm": res["gsm"],
         "finished_g_per_m": res["finished_g_per_m"], "quote": res["quote"], "gap": res["gap"],
         "gap_pct": res["gap_pct"], "placeholders": res["placeholders"],
@@ -184,14 +203,26 @@ def cost_sheet(sel: dict = Body(...)):
 @app.post("/api/save")
 def save(sel: dict = Body(...)):
     res = cost_or_400(sel, get_masters())
-    row = {"Saved on": dt.date.today().isoformat(), "Fabric code": sel.get("Fabric code"),
+    now = dt.datetime.now()
+    row = {"Saved on": now.date().isoformat(), "Fabric code": sel.get("Fabric code"),
            "Description": sel.get("Description"), "Supplier": sel.get("Supplier"),
            "Should-cost Rs/m": round(res["total_per_m"], 2), "Should-cost Rs/kg": round(res["per_kg"], 1),
            "Quoted Rs/m": res["quote"], "Gap Rs/m": None if res["gap"] is None else round(res["gap"], 2),
-           "Gap %": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1)}
+           "Gap %": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
+           # the choices themselves, so the costing can be opened again and re-costed on today's rates
+           "Id": f"{now:%Y%m%d%H%M%S%f}", "Inputs": json.dumps(sel)}
     os.makedirs(os.path.dirname(masters.LOG_PATH), exist_ok=True)
     pd.concat([read_log(), pd.DataFrame([row])], ignore_index=True).to_csv(masters.LOG_PATH, index=False)
-    return {"saved": True}
+    return {"saved": True, "id": row["Id"]}
+
+
+@app.delete("/api/saved/{saved_id}")
+def delete_saved(saved_id: str):
+    log = read_log()
+    if "Id" not in log.columns or not (log["Id"].astype(str) == saved_id).any():
+        raise HTTPException(404, "That saved costing is no longer there")
+    log[log["Id"].astype(str) != saved_id].to_csv(masters.LOG_PATH, index=False)
+    return {"deleted": True}
 
 
 @app.get("/api/dashboard")
@@ -221,7 +252,17 @@ def dashboard():
         pos = None if lo is None else ("inside" if lo <= rate <= hi else ("above" if rate > hi else "below"))
         yarns.append({"key": y["Yarn key"], "rate": rate, "date": clean(y["Rate date"]), "basis": str(y["Basis"]),
                       "market_low": lo, "market_high": hi, "position": pos})
-    return {"saved": records(log.iloc[::-1]), "saved_count": len(log),
+    shown = log.iloc[::-1].reset_index(drop=True)
+    items = []          # one per saved costing, newest first: its id and choices where it has them
+    for _, r in shown.iterrows():
+        raw = r.get("Inputs")
+        try:
+            inputs = json.loads(raw) if isinstance(raw, str) and raw else None
+        except ValueError:
+            inputs = None
+        items.append({"id": None if pd.isna(r.get("Id")) else str(r.get("Id")).split(".")[0], "inputs": inputs})
+    return {"saved": records(shown[[c for c in LOG_COLS if c in shown.columns]]), "saved_items": items,
+            "saved_count": len(log),
             "avg_gap_pct": None if gaps.empty else float(gaps.mean()), "cotton": cotton, "yarns": yarns,
             "placeholders": placeholder_count(m), "benchmarks": records(m["Supplier_Benchmarks"])}
 
