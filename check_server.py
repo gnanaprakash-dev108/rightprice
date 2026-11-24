@@ -44,6 +44,10 @@ def main():
                 ["/api/table/" + s for s in meta["tables"]]:
             check(f"GET {path}", c.get(path).status_code == 200)
         check("Unknown table refused", c.get("/api/table/Nope").status_code == 404)
+        home = c.get("/")
+        check("Page asks the browser for the current script, not a stored copy",
+              "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"
+              and c.get("/app.js").headers["cache-control"] == "no-cache")
         tpl = c.get("/api/template").content
         b = c.post("/api/bulk", files={"file": ("t.xlsx", io.BytesIO(tpl))}).json()
         cols = b["results"]["columns"]

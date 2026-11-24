@@ -567,9 +567,21 @@ async def classic_ws(ws: WebSocket, path: str):
 
 
 # ------------------------------------------------------------------ the front end
+class FreshFiles(StaticFiles):
+    """Static files the browser must check before reusing, so a new version shows without a hard refresh."""
+    async def get_response(self, path, scope):
+        r = await super().get_response(path, scope)
+        r.headers["Cache-Control"] = "no-cache"
+        return r
+
+
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(WEB, "index.html"), headers={"Cache-Control": "no-cache"})
+    # the script and stylesheet addresses carry the time they were last changed: a new deploy is a new address
+    html = open(os.path.join(WEB, "index.html"), encoding="utf8").read()
+    for name in ("app.css", "app.js"):
+        html = html.replace(f'"{name}"', f'"{name}?v={int(os.path.getmtime(os.path.join(WEB, name)))}"')
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
 
-app.mount("/", StaticFiles(directory=WEB), name="web")
+app.mount("/", FreshFiles(directory=WEB), name="web")
