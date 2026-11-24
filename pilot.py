@@ -4,10 +4,20 @@ Reads the SAP purchase order export and the sourcing platform's PLM fabric code
 list extract (data/plm_specs_for_po.csv, made by plm_extract.py), keeps priced rupee-per-metre bulk orders whose material code
 has specs, costs the 100% cotton wovens with the current rate master and writes
 pilot/Pilot_Results.xlsx.   Run: python pilot.py
+
+Mill rate card inputs, and what the PLM list and the purchase orders can tell us about each:
+  Finish              read from the PLM finish name (FINISH_ALIASES below)
+  Rate card quantity  read from the purchase-order metres of the fabric code (quantity_band)
+  Weft (yarn dyed)    partly: a check or a horizontal stripe has a dyed weft. PLM does not say
+                      for vertical stripes, solids and textures; those are left as dyed.
+  Print method        not in PLM. Every print is costed as rotary; the sheet 'Rate card steps'
+                      shows the result if every print were digital.
+  Dobby shafts, top beam   not in PLM. Left at up to 8 shafts, no top beam.
 """
 import os
 import re
 import warnings
+import zlib
 
 import pandas as pd
 
@@ -85,6 +95,50 @@ PLM_ROUTE = {"yarn dyed": "Yarn Dyed", "piece dyed": "Piece Dyed", "print": "Pri
              "bleached": "RFD / Bleached"}
 
 
+# PLM finish spellings that are not the tool's own. A soft finish has no price on the rate card,
+# so 'soft + ETI' is costed as ETI.
+FINISH_ALIASES = {"regular": "Normal", "normal": "Normal", "etieasytoiron": "F- ETI Easy to Iron",
+                  "eti+easytoiron": "F- ETI Easy to Iron", "soft+etifinish": "F- ETI Easy to Iron",
+                  "liquidammoniamoistcure": "F- LAMC Liquid Ammonia Moist Cure",
+                  "liquidammonia+mc": "F- LAMC Liquid Ammonia Moist Cure",
+                  "liquidammonia+easycare": "F- LA+Easy Care", "la+eti+soft": "F- LA + ETI",
+                  "la+soft": "F- LA Liquid Ammonia", "brushed1side": "F- Brushed-1 side", "peach": "F- PEACH",
+                  "onesidepeach": "F- PEACH", "peach+frfd": "F- PEACH", "carbonpeach": "F- Carbonium",
+                  "emerise": "F- Emerised", "silkprotein": "F- Silk Protein / Silk Touch"}
+QUANTITY_BANDS = [(500, 600, "500 to 599 m"), (600, 700, "600 to 699 m"), (700, 800, "700 to 799 m"),
+                  (800, 2000, "800 to 1,999 m"), (2000, 4000, "2,000 to 3,999 m"),
+                  (4000, 6000.5, "4,000 to 6,000 m"), (6000.5, 1e12, "Above 6,000 m")]
+NO_BAND = "Not applied"
+FOCUS = [("Yarn Dyed", "Plain"), ("Printed", "Twill"), ("Printed", "Plain")]   # the known over-costed groups
+
+
+def held_back(code):
+    """The third of the fabrics kept out of calibration, chosen by a fixed rule on the fabric code."""
+    return zlib.crc32(str(code).encode()) % 3 == 0
+
+
+def quantity_band(route, metres):
+    """Rate card quantity band for a fabric, or NO_BAND where the card has no figure.
+
+    The card prices small lots for yarn dyed only, from 500 m; it takes no print or piece-dyed
+    order below 1,000 m. Fabrics outside the card keep the order size slab.
+    """
+    floor = 500 if route == "Yarn Dyed" else 1000
+    if metres < floor:
+        return NO_BAND
+    return next(name for lo, hi, name in QUANTITY_BANDS if lo <= metres < hi)
+
+
+def weft_from_plm(s):
+    """(Weft option, what it rests on) for a yarn dyed fabric, from the PLM pattern fields."""
+    text = " ".join([s["pattern_name"], s["patterndetails_name"]]).lower()
+    if "chambray" in " ".join([text, s["weavetype_name"], s["genericname_name"]]).lower():
+        return "Undyed", "Assumed: a chambray has an undyed weft unless the mill says otherwise"
+    if "check" in text or "horizontal" in text:
+        return "Dyed", "PLM pattern: a check or a horizontal stripe has a dyed weft"
+    return "Dyed", "PLM does not say; left as dyed"
+
+
 def norm(t):
     return re.sub(r"[^a-z0-9+]", "", str(t).lower())
 
@@ -114,11 +168,7 @@ def build_inputs():
     ybc = yarn_lookup(m)
     tool_weaves = set(m["Weaves"]["Weave"])
     fin_by_norm = {norm(f).lstrip("f"): f for f in m["Finishing_Rates"]["Finish"]}
-    fin_by_norm.update({"regular": "Normal", "normal": "Normal", "etieasytoiron": "F- ETI Easy to Iron",
-                        "liquidammoniamoistcure": "F- LAMC Liquid Ammonia Moist Cure",
-                        "liquidammonia+mc": "F- LAMC Liquid Ammonia Moist Cure",
-                        "liquidammonia+easycare": "F- LA+Easy Care", "la+eti+soft": "F- LA + ETI",
-                        "brushed1side": "F- Brushed-1 side", "peach": "F- PEACH"})
+    fin_by_norm.update(FINISH_ALIASES)
 
     po = pd.read_excel(PO_FILE)
     po = po[po["Purchasing Document"].notna()]
@@ -149,7 +199,7 @@ def build_inputs():
         route = PLM_ROUTE.get(s["dyemethod_name"].lower())
         wg = grouping.weave_group(s["weavetype_name"])
         weave = s["weavetype_name"] if s["weavetype_name"] in tool_weaves else GROUP_WEAVE.get(wg)
-        warp, weft = plm_count(s["warpcount"], ybc), plm_count(s["weftcount"], ybc)
+        warp, weft_yarn = plm_count(s["warpcount"], ybc), plm_count(s["weftcount"], ybc)
         try:
             epi, ppi, w = float(s["epi"] or 0), float(s["ppi"] or 0), float(s["finishedwidth"] or 0)
         except ValueError:
@@ -166,7 +216,7 @@ def build_inputs():
             why = "EPI or PPI missing"
         elif not 30 <= width <= 75:
             why = "Width missing or not plausible"
-        elif warp is None or weft is None:
+        elif warp is None or weft_yarn is None:
             why = f"Count not in yarn master: {s['warpcount'] or 'blank'} x {s['weftcount'] or 'blank'}"
         if why:
             reasons.append({"Fabric code": code, "Reason": why, "Content": s["blend_name"],
@@ -175,16 +225,68 @@ def build_inputs():
                             "PO metres": g.loc[code, "qty"], "PO price Rs/m": round(g.loc[code, "PO price Rs/m"], 2)})
             continue
         fkey = norm(s["finish_name"]).lstrip("f")
+        yd, metres = route == "Yarn Dyed", g.loc[code, "qty"]
+        weft, weft_basis = weft_from_plm(s) if yd else (None, "")
+        over_print = yd and "with print" in s["pattern_name"].lower()
         rows.append({"Fabric code": code,
                      "Description": f"{s['blend_name']} {s['warpcount']}x{s['weftcount']} / {epi:g}x{ppi:g} {s['weavetype_name']}",
                      "Supplier": g.loc[code, "Supplier"], "Route": route, "Weave": weave,
-                     "Finish": fin_by_norm.get(fkey, "Normal"), "Warp yarn": warp, "Weft yarn": weft,
+                     "Finish": fin_by_norm.get(fkey, "Normal"), "Warp yarn": warp, "Weft yarn": weft_yarn,
+                     "Weft (yarn dyed)": weft, "Weft read from": weft_basis,
+                     "Print method": "Rotary" if route == "Printed" or over_print else None,
+                     "Print method read from": "Not in PLM; rotary assumed" if route == "Printed" or over_print else "",
+                     "Rate card quantity": quantity_band(route, metres), "PLM pattern": s["pattern_name"],
+                     "PLM pattern details": s["patterndetails_name"],
                      "EPI": epi, "PPI": ppi, "Finished width (in)": round(width, 1),
                      "Quoted price (Rs/m)": round(g.loc[code, "PO price Rs/m"], 2),
                      "Finish as written": s["finish_name"], "Finish mapped": fkey in fin_by_norm,
                      "PO metres": g.loc[code, "qty"], "PO lines": g.loc[code, "lines"]})
 
     return m, pd.DataFrame(rows), pd.DataFrame(reasons), funnel
+
+
+def fit(gaps):
+    """Fit of a set of gaps given in percent."""
+    g = pd.Series(gaps).dropna()
+    return {"Fabrics": len(g), "Median gap %": round(g.median(), 1) if len(g) else None,
+            "Within 5%": round((g.abs() <= 5).mean(), 3) if len(g) else None,
+            "Within 10%": round((g.abs() <= 10).mean(), 3) if len(g) else None,
+            "Within 20%": round((g.abs() <= 20).mean(), 3) if len(g) else None}
+
+
+def fit_table(ok, label=None):
+    """Fit overall, on the held-back third, and for the known over-costed groups."""
+    sets = [("All costed fabrics", ok), ("Held-back third", ok[ok["Fabric code"].map(held_back)])]
+    sets += [(f"{r}, {w.lower()}", ok[(ok["Route"] == r) & (ok["Weave group"] == w)]) for r, w in FOCUS]
+    rows = [{"Set": name, **fit(d["PO above should-cost %"])} for name, d in sets]
+    out = pd.DataFrame(rows)
+    if label is not None:
+        out.insert(0, "Inputs", label)
+    return out
+
+
+def steps(inp, m, wg):
+    """The same fabrics costed with the rate card inputs switched on one at a time."""
+    slab_only = inp.assign(**{"Rate card quantity": None})
+    all_dyed = slab_only.assign(**{"Weft (yarn dyed)": None})
+    printed = inp["Print method"].notna()
+    unknown = inp["Weft read from"].str.startswith("PLM does not say")
+    variants = [
+        ("1. Print rotary, finishes from the card; weft dyed, order size slabs", all_dyed),
+        ("2. ...and weft from the PLM pattern", slab_only),
+        ("3. ...and rate card quantity bands in place of the slabs (the pilot result)", inp),
+        ("What if: as 3, every print digital", inp.assign(**{"Print method": inp["Print method"].where(~printed, "Digital")})),
+        ("What if: as 3, weft undyed wherever PLM does not say",
+         inp.assign(**{"Weft (yarn dyed)": inp["Weft (yarn dyed)"].where(~unknown, "Undyed")})),
+    ]
+    out = []
+    for label, v in variants:
+        r = masters.cost_many(v, m)
+        r = pd.concat([r, v[["Route", "Weave"]]], axis=1)
+        r = r[r["Error"] == ""].rename(columns={"Gap %": "PO above should-cost %"})
+        r["Weave group"] = r["Weave"].map(wg)
+        out.append(fit_table(r, label))
+    return pd.concat(out, ignore_index=True)
 
 
 def main():
@@ -199,12 +301,16 @@ def main():
 
     res = masters.cost_many(inp, m)
     extra = ["Route", "Weave", "Finish", "Finish as written", "Finish mapped", "Warp yarn", "Weft yarn", "EPI",
-             "PPI", "Finished width (in)", "PO metres", "PO lines"]
+             "PPI", "Finished width (in)", "PO metres", "PO lines", "Order size", "Rate card quantity",
+             "Weft (yarn dyed)", "Weft read from", "Print method", "Print method read from", "PLM pattern",
+             "PLM pattern details"]
     res = pd.concat([res, inp[extra]], axis=1).rename(columns={"Quoted Rs/m": "PO price Rs/m",
                                                                 "Gap Rs/m": "PO minus should-cost Rs/m",
                                                                 "Gap %": "PO above should-cost %"})
     ok = res[res["Error"] == ""].copy()
-    ok["Weave group"] = ok["Weave"].map(m["Weaves"].set_index("Weave")["Weave group"])
+    wg = m["Weaves"].set_index("Weave")["Weave group"]
+    ok["Weave group"] = ok["Weave"].map(wg)
+    ok["Held back"] = ok["Fabric code"].map(held_back)
     ok["Excess Rs"] = ok["PO minus should-cost Rs/m"] * ok["PO metres"]
 
     def summarise(df, by):
@@ -213,18 +319,35 @@ def main():
                                      "Median should-cost Rs/m": ("Should-cost Rs/m", "median"),
                                      "Median gap %": ("PO above should-cost %", "median"),
                                      "Within 5%": ("PO above should-cost %", lambda s: (s.abs() <= 5).mean()),
-                                     "Within 10%": ("PO above should-cost %", lambda s: (s.abs() <= 10).mean())}
+                                     "Within 10%": ("PO above should-cost %", lambda s: (s.abs() <= 10).mean()),
+                                     "Within 20%": ("PO above should-cost %", lambda s: (s.abs() <= 20).mean())}
                                   ).round(3).sort_values("Fabrics", ascending=False).reset_index()
 
-    overall = pd.DataFrame([{"Fabrics costed": len(ok), "Median gap %": ok["PO above should-cost %"].median(),
-                             "Within 5%": (ok["PO above should-cost %"].abs() <= 5).mean(),
-                             "Within 10%": (ok["PO above should-cost %"].abs() <= 10).mean(),
-                             "Within 20%": (ok["PO above should-cost %"].abs() <= 20).mean(),
-                             "PO above should-cost (share)": (ok["PO above should-cost %"] > 0).mean()}]).round(3)
+    overall = fit_table(ok)
+    overall["PO above should-cost (share)"] = [
+        round((d > 0).mean(), 3) for d in (
+            ok["PO above should-cost %"], ok[ok["Held back"]]["PO above should-cost %"],
+            *[ok[(ok["Route"] == r) & (ok["Weave group"] == w)]["PO above should-cost %"] for r, w in FOCUS])]
+    step_tbl = steps(inp, m, wg)
+    yd = ok[ok["Route"] == "Yarn Dyed"]
+    read = pd.concat([
+        pd.DataFrame({"Input": "Weft (yarn dyed)", "Set as": yd["Weft (yarn dyed)"], "Read from": yd["Weft read from"]}),
+        pd.DataFrame({"Input": "Print method", "Set as": ok["Print method"], "Read from": ok["Print method read from"]}
+                     ).dropna(subset=["Set as"]),
+        pd.DataFrame({"Input": "Rate card quantity", "Set as": ok["Rate card quantity"],
+                      "Read from": "Purchase-order metres of the fabric code, 1 Aug to 23 Nov"}),
+        pd.DataFrame({"Input": "Finish", "Set as": ok["Finish"].where(ok["Finish mapped"], "Normal (finish not recognised)"),
+                      "Read from": "PLM finish name"}),
+        pd.DataFrame({"Input": "Dobby shafts and top beam", "Set as": "Up to 8 shafts, no top beam",
+                      "Read from": "Not in PLM; left at no charge"}, index=ok[ok["Weave group"] == "Dobby/Matt"].index),
+    ]).groupby(["Input", "Set as", "Read from"], sort=False).size().reset_index(name="Fabrics")
+
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with pd.ExcelWriter(OUT, engine="openpyxl") as xw:
         pd.DataFrame(funnel, columns=["Step", "Fabrics"]).to_excel(xw, sheet_name="Funnel", index=False)
         overall.to_excel(xw, sheet_name="Overall", index=False)
+        step_tbl.to_excel(xw, sheet_name="Rate card steps", index=False)
+        read.to_excel(xw, sheet_name="Rate card inputs", index=False)
         summarise(ok, ["Route", "Weave group"]).to_excel(xw, sheet_name="By route and weave", index=False)
         summarise(ok, "Supplier").to_excel(xw, sheet_name="By supplier", index=False)
         ok.sort_values("PO above should-cost %", ascending=False).to_excel(xw, sheet_name="Fabrics", index=False)
@@ -233,8 +356,12 @@ def main():
         if len(rej):
             rej["Reason"].str.replace(r":.*", "", regex=True).value_counts().rename_axis("Reason")\
                 .reset_index(name="Fabrics").to_excel(xw, sheet_name="Not costed summary", index=False)
+    pd.set_option("display.width", 250)
+    pd.set_option("display.max_colwidth", 90)
     print(pd.DataFrame(funnel, columns=["Step", "Fabrics"]).to_string(index=False))
     print(overall.to_string(index=False))
+    print(step_tbl.to_string(index=False))
+    print(read.to_string(index=False))
     print(summarise(ok, ["Route", "Weave group"]).to_string(index=False))
     print(summarise(ok, "Supplier").head(15).to_string(index=False))
     if len(rej):
@@ -244,6 +371,7 @@ def main():
         print("Counts in fabrics that could not be costed:", miss.value_counts().head(30).to_dict())
         print("Unmapped dye methods:", rej[rej["Reason"].str.startswith("Dye")]["Dye method"].value_counts().to_dict())
     print(ok["PO above should-cost %"].describe().round(1).to_string())
+    print("Costing errors:", int((res["Error"] != "").sum()), res[res["Error"] != ""]["Error"].value_counts().head(5).to_dict())
     print("Finish not mapped:", int((~ok["Finish mapped"]).sum()), ok[~ok["Finish mapped"]]["Finish as written"].value_counts().head(12).to_dict())
     print("Saved", OUT)
 

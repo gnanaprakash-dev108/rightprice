@@ -2,7 +2,12 @@
 
 Received 23 November 2026, pasted as text. Mill not yet confirmed ("Arvisilk" suggests Arvind).
 All figures are rupees; the "$" signs in the original were cell formatting.
-Not yet built into the tool.
+
+Built into the tool on 24 November 2026 as optional upcharges (sections 2 to 7); see the end of this
+page for how each section is used. Section 1 is not used in the calculation.
+
+Unconfirmed, and assumed throughout: which mill the card is from is not known, and the per-end and
+per-pick figures are read as the price change for one extra end or pick.
 
 ## 1. End and pick
 
@@ -80,3 +85,31 @@ Not applicable for 40s quality, split deliveries or EOSS.
 |---|---|
 | Rotary print | 18 |
 | Digital print | 55 |
+
+## How the tool uses the card
+
+| Section | In the tool | Rate master sheet |
+|---|---|---|
+| 1. End and pick | Not used. Kept for comparison with the tool's own cost of one end or pick | none |
+| 2. Dobby | Drop-downs "Dobby shafts" and "Top beam". The six figures are shafts (0, 8, 10) plus top beam (10) | `Dobby_Charges` |
+| 3. Finish | The "Finish" drop-down. Finishing per kg stays at the Normal rate; the named finish adds the card's Rs per metre | `Finishing_Rates`, column "Upcharge Rs per metre" |
+| 4. Minimum order upcharge | Drop-down "Rate card quantity", bands 500 to 799 m, yarn dyed only | `Quantity_Terms` |
+| 5. Chambray | Drop-down "Weft (yarn dyed)": Dyed, Undyed, or "Chambray, dyed weft" at Rs 10 per metre in place of the per-kg dyeing | `Weft_Options` |
+| 6. Volume discount | Drop-down "Rate card quantity", bands from 2,000 m. No discount when warp and weft are both 40s | `Quantity_Terms` |
+| 7. Print upcharges | Drop-down "Print method". Replaces the single printing rate per kg; the cloth still carries preparation at the RFD rate (a placeholder) | `Print_Methods`, `Piece_Dyeing` |
+
+Rules that follow from the card:
+
+- Every item is rupees per metre on the price and is not marked up. The small-lot percentage is taken
+  on the whole price.
+- A rate card quantity band takes the place of the order size slab (Settings: "Order size slabs with
+  rate card quantity" = Replaced). The slabs were measured from purchase orders without the card and
+  already hold whatever small-lot premium and volume discount the mills gave, so charging both would
+  count quantity twice.
+- Combinations the card does not price as one item (LA + ETI, LA + Easy Care, LA + Arvisilk,
+  LA + Peach, LA + Silk Protein, LA + MC + Silk Protein) are the sum of their parts and are marked
+  Placeholder.
+- "Not applicable for 40s quality" is read as warp and weft both 40s single. Split deliveries and
+  EOSS cannot be seen by the tool; leave the band at 800 to 1,999 m for those.
+- The card takes no print or piece-dyed order below 1,000 m, so it has no price for one. Use the
+  order size slab for those.

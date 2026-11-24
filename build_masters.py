@@ -224,9 +224,11 @@ def build(force=False):
         print("Rate master already exists, left untouched:", OUT)
         return OUT
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    import rate_card
+    sheets = {name: fn() for name, fn in SHEETS.items()}
+    rate_card.apply(sheets)          # the mill rate card tables, same as python rate_card.py adds
     with pd.ExcelWriter(OUT, engine="openpyxl") as xw:
-        for name, fn in SHEETS.items():
-            df = fn()
+        for name, df in sheets.items():
             df.to_excel(xw, sheet_name=name, index=False)
             ws = xw.sheets[name]
             for i, col in enumerate(df.columns, start=1):

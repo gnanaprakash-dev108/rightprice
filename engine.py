@@ -6,11 +6,17 @@ Same arithmetic as 'Should be Cost V1 23rd Nov.xlsx', corrected method:
   base      = yarn + yarn dyeing + sizing + weaving + finishing + piece dyeing
   price     = base / (1-shrinkage) x (1 + process wastage + overhead) x (1 + margin) + extra
 
+Mill rate card items sit on top of that price and are not marked up:
+  price     = (price + print + dobby shafts + top beam + flat weft dyeing + finish upcharge)
+              x (1 + small-lot upcharge) - volume discount
+All of them default to zero, which leaves the V1 arithmetic untouched.
+
 Everything here is plain numbers in, plain numbers out. Turning drop-down
 choices into rates is done in masters.resolve().
 """
 
 K_DEFAULT = 0.00059  # kg per end-metre for Ne 1, as in the V1 workbook
+UPCHARGE_BUCKET = "Upcharges and quantity terms"
 
 
 def to_ne(count, system="Ne"):
@@ -43,6 +49,10 @@ def compute(inp):
     weft_wastage, weaving_rate, sizing_rate, finishing_rate, piece_dye_rate,
     extra_per_m, shrinkage, process_wastage, overhead, margin, k.
     Optional: weft_crimp + weft_method='Old' reproduces the old sheets.
+    Optional rate card items, all zero unless given: print_per_m, dobby_shaft_per_m,
+    top_beam_per_m, weft_dye_per_m, finish_upcharge_per_m (Rs per metre),
+    small_lot_pct (share of price), volume_discount_per_m (Rs per metre).
+    Optional 'labels': {same keys: text} naming the choice behind each of them.
     """
     k = _n(inp, "k", K_DEFAULT)
     epi, ppi = _n(inp, "epi"), _n(inp, "ppi")
@@ -86,7 +96,20 @@ def compute(inp):
     pw_cost = subtotal * pw
     oh_cost = subtotal * oh
     margin_cost = (subtotal + pw_cost + oh_cost) * margin
-    total = subtotal + pw_cost + oh_cost + margin_cost + extra
+    marked_up = subtotal + pw_cost + oh_cost + margin_cost + extra
+
+    # Mill rate card items: rupees per metre on the price, then the quantity terms.
+    print_pm, shaft_pm = _n(inp, "print_per_m"), _n(inp, "dobby_shaft_per_m")
+    beam_pm, weft_pm = _n(inp, "top_beam_per_m"), _n(inp, "weft_dye_per_m")
+    finish_pm = _n(inp, "finish_upcharge_per_m")
+    small_lot, discount = _n(inp, "small_lot_pct"), _n(inp, "volume_discount_per_m")
+    before_quantity = marked_up + print_pm + shaft_pm + beam_pm + weft_pm + finish_pm
+    small_lot_cost = before_quantity * small_lot
+    total = before_quantity + small_lot_cost - discount
+    labels = inp.get("labels") or {}
+
+    def label(key, default):
+        return str(labels.get(key) or default)
 
     # Fabric weight: yarn that stays in the cloth (no wastage), per finished metre.
     fab_warp = epi * width * k * (1 + wc) / warp_ne
@@ -103,12 +126,13 @@ def compute(inp):
             line("Weft yarn", f"{weft_kg:.4f} kg/m x Rs {weft_rate:,.0f}/kg", weft_yarn)]},
         {"name": "Yarn dyeing", "lines": [
             line("Warp yarn dyeing", f"{warp_kg:.4f} kg/m x Rs {warp_dye:,.0f}/kg", warp_dyeing),
-            line("Weft yarn dyeing", f"{weft_kg:.4f} kg/m x Rs {weft_dye:,.0f}/kg", weft_dyeing)]},
+            line("Weft yarn dyeing", label("weft_dye", f"{weft_kg:.4f} kg/m x Rs {weft_dye:,.0f}/kg"), weft_dyeing)]},
         {"name": "Sizing and weaving", "lines": [
             line("Sizing", f"{warp_kg:.4f} kg warp x Rs {sizing_rate:,.0f}/kg", sizing),
             line("Weaving", f"{ppi:g} picks/inch x Rs {weaving_rate:.3f}/pick", weaving)]},
         {"name": "Dyeing and finishing", "lines": [
-            line("Piece dyeing", f"{greige_kg:.4f} kg greige x Rs {pd_rate:,.0f}/kg", piece_dyeing),
+            line(label("piece_dye_name", "Piece dyeing"), f"{greige_kg:.4f} kg greige x Rs {pd_rate:,.0f}/kg",
+                 piece_dyeing),
             line("Finishing", f"{greige_kg:.4f} kg greige x Rs {fin_rate:,.0f}/kg", finishing),
             line("Extra charge", "fixed Rs/m, not marked up", extra)]},
         {"name": "Losses", "lines": [
@@ -118,6 +142,16 @@ def compute(inp):
             line("Mill overhead", f"{oh:.1%} of subtotal", oh_cost)]},
         {"name": "Margin", "lines": [
             line("Mill margin", f"{margin:.1%} on cost", margin_cost)]},
+        {"name": UPCHARGE_BUCKET, "lines": [
+            line("Print method", label("print_per_m", "No print") + ", Rs/m, not marked up", print_pm),
+            line("Dobby shafts", label("dobby_shaft_per_m", "Up to 8") + ", Rs/m, not marked up", shaft_pm),
+            line("Top beam", label("top_beam_per_m", "No") + ", Rs/m, not marked up", beam_pm),
+            line("Weft dyeing, flat charge", label("weft_dye_per_m", "None") + ", Rs/m, not marked up", weft_pm),
+            line("Finish upcharge", label("finish_upcharge_per_m", "None") + ", Rs/m, not marked up", finish_pm),
+            line("Small-lot upcharge", label("small_lot_pct", "Not applied") + f", {small_lot:.1%} of price",
+                 small_lot_cost),
+            line("Volume discount", label("volume_discount_per_m", "Not applied") + ", Rs/m off the price",
+                 -discount)]},
     ]
     for b in buckets:
         b["amount"] = sum(l["amount"] for l in b["lines"])
@@ -129,6 +163,6 @@ def compute(inp):
         "gsm": gsm,
         "finished_g_per_m": finished_kg * 1000,
         "warp_kg": warp_kg, "weft_kg": weft_kg, "greige_kg": greige_kg,
-        "base": base, "subtotal": subtotal,
+        "base": base, "subtotal": subtotal, "marked_up": marked_up,
         "buckets": buckets,
     }
