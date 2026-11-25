@@ -155,6 +155,31 @@ def main():
         check("Cotton price added", ok_add and len(c.get("/api/cotton").json()["points"]) == n0 + 1)
         check("Cotton price without a number refused", c.post("/api/cotton", json={"date": "2026-11-24", "price": ""}).status_code == 400)
 
+        # the negotiation brief (sixth cold review)
+        c.get("/api/insights")
+        def br(**kw):
+            return c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **kw)).json()["brief"]
+        b0 = br(**{"Quoted price (Rs/m)": 192.3})
+        check("Brief: a quote at the type's usual premium is Fair, not Push", b0["stance"] == "fair" and b0["band"]["hi"] > 0.05)
+        check("Brief: no brief for a quote of zero", br(**{"Quoted price (Rs/m)": 0}) is None)
+        lo = br(**{"Quoted price (Rs/m)": 60, "Order quantity (m)": 5000})
+        check("Brief: a quote below the range is 'below', the stake is a saving", lo["stance"] == "below" and lo["at_stake"] < 0)
+        st = br(**{"Quoted price (Rs/m)": 194.996, "Order quantity (m)": 5000})
+        check("Brief: at stake is the printed gap times the quantity", st["at_stake"] == round(st["gap"] * 5000) and st["gap"] == round(st["gap"], 2))
+        edge = br(**{"Quoted price (Rs/m)": b0["settle_up_to"]})
+        over = br(**{"Quoted price (Rs/m)": round(b0["settle_up_to"] + 0.01, 2)})
+        check("Brief: the top of the range is Fair, a paisa over is Push", edge["stance"] == "fair" and over["stance"] == "push" and over["above_band"] == 0.01)
+        check("Negative order quantity refused", c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Quoted price (Rs/m)": 194, "Order quantity (m)": -5})).status_code == 400)
+        q = br(**{"Quoted price (Rs/m)": 194, "Order quantity (m)": 500})
+        check("Brief: quantity outside the band asks first and offers the band that fits",
+              q["stance"] == "ask" and q["qty_fix"] == {"field": "Order size", "value": "Below 1,000 m"})
+        soft = br(**{"Quoted price (Rs/m)": 200, "Finish": "F- Normal Soft"})
+        check("Brief: a small placeholder is a caveat, not a block", soft["stance"] != "ask" and soft["caveats"])
+        sat = br(**{"Quoted price (Rs/m)": 230, "Weave": "Satin"})
+        check("Brief: a placeholder weaving rate blocks the target and is flagged", sat["stance"] == "ask" and sat["would_need"]["weaving"]["placeholder"])
+        nb = c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Quoted price (Rs/m)": 194, "_notes": ["the second yarn is not in the should-cost"]})).json()
+        check("Brief: a list row's notes are carried into it", any("second yarn" in x for x in nb["brief"]["caveats"]) and abs(nb["total_per_m"] - 181.40) < 0.01)
+
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
         t = c.post("/api/intake/file", files={"file": ("list.csv", io.BytesIO(csv))}).json()

@@ -274,9 +274,9 @@ PAGES.dashboard = async () => {
     // 1. cost per metre by fabric type
     const top = Math.max(...p.categories.map(c => Math.max(c.paid, c.should)));
     const rows = p.categories.map(c => h("tr", {}, h("td", {}, h("b", {}, c.route), " · ", c.weave), h("td", { class: "cmp-cell" }, h("div", { class: "cmp-bars", "aria-hidden": "true" }, h("div", { class: "cmp-bar", style: `width:${c.paid / top * 100}%;background:var(--total)` }), h("div", { class: "cmp-bar", style: `width:${c.should / top * 100}%;background:var(--g1)` }))),
-      h("td", { class: "n" }, fmt(c.paid, 0)), h("td", { class: "n" }, fmt(c.should, 0)), h("td", { class: "n" }, gapTag(c.gap, c.trust)), h("td", { class: "n" }, pct(c.within10, 0)), h("td", { class: "n" }, fmt(c.fabrics, 0))));
-    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} 100% cotton fabrics bought Aug to Nov 2026, averaged over the metres bought. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
-      h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Fabric type"), h("th", { class: "cmp-cell" }, ""), h("th", { class: "n" }, "Paid Rs/m"), h("th", { class: "n" }, "Should-cost Rs/m"), h("th", { class: "n" }, "Paid above should-cost"), h("th", { class: "n", title: "Share of these fabrics where the should-cost is within 10% of the price paid" }, "Tool within 10%"), h("th", { class: "n" }, "Fabrics"))), h("tbody", {}, rows))),
+      h("td", { class: "n" }, fmt(c.paid, 0)), h("td", { class: "n" }, fmt(c.should, 0)), h("td", { class: "n" }, gapTag(c.gap, c.trust)), h("td", { class: "n" }, c.p25 === undefined ? "" : `${pctSigned(c.p25)} to ${pctSigned(c.p75)}`), h("td", { class: "n" }, pct(c.within10, 0)), h("td", { class: "n" }, fmt(c.fabrics, 0))));
+    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} 100% cotton fabrics bought Aug to Nov 2026, averaged over the metres bought. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Paid above should-cost is the average over the metres; the middle half is by fabric, half of them priced between the two figures. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
+      h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Fabric type"), h("th", { class: "cmp-cell" }, ""), h("th", { class: "n" }, "Paid Rs/m"), h("th", { class: "n" }, "Should-cost Rs/m"), h("th", { class: "n" }, "Paid above should-cost"), h("th", { class: "n", title: "Half of these fabrics were priced between these two figures against should-cost; one in four above the higher, one in four below the lower. The negotiation brief treats this range (at least 5% and at most 10% either way) as in line" }, "Middle half of fabrics"), h("th", { class: "n", title: "Share of these fabrics where the should-cost is within 10% of the price paid" }, "Tool within 10%"), h("th", { class: "n" }, "Fabrics"))), h("tbody", {}, rows))),
       h("p", { class: "sub", style: "margin:10px 0 0" }, "Poly cotton and linen are not here: there are no costed purchases of them yet.")));
 
     // 2. where the rupee goes
@@ -362,6 +362,8 @@ function fieldOn(sel, name) {
   if (name === "Order size") return (sel["Rate card quantity"] || first("Rate card quantity")) === first("Rate card quantity");
   return true;
 }
+// what /api/cost is sent: the choices, plus the remarks of the list row the fabric was opened from
+const costBody = sel => Object.assign(payload(sel), state.listId && state.rowNotes && state.rowNotes.length ? { _notes: state.rowNotes } : {});
 function payload(sel) {
   const out = {};
   for (const [k, v] of Object.entries(sel)) if (!blank(v) && fieldOn(sel, k)) out[k] = v;
@@ -390,7 +392,7 @@ PAGES.cost = async () => {
     if (!ready(sel)) { ++last; return out.replaceChildren(waiting(sel)); }
     timer = setTimeout(async () => {
       const mine = ++last;
-      try { const res = await (await postJSON("/api/cost", payload(sel))).json(); if (mine === last) out.replaceChildren(...costView(res, sel)); }
+      try { const res = await (await postJSON("/api/cost", costBody(sel))).json(); if (mine === last) out.replaceChildren(...costView(res, sel)); }
       catch (e) { if (mine === last) { const old = out.querySelector(".cannot"); if (old) old.remove(); out.prepend(h("div", { class: "notice err cannot", role: "alert", style: "margin-top:0" }, h("b", {}, "Cannot cost this as typed: "), e.message + (out.children.length ? " The figures below are from before this change." : ""))); } }
     }, 160);
   };
@@ -496,11 +498,12 @@ PAGES.cost = async () => {
     if (focusName) { const el = flow.querySelector(`[data-v="${CSS.escape(String(sel[focusName] ?? ""))}"]`) || $("#" + idOf(focusName), flow); if (el) el.focus({ preventScroll: true }); }
     else if (moved) { const el = flow.querySelector(".step.open .fields button, .step.open .fields select, .step.open .fields input") || flow.querySelector(`[data-step="${state.openStep}"]`); if (el) el.focus({ preventScroll: true }); const sec = flow.querySelector(".step.open"); if (sec) sec.scrollIntoView({ block: "nearest" }); }
   };
+  state.setChoice = (name, value) => { set(name, value); };
   paint(); recalc();
 
   const actions = h("div", { class: "row-actions", style: "margin:0" },
-    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.listId = null; state.sim = null; state.reopened = null; state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
-    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.listId = null; state.sim = null; state.reopened = null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.listId = null; state.rowNotes = null; state.sim = null; state.reopened = null; state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.listId = null; state.rowNotes = null; state.sim = null; state.reopened = null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
   // the two panes take exactly the height left on the screen, so the page itself does not scroll
   const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
   const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
@@ -510,26 +513,43 @@ PAGES.cost = async () => {
 };
 
 /* The negotiation brief: what to say about one quote. Where the tool is unsure of this kind of fabric it
-   gives no target and says to ask for the break-up instead. */
-const STANCE = { push: ["down", "Push: the quote is above should-cost"], fair: ["flat", "Fair: within 5% of should-cost"], below: ["up", "Below should-cost: accept, or check the specification"], ask: ["warn", "Ask for the break-up before naming a price"] };
-function briefCard(b, sel) {
-  const w = b.would_need, above = b.gap >= 0, st = STANCE[b.stance];
-  const lines = [];
-  if (b.stance === "ask") lines.push(h("li", {}, h("b", {}, "Do not open with a number. "), "The should-cost is not firm here: " + b.weak.join("; ") + ". Ask for yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin, then cost it again."));
-  else if (b.stance === "push") lines.push(h("li", {}, h("b", {}, `Open at ${rs(b.open_at)} a metre. `), `Up to ${rs(b.settle_up_to)} is within the tool's 5% margin of error; above that, ask the mill to show where the extra ${rs(b.gap - (b.settle_up_to - b.open_at))} comes from.`));
-  else if (b.stance === "fair") lines.push(h("li", {}, h("b", {}, "The quote is in line. "), `It is ${rs(Math.abs(b.gap))} ${above ? "above" : "below"} should-cost, inside the tool's 5% margin of error. Use the time on quantity terms, finish and delivery instead.`));
-  else lines.push(h("li", {}, h("b", {}, "The quote is below should-cost. "), "Before accepting, confirm the yarn, the construction and the finish are the ones costed here; a low price sometimes means a lighter cloth."));
-  if (b.stance === "push" || b.stance === "ask") {
-    const parts = [];
-    if (w.yarn) parts.push(h("li", {}, `the yarn costs Rs ${fmt(w.yarn.warp, 0)} a kilo, not Rs ${fmt(w.yarn.warp_now, 0)}` + (Math.abs(w.yarn.weft_now - w.yarn.warp_now) > 0.5 ? ` (weft Rs ${fmt(w.yarn.weft, 0)}, not ${fmt(w.yarn.weft_now, 0)})` : "") + ` \u2014 ${pctSigned(w.yarn.pct, 0)}`));
-    parts.push(h("li", {}, `or weaving is Rs ${w.weaving.rate.toFixed(2)} a pick, not Rs ${w.weaving.now.toFixed(2)}`));
-    parts.push(h("li", {}, `or the mill's margin is ${pct(w.margin.rate, 0)}, not ${pct(w.margin.now, 0)}`));
-    lines.push(h("li", {}, h("b", {}, "For the quote to be right, one of these would have to be true: "), h("ul", {}, parts), "Ask which it is. Each can be checked: the yarn against the yarn master and the market, the others against the mill's own sheet."));
+   gives no target and says to ask for the break-up instead. Every figure is compared as printed, so the
+   sums can be checked on the page. */
+const STANCE = { push: ["down", "Push: the quote is above the usual range"], fair: ["flat", "Fair: in line with the usual range"], below: ["up", "Below should-cost: a saving, if the specification holds"], ask: ["warn", "Ask for the break-up before naming a price"] };
+// the stance of a row once its gap has moved (a yarn move on the list): the same range, the new gap
+const stanceFor = (b, gapPct) => b.stance === "ask" ? "ask" : gapPct > b.band.hi + 1e-9 ? "push" : gapPct < b.band.lo - 1e-9 ? "below" : "fair";
+function briefCard(b, sel, moved) {
+  const w = b.would_need, above = b.gap > 0, st = STANCE[b.stance];
+  const lines = [], gapText = `${rs(Math.abs(b.gap))} (${pct(Math.abs(b.gap_pct))}) ${b.gap > 0 ? "above" : b.gap < 0 ? "below" : "at"} should-cost`;
+  const band = `${rs(b.lower)} to ${rs(b.settle_up_to)}`;
+  for (const c of b.caveats || []) lines.push(h("li", { class: "caveat" }, h("b", {}, "Before you use these figures: "), c));
+  if (b.stance === "ask") {
+    lines.push(h("li", {}, h("b", {}, "Do not open with a number. "), "The should-cost is not firm here: " + b.weak.join("; ") + ". Ask for yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin, then cost it again."));
+    if (b.qty_fix && state.setChoice) lines.push(h("li", {}, h("button", { type: "button", class: "btn small", onclick: () => state.setChoice(b.qty_fix.field, b.qty_fix.value) }, `Set ${b.qty_fix.field === "Order size" ? "the order size" : "the quantity band"} to ${b.qty_fix.value}`), " to cost it on the quantity typed."));
+  } else if (b.stance === "push") lines.push(h("li", {}, h("b", {}, `Open at the should-cost, ${rs(b.open_at)} a metre. `), `The usual range for this fabric is ${band}: ${b.band.why}. The quote is ${rs(b.above_band)} above the top of that range; ask the mill to show where it comes from.`));
+  else if (b.stance === "fair") lines.push(h("li", {}, h("b", {}, "The quote is in line. "), `It is ${gapText}, inside the usual range of ${band}: ${b.band.why}. Use the time on quantity terms, finish and delivery instead.`));
+  else lines.push(h("li", {}, h("b", {}, "The quote is below the usual range: a saving, if the specification holds. "), `It is ${gapText}; the usual range is ${band}. Before taking it, confirm the yarn, the construction and the finish are the ones costed here: a low price sometimes means a lighter cloth or a different yarn.`));
+  if (above && (b.stance === "push" || b.stance === "ask")) {
+    const parts = [], about = v => `about ${v}`;
+    const phNote = " (the tool's own rate here is a placeholder, so ask for the mill's figure)";
+    if (w.yarn) {
+      const same = Math.abs(w.yarn.weft_now - w.yarn.warp_now) < 0.5;
+      const t = same ? `warp and weft yarn both cost ${about("Rs " + fmt(w.yarn.warp, 0))} a kilo` + (w.yarn.placeholder ? phNote : `, not Rs ${fmt(w.yarn.warp_now, 0)}`)
+        : `warp yarn costs ${about("Rs " + fmt(w.yarn.warp, 0))} a kilo and weft yarn ${about("Rs " + fmt(w.yarn.weft, 0))}` + (w.yarn.placeholder ? phNote : `, not Rs ${fmt(w.yarn.warp_now, 0)} and Rs ${fmt(w.yarn.weft_now, 0)}`);
+      parts.push(h("li", {}, `${t} (${pctSigned(w.yarn.pct, 1)})`));
+    }
+    parts.push(h("li", {}, `or weaving is ${about("Rs " + w.weaving.rate.toFixed(3))} a pick` + (w.weaving.placeholder ? phNote : `, not Rs ${w.weaving.now.toFixed(3)}`)));
+    parts.push(h("li", {}, `or the mill's margin is ${about(pct(w.margin.rate, 1))}` + (w.margin.placeholder ? phNote : `, not ${pct(w.margin.now, 1)}`)));
+    lines.push(h("li", {}, h("b", {}, `For the quote to be right, one of these would have to be true; each alone explains the whole ${rs(b.gap)} a metre: `), h("ul", {}, parts), "Ask which it is. Each can be checked: the yarn against the yarn master and the market, the others against the mill's own sheet."));
   }
-  if (b.at_stake !== null && b.quantity) lines.push(h("li", {}, h("b", {}, `At stake: ${rs(Math.abs(b.at_stake), 0)} `), `on ${fmt(b.quantity, 0)} m (${rs(Math.abs(b.gap))} a metre).`));
-  return h("div", { class: "card brief" }, h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, "For the negotiation"), h("span", { class: "tag " + st[0] }, st[1])),
-    h("p", { class: "sub", style: "margin:0 0 8px" }, `Quote ${rs(b.quote)}, should-cost ${rs(b.should)}: the quote is ${rs(Math.abs(b.gap))} (${pct(Math.abs(b.gap_pct))}) ${above ? "above" : "below"}.`),
-    h("ul", { class: "brief-list" }, lines));
+  if (b.at_stake !== null && b.quantity) {
+    const amt = `Rs ${fmt(Math.abs(b.at_stake), 0)}`, per = `${fmt(b.quantity, 0)} m × ${rs(Math.abs(b.gap))} a metre`;
+    lines.push(h("li", {}, b.gap > 0 ? [h("b", {}, `At stake: ${amt} `), `above should-cost (${per}).`] : b.gap < 0 ? [h("b", {}, `Saving against should-cost: ${amt} `), `(${per}).`] : [h("b", {}, "Nothing at stake: "), "the quote equals the should-cost."]));
+  }
+  const fit = b.fit ? h("p", { class: "sub", style: "margin:8px 0 0;font-size:12px" }, `On ${b.fit.type} the tool is within 10% of the price paid for ${pct(b.fit.within10, 0)} of ${fmt(b.fit.fabrics, 0)} fabrics bought; on average they were paid ${pctSigned(b.fit.gap)} against should-cost, and the middle half between ${pctSigned(b.fit.p25)} and ${pctSigned(b.fit.p75)} (dashboard panel 1).`) : null;
+  return h("div", { class: "card brief" }, h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, "For the negotiation" + (moved ? ` · ${moved}` : "")), h("span", { class: "tag " + st[0] }, st[1])),
+    h("p", { class: "sub", style: "margin:0 0 8px" }, `Quote ${rs(b.quote)}, should-cost ${rs(b.should)}: the quote is ${gapText}.`),
+    h("ul", { class: "brief-list" }, lines), fit);
 }
 
 /* What a move in the yarn price does to this fabric. The sliders re-cost it with the warp and weft
@@ -540,17 +560,20 @@ function yarnSim(res, sel) {
   let turn = 0, timer;
   const show = async () => {
     const mine = ++turn;
-    if (!sim.warp && !sim.weft) return out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, "Move a slider to see the price at a different yarn rate."));
+    const swapBrief = (b, label) => { const old = document.querySelector(".cost-out .brief"); if (old && b) old.replaceWith(briefCard(b, sel, label)); };
+    if (!sim.warp && !sim.weft) { swapBrief(res.brief, null); return out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, "Move a slider to see the price at a different yarn rate.")); }
     try {
-      const body = Object.assign({}, payload(sel), { "Warp yarn price override": y.warp_rate * (1 + sim.warp / 100), "Weft yarn price override": y.weft_rate * (1 + sim.weft / 100) });
+      const body = Object.assign(costBody(sel), { "Warp yarn price override": y.warp_rate * (1 + sim.warp / 100), "Weft yarn price override": y.weft_rate * (1 + sim.weft / 100) });
       const r = await (await postJSON("/api/cost", body)).json(); if (mine !== turn) return;
+      swapBrief(r.brief, sim.warp === sim.weft ? `with yarn ${pctSigned(sim.warp, 0)}` : `with warp ${pctSigned(sim.warp, 0)}, weft ${pctSigned(sim.weft, 0)}`);
       const d = r.total_per_m - res.total_per_m;
       out.replaceChildren(h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Warp at Rs ${fmt(y.warp_rate * (1 + sim.warp / 100), 0)}/kg, weft at Rs ${fmt(y.weft_rate * (1 + sim.weft / 100), 0)}/kg`), h("b", { class: "num" }, `${rs(res.total_per_m)} \u2192 ${rs(r.total_per_m)}`), h("span", { class: "tag " + (d > 0.005 ? "down" : d < -0.005 ? "up" : "flat") }, `${d >= 0 ? "+" : "\u2212"}${fmt(Math.abs(d))} /m (${pctSigned(d / res.total_per_m * 100)})`),
         r.quote !== null ? h("span", { class: "sub", style: "margin:0" }, `the quote would be ${pct(Math.abs(r.gap_pct))} ${r.gap >= 0 ? "above" : "below"}`) : null));
     } catch (e) { if (mine === turn) out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, e.message)); }
   };
   const row = (key, label, rate) => {
-    const slider = h("input", { type: "range", min: "-20", max: "20", step: "1", value: String(sim[key]), id: "sim-" + key, "aria-label": label + " yarn price change, per cent" });
+    const span = String(Math.max(20, Math.abs(sim.warp), Math.abs(sim.weft)));
+    const slider = h("input", { type: "range", min: "-" + span, max: span, step: "1", value: String(sim[key]), id: "sim-" + key, "aria-label": label + " yarn price change, per cent" });
     const val = h("span", { class: "num simval" }, pctSigned(sim[key], 0));
     slider.addEventListener("input", () => { sim[key] = Number(slider.value); if (sim.both) { sim.warp = sim.weft = sim[key]; for (const k of ["warp", "weft"]) { $("#sim-" + k).value = sim[k]; $("#sim-" + k).nextSibling.textContent = pctSigned(sim[k], 0); } } else val.textContent = pctSigned(sim[key], 0); clearTimeout(timer); timer = setTimeout(show, 120); });
     return h("div", { class: "simrow" }, h("label", { for: "sim-" + key }, `${label} \u00B7 Rs ${fmt(rate, 0)}/kg`), slider, val);
@@ -914,7 +937,9 @@ PAGES.bulk = async (arg) => {
   // with a yarn move on, the gap that counts is the one after the move
   const moving = () => ui.pct !== "" && !!Number(ui.pct);
   const gapOf = r => moving() && r.sim_gap !== null && r.sim_gap !== undefined ? { rs: r.sim_gap, pct: r.sim_gap_pct } : { rs: r.gap, pct: r.gap_pct };
-  const stakeOf = r => { const g = gapOf(r); return g.rs === null || g.rs === undefined || !r.quantity ? null : g.rs * r.quantity; };
+  // money at stake on the gap as printed (to the paisa), so it can be checked by hand
+  const stakeOf = r => { const g = gapOf(r); return g.rs === null || g.rs === undefined || !r.quantity ? null : Math.round(Math.round(g.rs * 100) / 100 * r.quantity); };
+  const rowStance = r => r.brief ? stanceFor(r.brief, gapOf(r).pct) : null;
   const box = h("div"), status = h("div", { "aria-live": "polite" });
   let data = null;
   const load = async () => {
@@ -925,13 +950,15 @@ PAGES.bulk = async (arg) => {
   };
   const visible = () => {
     const q = ui.filter.trim().toLowerCase();
-    const rows = data.rows.filter(r => (ui.show === "all" || (ui.show === "notcosted" && r.problems.length) || (ui.show === "sums" && r.sums && r.sums.length) || (ui.show === "above" && gapOf(r).pct > 0.05)) && (!q || JSON.stringify([r.mill, r.supplier, r.description]).toLowerCase().includes(q)));
+    const rows = data.rows.filter(r => (ui.show === "all" || (ui.show === "notcosted" && r.problems.length) || (ui.show === "sums" && r.sums && r.sums.length) || (ui.show === "above" && rowStance(r) === "push")) && (!q || JSON.stringify([r.mill, r.supplier, r.description]).toLowerCase().includes(q)));
     for (const id of [...ui.picked]) if (!rows.some(r => r.id === id)) ui.picked.delete(id);      // a tick never outlives the row being in view
     return ui.byStake ? [...rows].sort((a, b) => (stakeOf(b) ?? -Infinity) - (stakeOf(a) ?? -Infinity)) : rows;
   };
   const remarks = r => [...r.problems.map(x => "Not costed: " + x), ...(r.sums || []).map(x => "Sum off: " + x), ...r.notes.map(x => x.charAt(0).toUpperCase() + x.slice(1)), r.placeholders.length ? "Placeholder rates: " + r.placeholders.join(", ") : null].filter(Boolean);
-  const stanceCell = r => { const b = r.brief; if (!b) return ""; const g = gapOf(r); const st = b.stance === "ask" ? "ask" : Math.abs(g.pct) <= 0.05 ? "fair" : g.pct > 0 ? "push" : "below"; return h("span", { class: "tag " + STANCE[st][0], title: STANCE[st][1] + (st === "ask" ? ": " + b.weak.join("; ") : "") }, { push: "Push", fair: "Fair", below: "Below", ask: "Ask break-up" }[st]); };
-  const openRow = r => { if (!r.inputs) return toast("This row has no choices to open"); state.sel = selFromRow(r.inputs); if (r.quantity) state.sel["Order quantity (m)"] = r.quantity; state.listId = r.id; state.reopened = r.then ? { then: r.then, on: r.added } : null; state.openStep = r.problems.length ? "route" : null; STEPS.forEach(st => state.visited.add(st.id)); if (r.problems.length) toast(`${r.mill["Fab Code"] || "This row"} is not costed yet: ${r.problems[0]}`); location.hash = "#cost"; };
+  const stanceCell = r => { const b = r.brief; if (!b) return ""; const st = rowStance(r); return h("span", { class: "tag " + STANCE[st][0], title: STANCE[st][1] + (st === "ask" ? ": " + b.weak.join("; ") : `. Usual range for this fabric: ${pctSigned(b.band.lo * 100)} to ${pctSigned(b.band.hi * 100)} against should-cost`) }, { push: "Push", fair: "Fair", below: "Below", ask: "Ask break-up" }[st]); };
+  const openRow = r => { if (!r.inputs) return toast("This row has no choices to open"); state.sel = selFromRow(r.inputs); if (r.quantity) state.sel["Order quantity (m)"] = r.quantity; state.listId = r.id; state.rowNotes = r.notes; state.reopened = r.then ? { then: r.then, on: r.added } : null;
+    if (moving()) { const p = Number(ui.pct), on = k => ui.yarn === "*" || r.inputs[k] === ui.yarn; state.sim = { warp: on("Warp yarn") ? p : 0, weft: on("Weft yarn") ? p : 0, both: on("Warp yarn") && on("Weft yarn") }; toast(`Opened with the list's yarn move (${ui.yarn === "*" ? "all yarns" : ui.yarn} ${pctSigned(p, 0)}) on the sliders; the brief follows it`); }
+    else state.sim = null; state.openStep = r.problems.length ? "route" : null; STEPS.forEach(st => state.visited.add(st.id)); if (r.problems.length) toast(`${r.mill["Fab Code"] || "This row"} is not costed yet: ${r.problems[0]}`); location.hash = "#cost"; };
   const cell = (c, v) => blank(v) ? "" : typeof v === "number" ? (Number.isInteger(v) ? String(v) : fmt(v, Math.abs(v) < 100 && !Number.isInteger(v * 10) ? 2 : 1).replace(/\.0$/, "")) : (/^\d{4}-\d\d-\d\d$/.test(v) ? day(v) : String(v));
 
   const paint = () => {
@@ -944,8 +971,8 @@ PAGES.bulk = async (arg) => {
       tick.addEventListener("change", () => { tick.checked ? ui.picked.add(r.id) : ui.picked.delete(r.id); paint(); });
       const price = r.inputs && r.inputs["Quoted price (Rs/m)"];
       const sc = r.problems.length ? h("span", { class: "tag warn", title: r.problems.join("; ") }, "⚠ not costed") : [fmt(r.should_cost), r.placeholders.length ? h("span", { class: "tag warn", title: "Placeholder rates used: " + r.placeholders.join(", "), style: "margin-left:6px" }, "⚠") : null];
-      const g = gapOf(r), weakRow = r.brief && r.brief.stance === "ask";
-      const gap = g.pct === null || g.pct === undefined ? "" : h("span", { class: "tag " + (weakRow ? "warn" : Math.abs(g.pct) <= 0.05 ? "flat" : g.pct > 0 ? "down" : "up"), title: weakRow ? "The tool is unsure of this kind of fabric: " + r.brief.weak.join("; ") : Math.abs(g.pct) <= 0.05 ? "Within 5%: treat as noise" : g.pct > 0 ? "The mill is above should-cost: room to negotiate" : "The mill is below should-cost" }, `${g.rs >= 0 ? "+" : "\u2212"}${fmt(Math.abs(g.rs))} (${pctSigned(g.pct * 100)})`);
+      const g = gapOf(r), rst = rowStance(r), weakRow = rst === "ask";
+      const gap = g.pct === null || g.pct === undefined ? "" : h("span", { class: "tag " + (weakRow ? "warn" : rst === "fair" || !rst ? "flat" : rst === "push" ? "down" : "up"), title: weakRow ? "The tool is unsure here: " + r.brief.weak.join("; ") : rst === "fair" ? "Inside the usual range for this fabric: treat as noise" : rst === "push" ? "Above the usual range for this fabric: room to negotiate" : "Below the usual range for this fabric" }, `${g.rs >= 0 ? "+" : "\u2212"}${fmt(Math.abs(g.rs))} (${pctSigned(g.pct * 100)})`);
       const stake = stakeOf(r), rem = remarks(r);
       const sums = r.sums === null ? h("span", { class: "sub", style: "margin:0" }, "—") : r.sums.length ? h("span", { class: "tag down", title: r.sums.join("; ") }, `✗ ${r.sums.length} off`) : h("span", { class: "tag ok" }, "✓ add up");
       const simCells = sim ? [h("td", { class: "n rp" }, r.simulated === null ? "" : fmt(r.simulated)), h("td", { class: "n rp" }, r.simulated === null || r.should_cost === null ? "" : Math.abs(r.simulated - r.should_cost) < 0.005 ? "no change" : `${r.simulated - r.should_cost >= 0 ? "+" : "\u2212"}${fmt(Math.abs(r.simulated - r.should_cost))}`)] : [];
@@ -957,7 +984,7 @@ PAGES.bulk = async (arg) => {
         cols.map(c => h("td", { class: typeof r.mill[c] === "number" ? "n" : null }, cell(c, r.mill[c]))));
     });
     const n = ui.picked.size, picked = data.rows.filter(r => ui.picked.has(r.id));
-    const counts = { all: data.rows.length, notcosted: data.rows.filter(r => r.problems.length).length, sums: data.rows.filter(r => r.sums && r.sums.length).length, above: data.rows.filter(r => gapOf(r).pct > 0.05).length };
+    const counts = { all: data.rows.length, notcosted: data.rows.filter(r => r.problems.length).length, sums: data.rows.filter(r => r.sums && r.sums.length).length, above: data.rows.filter(r => rowStance(r) === "push").length };
     const stakeBox = h("input", { type: "checkbox", id: "ls-stake" }); stakeBox.checked = ui.byStake; stakeBox.addEventListener("change", () => { ui.byStake = stakeBox.checked; paint(); });
     const chip = (key, label) => h("button", { type: "button", class: "chip", "aria-pressed": String(ui.show === key), onclick: () => { ui.show = key; paint(); } }, `${label} ${counts[key]}`);
     const grp = g => h("button", { type: "button", class: "chip", "aria-pressed": String(!!ui.groups[g]), onclick: () => { ui.groups[g] = !ui.groups[g]; paint(); } }, g);
@@ -969,10 +996,10 @@ PAGES.bulk = async (arg) => {
     yarnPick.addEventListener("change", apply); pctBox.addEventListener("change", apply);
     const costedRows = data.rows.filter(r => r.should_cost !== null && gapOf(r).rs !== null && gapOf(r).rs !== undefined);
     const sumGap = costedRows.reduce((a, r) => a + gapOf(r).rs, 0), staked = costedRows.filter(r => stakeOf(r) !== null), sumStake = staked.reduce((a, r) => a + stakeOf(r), 0);
-    const tot = costedRows.length ? h("p", { class: "sub", style: "margin:10px 0 0" }, `${costedRows.length} rows carry a mill price${moving() ? " (with the yarn move applied)" : ""}: on average it is ${rs(Math.abs(sumGap / costedRows.length))} a metre ${sumGap >= 0 ? "above" : "below"} should-cost.`, staked.length ? h("b", {}, ` On the ${fmt(staked.reduce((a, r) => a + r.quantity, 0), 0)} m ordered, that is Rs ${fmt(Math.abs(sumStake), 0)} ${sumStake >= 0 ? "above" : "below"} should-cost.`) : null, " Plus (red) means the mill is above should-cost; within 5% is noise.") : null;
+    const tot = costedRows.length ? h("p", { class: "sub", style: "margin:10px 0 0" }, `${costedRows.length} rows carry a mill price${moving() ? " (with the yarn move applied)" : ""}: on average it is ${rs(Math.abs(sumGap / costedRows.length))} a metre ${sumGap >= 0 ? "above" : "below"} should-cost.`, staked.length ? h("b", {}, ` On the ${fmt(staked.reduce((a, r) => a + r.quantity, 0), 0)} m ordered, that is Rs ${fmt(Math.abs(sumStake), 0)} ${sumStake >= 0 ? "above" : "below"} should-cost.`) : null, " Plus means the mill is above should-cost. Red: above the usual range for that fabric type (Push); grey: inside it.") : null;
     box.replaceChildren(
       h("div", { class: "list-tools" },
-        h("div", { class: "chips", role: "group", "aria-label": "Rows to show" }, chip("all", "All"), chip("above", "Over 5% above should-cost"), chip("notcosted", "Not costed"), chip("sums", "Mill's sums off")),
+        h("div", { class: "chips", role: "group", "aria-label": "Rows to show" }, chip("all", "All"), chip("above", "Push"), chip("notcosted", "Not costed"), chip("sums", "Mill's sums off")),
         h("div", { class: "chips", role: "group", "aria-label": "Column groups to show" }, h("span", { class: "sub", style: "margin:0;align-self:center" }, "Columns:"), Object.keys(data.groups).map(grp)),
         h("label", { for: "ls-stake", class: "opt" }, stakeBox, "Most at stake first"),
         filter),
