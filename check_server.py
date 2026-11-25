@@ -122,6 +122,8 @@ def main():
         check("Pack: an ex-mill price above the mill's own sums, and what it is worth",
               mill_sheet.own_sums(over) == (185.0, 3.0))
         check("Pack: at stake as in the list and the brief", all(r["at_stake"] == round(r["gap"] * r["quantity"]) for r in pk["rows"] if r["quantity"]))
+        check("Pack: different fabrics on one mill reference are not taken for duplicates", pk["totals"]["duplicates"] == 0)
+        check("Pack: rows can be chosen by the upload they came in", any("mill.xlsx" in x["label"] for x in pk["sheets"]))
         check("Pack: the second yarn is a question", any("second yarn" in q for q in pr["T-4"]["questions"]))
         one = c.post("/api/pack", json={"ids": [pr["T-1"]["id"]]}).json()
         check("Pack: only the rows asked for", one["totals"]["rows"] == 1 and one["rows"][0]["code"] == "T-1")
