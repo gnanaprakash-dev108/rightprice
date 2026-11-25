@@ -1,7 +1,105 @@
 # RightPrice: progress and handover
 
-As of 24 November 2026. Version 1 is built, calibrated once against purchase orders, and running.
-The mill rate card is built in as optional upcharges. It is not yet inside the 3–5% accuracy target.
+As of 25 November 2026. **Start with "Handover" below**; the sections after it are the record of
+how the tool got here, oldest first.
+
+## Handover, 25 November 2026
+
+**The aim of the tool is a better negotiation with the vendor.** Every screen is judged by whether
+it helps a fabric buyer walk into a meeting with a mill better prepared.
+
+### Where things stand
+
+- Everything built is merged to `main` (pull requests 1 to 8) and deployed; the last deploy run was
+  green. Nothing is waiting to be merged except this handover note.
+- Live site: `https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net`, behind
+  Microsoft sign-in. A build session cannot sign in, so the owner confirms the live site by eye.
+  The owner last confirmed it working before pull requests 5 to 8.
+- `python check_engine.py` and `python check_server.py` both print ALL OK. The seven V1 qualities
+  match to the paisa (Qlty-1 = Rs 181.40).
+
+### What the tool is now
+
+| Part | What it does |
+|---|---|
+| `engine.py`, `masters.py` | The costing. Unchanged method; the rate master workbook is the source of every rate |
+| `server.py` (FastAPI) + `web/` | The screens: hand-built HTML, CSS and JavaScript, no build step, no database |
+| `app.py` (Streamlit) | The earlier screens, kept at `/classic` as a fallback |
+| `mill_sheet.py` | Reads a mill's price sheet (base price plus upcharges), costs each row, checks the mill's sums |
+| `rate_card.py`, `yarn_seed.py` | The mill rate card tables; placeholder yarns for poly cotton and linen |
+| `pilot.py`, `calibrate.py` | Should-cost against purchase orders; a calibration draft that is never applied automatically |
+
+Screens: Dashboard (yarn what-if, five panels from own data), Cost a fabric (numbered steps, live
+cost, five chart views, yarn what-if, negotiation brief, print), Bulk upload and list (mill sheet or
+template, one list with should-cost, gap, money at stake, what to do, mill's sums), Compare, Yarn
+prices, Cotton prices, Bring in prices, Rate tables, Mill rate card, Settings, Pilot results.
+
+### Rules that have held throughout
+
+1. Work on a branch and open a pull request. Never push to `main`: every push there redeploys.
+2. `data/Rate_Master.xlsx` is the source of truth for rates. Never run `build_masters.py --force`.
+   Save a dated backup before any script changes it. **Never change a rate without being asked.**
+3. Run `python check_engine.py` and `python check_server.py` after changes; both must print ALL OK.
+4. A rate with no data behind it gets the Basis "Placeholder" so the app warns.
+5. Calibration proposals are drafts for review; nothing from `pilot/Proposed_Rate_Changes.xlsx` is
+   applied without the owner's word.
+6. Merge when the pull request's "checks" job passes; then confirm the deploy run is green. If the
+   live site goes down, revert the merge (or set the Azure app setting `RIGHTPRICE_UI` = `classic`).
+7. After building screens, run a cold review ("elephant and goldfish"): a fresh reviewer that has
+   not seen the code uses the running app and reports what would trip up or mislead a buyer. Fix
+   what it finds before, or straight after, merging. Six rounds so far; each found real problems.
+8. The live server keeps its own rate master in `/home/rightprice-data`. New tables reach it only
+   through `masters.load()` (`_add_missing_tables`), which saves a dated copy first.
+9. Report plainly: what was checked, what was not, and anything that did not improve.
+
+### In flight when this was written
+
+**A sixth cold review, of the negotiation brief, was started and its findings had not come back.**
+The brief was added after the fifth review and has been tested by script only. Its arithmetic was
+checked once (costing the example at the stated yarn rate, and at the stated weaving rate, each
+returned the quote). Run the review again from a fresh session: start the server locally with
+`RIGHTPRICE_DATA` pointing at a scratch folder, load a mill sheet into the list, and have the
+reviewer test, for several quotes, whether the yarn rate, weaving rate and margin in "For the quote
+to be right" each reproduce the quote; the boundaries at 5%; different warp and weft yarns; the
+"ask for the break-up" rule; agreement between the list and the brief; wording a mill could turn
+against the buyer; and the printed page.
+
+### Waiting on the owner
+
+1. Real yarn rates for poly cotton and linen (six placeholders are in the yarn master).
+2. A current quote for Amsler 24s yarn, to settle why yarn-dyed plain is over-costed by 10%.
+3. A decision on the calibration draft (order size below 1,000 m +5.5 points on top of the card's
+   bands; piece-dyed twill Rs 0.18 to 0.25 a pick; piece-dyed satin Rs 0.22 to 0.29; printing
+   Rs 390 to 410 a kilo).
+4. Print method for printed fabrics, and a mill cost sheet for one print.
+5. The Scribd fabric costing document as pasted text or a PDF (the site could not be opened).
+6. Price sheets from mills other than Arvind: `mill_sheet.py` checks sums against Arvind's
+   Rs 0.60 an end and Rs 0.90 a pick.
+
+### Next to build, in the owner's order unless told otherwise
+
+1. Fix what the sixth cold review finds in the negotiation brief.
+2. A one-page negotiation pack for a whole mill sheet: every row with its stance, the money at
+   stake, the sums that are off, and the questions to ask, printable.
+3. Mill sheet rows in materials other than 100% cotton; base price and per-end, per-pick figures
+   per mill in the rate master instead of in code.
+4. Date the yarn rates, so an order is costed on the rates of its month and panel 3 of the
+   dashboard can show fabric cost by year.
+5. The 265 purchase-order fabrics still not costed (two yarns in one direction).
+6. Should-cost pinned beside the fabric code on a phone in the list.
+
+### Where the tool is weak (do not push a vendor on these)
+
+- Yarn-dyed plain in Amsler or slub yarn: over-costed by about 10%.
+- Printed twill and plain: over-costed by 7% and 22%. Yarn-dyed jacquard: under-costed by 47%.
+- Poly cotton and linen: placeholder yarn rates and cotton's process rates.
+- 48 placeholder rates, mostly finishes.
+- Overall fit on 1,696 purchases: median gap 1.0%; 31% / 54% / 79% within 5% / 10% / 20%.
+
+## Summary before the handover
+
+Version 1 is built, calibrated once against purchase orders, and running. The mill rate card is
+built in as optional upcharges. It is not yet inside the 3–5% accuracy target.
 
 ## Decisions taken
 
