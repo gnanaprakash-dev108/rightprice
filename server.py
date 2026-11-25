@@ -321,17 +321,20 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         else:
             caveats.append(f"A placeholder rate is used for {', '.join(res['placeholders'])}, but only {ph_share:.1%} of the price rests on it: "
                            f"even if it were off by half, the should-cost would move by up to Rs {swing:,.2f}, which would not change the advice.")
-    if gap / should < -0.30 if should else False:
+    if (gap / should < -0.30) if should else False:
         caveats.insert(0, f"The quote is {abs(gap / should):.0%} below should-cost. That is almost always a different cloth, a typing slip "
                           "or a price per something other than a metre; check it before treating it as a saving.")
-    near = stance == "push" and quote - upper <= 0.02 * should
+    # where to open: as far below the top of the usual range as the quote is above it, never below the
+    # should-cost. It moves with the quote, so a rupee more on the quote never jumps the advice.
+    open_at = max(should, round(upper - (quote - upper), 2)) if stance == "push" else should
+    implausible = gap / should < -0.30 if should else False
     for n in notes or ():
         if "small-lot upcharge" not in str(n):
             caveats.insert(0, "From the mill's sheet: " + str(n)[0].upper() + str(n)[1:] + ".")
     return {
         "quote": quote, "should": should, "gap": gap, "gap_pct": gap / should if should else 0.0,
-        "stance": stance, "weak": weak, "caveats": caveats, "qty_fix": qty_fix, "qty_only": qty_only, "near_edge": near,
-        "open_at": should, "settle_up_to": upper, "lower": lower, "above_band": round(quote - upper, 2),
+        "stance": stance, "weak": weak, "caveats": caveats, "qty_fix": qty_fix, "qty_only": qty_only, "implausible": implausible,
+        "open_at": open_at, "settle_up_to": upper, "lower": lower, "above_band": round(quote - upper, 2),
         "band": {"hi": hi / 100, "lo": lo / 100, "why": band_why},
         "fit": None if cat is None else {"type": typ, "fabrics": cat["fabrics"], "within10": cat["within10"], "gap": cat["gap"],
                                           "p25": cat["p25"], "p75": cat["p75"]},

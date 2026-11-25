@@ -470,3 +470,4 @@ table.list td.remarks div + div { margin-top: 3px; }
   .list-wrap { max-height: none !important; overflow: visible !important; }
   table.list .linkish { display: inline !important; color: inherit; }
 }
+@media print { table { width: 100% !important; table-layout: auto; } td, th { overflow-wrap: anywhere; } }

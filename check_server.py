@@ -185,8 +185,10 @@ def main():
         check("Brief: a quote far below should-cost is questioned", any("typing slip" in x for x in lo["caveats"]))
         vel = br(**{"Quoted price (Rs/m)": 230, "Weave": "Velvet"})
         check("Brief: velvet is named as velvet", any("velvet" in x for x in vel["weak"]))
-        near = br(**{"Quoted price (Rs/m)": round(b0["settle_up_to"] + 0.5, 2)})
-        check("Brief: just above the range is marked near the edge", near["stance"] == "push" and near["near_edge"])
+        opens = [br(**{"Quoted price (Rs/m)": q})["open_at"] for q in (199.55, 203, 204, 210, 230)]
+        check("Brief: the opening figure moves with the quote, without a jump, and never below should-cost",
+              all(a >= b for a, b in zip(opens, opens[1:])) and abs(opens[1] - opens[2]) <= 1.01 and opens[-1] == 181.40, str(opens))
+        check("Brief: a quote far below should-cost counts no saving", lo["implausible"])
         check("A yarn move over 50% refused", c.post("/api/list", json={"yarn_pct": {"*": 500}}).status_code == 400)
         nb = c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Quoted price (Rs/m)": 194, "_notes": ["the second yarn is not in the should-cost"]})).json()
         check("Brief: a list row's notes are carried into it", any("second yarn" in x for x in nb["brief"]["caveats"]) and abs(nb["total_per_m"] - 181.40) < 0.01)
