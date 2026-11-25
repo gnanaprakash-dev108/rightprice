@@ -121,7 +121,7 @@ def to_inputs(row, m):
     if kind == "YD":
         sel["Route"] = "Yarn Dyed"
     elif kind == "NYD":
-        problems.append("NYD: choose piece dyed, printed or bleached for this row (open it in Cost a fabric)")
+        problems.append("not yarn dyed (NYD on the sheet), and the sheet does not say how it is coloured: open it in Cost a fabric and choose piece dyed, printed or bleached")
     else:
         problems.append("YD/NYD is blank")
 

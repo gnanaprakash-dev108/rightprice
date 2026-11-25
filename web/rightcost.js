@@ -4,7 +4,7 @@
 "use strict";
 
 // ================================================================== CONFIG
-const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Ask break-up": "#F5C542", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
+const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Ask break-up": "#F5C542", "Above, ask break-up": "#EF7D32", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
 const ROUTE_COLOR = { "Yarn Dyed": "#5C6BC0", "Piece Dyed": "#26A69A", "Printed": "#EF6C00", "RFD / Bleached": "#90A4AE" };
 const STATUS = ["Not started", "To negotiate", "In negotiation", "Agreed", "Dropped"];
 const n0 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -48,7 +48,7 @@ const CONFIG = {
       ],
       savedSearches: [
         { name: "Default", filters: {} },
-        { name: "Above the usual range", filters: { band: ["Above range"] } },
+        { name: "Above the usual range", filters: { band: ["Above range", "Above, ask break-up"] } },
         { name: "Ask for the break-up", filters: { band: ["Ask break-up"] } },
         { name: "More than 20% above should-cost (any verdict)", filters: { gap_pct: { min: "20", max: "" } } },
         { name: "Held-back third", filters: { held_back: ["Yes"] } },
@@ -169,7 +169,7 @@ const val = (r, id) => {
   if (id === "held_back") return r.held_back === null || r.held_back === undefined ? "" : r.held_back ? "Yes" : "No";
   if (id === "placeholder") return r.placeholders ? "Yes" : "No";
   if (id === "added") return r.id || r.added || "";            // list ids carry the time they were added
-  if (id === "band_rank") return { "Above range": 0, "Check quote": 1, "Ask break-up": 2, "Below range": 3, "In range": 4 }[r.band] ?? 5;
+  if (id === "band_rank") return { "Above range": 0, "Above, ask break-up": 1, "Check quote": 2, "Ask break-up": 3, "Below range": 4, "In range": 5 }[r.band] ?? 6;
   if (col && col.value) return col.value(r);
   return r[id];
 };
@@ -287,20 +287,23 @@ function bookmarkBtn(label, href) {
 function go(href) { closeLayers(); if (href === "popup:cost") return openCostPopup(); if (href === "theme:toggle") return toggleTheme(); if (href.startsWith("lib:")) { state.detail = null; state.library = { name: href.slice(4), page: 0, size: 20 }; return render(); } if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); } location.href = href; }
 function openFly(name, anchor, hover, keep) {
   const fly = $("#flyout");
-  if (!keep && !fly.hidden && openFly.last === name && !hover) { fly.hidden = true; railActive(); return; }
+  if (!keep && !fly.hidden && openFly.last === name && !hover) {
+    if (openFly.hover) { openFly.hover = false; return; }         // a click on what the pointer opened: keep it open
+    fly.hidden = true; railActive(); return;
+  }
   openFly.last = name; railActive(name === "profile" ? null : { notes: "notes", recent: "recent", bookmarks: "bookmarks", downloads: "downloads" }[name] || name);
   const cfg = CONFIG.flyouts[name], kids = [];
   const link = (label, href) => h("div", { class: "lnkrow" }, bookmarkBtn(label, href), h("button", { type: "button", class: "lnk", onclick: () => go(href) }, label));
   if (cfg) { kids.push(h("div", { class: "ttl", html: svg(cfg.icon) + `<span>${cfg.title}</span>` })); for (const [g, links] of cfg.groups) kids.push(h("div", { class: "g" }, g), links.map(([l, href]) => link(l, href))); }
   else if (name === "notes") {
-    const above = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range");
+    const above = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range" && !r.duplicate_of && r.range && r.gap_pct - r.range[1] >= 2);
     kids.push(h("div", { class: "ttl", html: svg("bell") + "<span>Notifications</span>" }), h("div", { class: "tabs2" }, h("b", {}, "Messages"), h("span", {}, "System Messages")),
       above.length ? above.map(r => h("button", { type: "button", class: "lnk", onclick: () => go("detail:" + keyOf(r)) }, `${r.code}: the mill's quote is ${pc(r.gap_pct)} against should-cost, above the usual range`)) : h("div", { class: "empty" }, "No Unread Message!"),
       h("div", { class: "btnrow" }, h("button", { type: "button", onclick: () => toast("Archived") }, "Archive"), h("button", { type: "button", onclick: () => toast("Marked as read") }, "Mark As Read")));
   } else if (name === "recent") {
     kids.push(h("div", { class: "ttl", html: svg("clock") + "<span>Recent Visits</span>" }), state.recent.length ? state.recent.map(v => h("button", { type: "button", class: "lnk", onclick: () => go("detail:" + v.key) }, h("span", {}, h("b", {}, v.code), ` · ${ago(v.at)}`))) : h("div", { class: "empty" }, "No visits yet. Open a fabric code from the list."));
   } else if (name === "bookmarks") {
-    kids.push(h("div", { class: "ttl", html: svg("bookmark") + "<span>Bookmarks</span>" }), state.bookmarks.length ? state.bookmarks.map(b => link(b.label, b.href)) : h("div", { class: "empty" }, "No Bookmarked Pages! Click the bookmark icon on the menu to bookmark a page."));
+    kids.push(h("div", { class: "ttl", html: svg("bookmark") + "<span>Bookmarks</span>" }), state.bookmarks.length ? state.bookmarks.map(b => link(b.label, b.href)) : h("div", { class: "empty" }, "No Bookmarked Pages! Open a flyout, point at a link and click the bookmark mark beside it."));
   } else if (name === "downloads") {
     kids.push(h("div", { class: "ttl", html: svg("download") + "<span>Download Center</span>" }), h("div", { class: "note" }, "Files made in this visit. The browser keeps the files themselves."),
       state.downloads.length ? state.downloads.map(d => h("div", { class: "lnk" }, `${d.name} · ${ago(d.at)}`)) : h("div", { class: "empty", style: "margin-top:8px" }, "No downloads yet."));
@@ -325,7 +328,7 @@ function render() {
   const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label, h("span", { class: "dots", "aria-hidden": "true" }, "⋮"))), fab);
   fill(main, crumbs, h("div", {}, title, h("span", { style: "margin-left:12px;color:var(--text2);font-size:13px" }, cls[1])), tabs, toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
-  const badge = $("#notebadge"); if (badge) { const n = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range").length; badge.hidden = !n; badge.textContent = n; }
+  const badge = $("#notebadge"); if (badge) { const n = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range" && !r.duplicate_of && r.range && r.gap_pct - r.range[1] >= 2).length; badge.hidden = !n; badge.textContent = n; }
 }
 
 function toolbar(rows) {
@@ -340,7 +343,7 @@ function toolbar(rows) {
   const saved = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, [...mod.savedSearches, ...state.userSearches].map(x => ({ label: x.name, on: state.saved === x.name, run: () => applySaved(x) })).concat(state.userSearches.length ? ["-", { label: "Delete a saved search…", run: deleteSaved }] : [])) }, state.saved, h("span", {}, "▾"));
   const sortName = (mod.sortFields.find(f => f[0] === state.sort.field) || [0, state.sort.field])[1];
   const sortIcon = tipOn(h("button", { type: "button", class: "selbtn", html: svg("sort"), onclick: () => { state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc"; rerunWithSkeleton(); } }), state.sort.dir === "asc" ? (state.sort.field === "added" ? "Oldest to latest" : "Ascending") + ": click for descending" : (state.sort.field === "added" ? "Latest to oldest" : "Descending") + ": click for ascending");
-  const sortSel = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.sortFields.map(([k, l]) => ({ label: l, on: state.sort.field === k, run: () => { state.sort.field = k; rerunWithSkeleton(); } }))) }, sortName, h("span", {}, "▾"));
+  const sortSel = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.sortFields.map(([k, l]) => ({ label: l, on: state.sort.field === k, run: () => { state.sort.field = k; if (k === "band") state.sort.dir = "asc"; rerunWithSkeleton(); } }))) }, sortName, h("span", {}, "▾"));
   const active = Object.keys(state.filters).filter(k => k !== "_codes").length > 0 || state.costedOnly;
   const filt = ib("filter", "Advanced Filter", () => openDrawer()); if (active) filt.append(h("span", { class: "dot" }));
   const more = ib("dots", "More", e => menu(e.currentTarget, mod.moreActions.map(a => ({ label: a, run: () => moreAction(a, rows) })), { right: true }));
@@ -349,7 +352,7 @@ function toolbar(rows) {
     ib("search", "Like Search: code, description or supplier contains", () => runSearch("like"), { class: "ib" + (s.mode === "like" ? " on" : "") }),
     ib("exact", "Exact Search: fabric code matches exactly", () => runSearch("exact"), { class: "ib" + (s.mode === "exact" ? " on" : "") }),
     h("span", { class: "vdiv" }), input, ib("arrow", "Search", () => runSearch(s.mode)),
-    h("span", { class: "count", "aria-live": "polite" }, `Showing ${Math.min(state.shown, rows.length).toLocaleString("en-IN")} of ${rows.length.toLocaleString("en-IN")} Records`), sch,
+    state.tab !== "items" ? null : h("span", { class: "count", "aria-live": "polite" }, `Showing ${Math.min(state.shown, rows.length).toLocaleString("en-IN")} of ${rows.length.toLocaleString("en-IN")} Records`), sch,
     h("span", { class: "spacer" }), slider, ...views, saved, h("span", { style: "display:inline-flex;align-items:center" }, sortIcon, sortSel), filt, more);
 }
 function chipsRow() {
@@ -409,6 +412,7 @@ function cellFor(r, c, cls, pinStyle, pend) {
   if (c.type === "select") { const b = h("input", { type: "checkbox", class: "cb", "aria-label": `Select ${r.code}` }); b.checked = state.selection.has(k); b.addEventListener("change", () => { b.checked ? state.selection.add(k) : state.selection.delete(k); render(); }); return h("td", { class: cls(c), style: st }, b); }
   if (c.type === "thumb") return h("td", { class: cls(c), style: st }, h("div", { class: "thumb", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" }, title: r.route || "" }, (r.route || "—").split(/[ /]/)[0].slice(0, 5).toUpperCase()));
   if (c.type === "link") return h("td", { class: cls(c), style: st }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code));
+  if (c.type === "band" && r.duplicate_of) return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: "Same order as " + r.duplicate_of + ": counted once in the negotiation pack" }, h("i", { style: { background: "#B9BEC7" } }), "Duplicate of " + r.duplicate_of));
   if (c.type === "band") return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: r.band === "Ask break-up" && r.why_unsure ? r.why_unsure.join("; ") : null }, h("i", { style: { background: BAND_COLOR[r.band] || "#B9BEC7" } }), r.band));
   if (c.type === "status") return h("td", { class: cls(c), style: st }, pend ? tipOn(h("button", { type: "button", class: "discard", onclick: () => { delete state.pending[k]; render(); } }, "✕"), "Discard the unsaved change") : "");
   if (c.type === "edit-dd" || c.type === "edit-text") {
@@ -447,7 +451,7 @@ function cardView(rows) {
 function suppliersTab(rows) {
   const by = {};
   for (const r of rows) { const s = r.supplier || "(none)"; (by[s] = by[s] || []).push(r); }
-  const list = Object.entries(by).map(([s, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should); const met = m.reduce((a, r) => a + r.metres, 0); return { s, n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
+  const list = Object.entries(by).map(([s, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should); const met = m.reduce((a, r) => a + r.metres, 0); return { s, n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Above range" || r.band === "Above, ask break-up").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
   return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier", "Fabrics", "Metres", "Paid Rs/m (avg over metres)", "Should-cost Rs/m", "Paid above", "Above range", "Ask break-up"].map((t, i) => h("th", { class: i ? "n" : "" }, t)))),
     h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, h("button", { type: "button", class: "code", onclick: () => { state.filters.supplier = [x.s]; state.tab = "items"; rerunWithSkeleton(); } }, x.s)), h("td", { class: "n" }, n0(x.n)), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.unsure)))))));
 }
@@ -475,8 +479,9 @@ function fields(r) {
   return [["Fabric code", r.code], ["Source", r.source], ["Description", r.description], ["Supplier", r.supplier], ["Route", r.route], ["Weave", r.weave], ["Weave group", r.weave_group],
     ["Finish", r.finish], ["Pattern", r.pattern], ["Warp yarn", r.warp], ["Weft yarn", r.weft], ["EPI × PPI", r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : ""], ["Finished width (in)", r.width],
     ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", n2(r.price)],
-    ["Above should-cost", r.price ? `Rs ${n2(r.gap)} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
-    [r.source === "Purchase orders" ? "Paid above should-cost, Rs" : "Quote above should-cost, Rs (not paid)", n0(r.excess)], ["Order size", r.order_size], ["Quantity band", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
+    ["Against should-cost", r.price && r.gap !== null && r.gap !== undefined ? `Rs ${n2(Math.abs(r.gap))} ${r.gap >= 0 ? "above" : "below"} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
+    [r.source === "Purchase orders" ? "Paid against should-cost, Rs" : "Quote against should-cost, Rs (not paid)", r.excess === null || r.excess === undefined ? "" : `${n0(Math.abs(r.excess))} ${r.excess >= 0 ? "above" : "below"}`],
+    ["Duplicate of", r.duplicate_of || ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
     ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
@@ -677,7 +682,13 @@ function moreAction(a, rows) {
   else if (a === "Download Excel with Images") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("RightPrice holds no fabric images, so the file has none – see Downloads")).catch(e => toast(e.message, false));
   else if (a === "Bulk Upload") location.href = "/#bulk";
   else if (a === "Download Templatised Data") { location.href = "/api/template"; state.downloads.unshift({ name: "RightPrice template.xlsx", at: new Date().toISOString() }); toast("Template downloading – see Downloads"); }
-  else if (a === "Negotiation Pack") location.href = "/#pack";
+  else if (a === "Negotiation Pack") {
+    // the pack is made from the fabric list (mill sheets): ticked fabric-list rows travel with it
+    const ids = state.rows.filter(r => r.source === "Fabric list" && state.selection.has(keyOf(r)) && r.id).map(r => r.id);
+    try { if (ids.length) sessionStorage.setItem("rp-pack-ids", JSON.stringify(ids)); else sessionStorage.removeItem("rp-pack-ids"); } catch (e) { /* no handover */ }
+    if (state.cls === "Purchase orders") toast("The pack is made from the fabric list (mill sheets), not from purchase orders", false);
+    setTimeout(() => { location.href = "/#pack"; }, state.cls === "Purchase orders" ? 1200 : 0);
+  }
   else toast(`${a}: the Dashboard and Pilot results hold the reports`, false);
   void src;
 }
@@ -734,7 +745,7 @@ function openDrawer() {
         const vals = h("div");
         const paintVals = () => fill(vals, ...values.filter(v => !mini.value || v.toLowerCase().includes(mini.value.toLowerCase())).slice(0, 200).map(v => {
           const cb = h("input", { type: "checkbox", class: "cb" }); cb.checked = (draft[a.id] || []).includes(v);
-          cb.addEventListener("change", () => { const cur = new Set(draft[a.id] || []); cb.checked ? cur.add(v) : cur.delete(v); if (cur.size) draft[a.id] = [...cur]; else delete draft[a.id]; });
+          cb.addEventListener("change", () => { const cur = new Set(draft[a.id] || []); cb.checked ? cur.add(v) : cur.delete(v); if (cur.size) draft[a.id] = [...cur]; else delete draft[a.id]; const keep = list.scrollTop; paintList(search.value.toLowerCase()); list.scrollTop = keep; });
           return h("label", {}, cb, `${v} (${counts[v]})`);
         }));
         mini.addEventListener("input", paintVals); paintVals();

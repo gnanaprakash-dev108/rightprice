@@ -879,7 +879,8 @@ def costs():
                 r["range"] = [v["lo"], v["hi"]]
         elif verdicts is None:
             r["band"] = "Working it out"
-    for i in list_view({})["rows"]:
+    listed = list_view({})["rows"]
+    for i in listed:
         b, inp = i["brief"], i["inputs"] or {}
         st = None if b is None else ("Check quote" if b["implausible"] else STANCE_BAND[b["stance"]])
         out.append({
@@ -895,6 +896,25 @@ def costs():
             "placeholders": ", ".join(i["placeholders"]) or None, "held_back": None, "band": st or ("Not costed" if i["problems"] else "No price"),
             "range": None if b is None else [b["band"]["lo"] * 100, b["band"]["hi"] * 100], "buckets": None,
             "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"]})
+    # an unsure verdict on a price above the top of its usual range is still money above should-cost:
+    # it is marked "Above, ask break-up" so it is not lost among the unsure rows
+    for r in out:
+        if r["band"] == "Ask break-up" and r.get("range") and r.get("gap_pct") is not None and r["gap_pct"] > r["range"][1]:
+            r["band"] = "Above, ask break-up"
+    # the same order twice in the fabric list (as the negotiation pack decides it)
+    seen = {}
+    for r, i in zip([x for x in out if x["source"] == "Fabric list"], listed):
+        keys = []
+        if r["metres"] and r["code"] != "(no code)":
+            keys.append(("code", r["code"], r["metres"]))
+        if i["from_mill"]:
+            keys.append(("sheet", json.dumps({k: v for k, v in i["mill"].items() if k != "Fab Code"}, sort_keys=True, default=str)))
+        r["duplicate_of"] = next((seen[k] for k in keys if k in seen), None)
+        for k in keys:
+            seen.setdefault(k, r["code"])
+        if r["metres"] is None:
+            q = mill_sheet._num(i["mill"].get("Total order qnty")) if i["mill"] else None
+            r["metres"] = q if q and q > 0 else None
     return {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                      "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
 
@@ -916,7 +936,8 @@ def costs_download(payload: dict = Body(default={})):
     cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("route", "Route"),
             ("weave", "Weave"), ("finish", "Finish"), ("warp", "Warp yarn"), ("weft", "Weft yarn"), ("epi", "EPI"), ("ppi", "PPI"),
             ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid (purchase orders) or quoted (fabric list) Rs/m"),
-            ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"), ("band", "Against the usual range"),
+            ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"),
+            ("excess", "Above should-cost Rs (gap x metres; minus = below)"), ("band", "Against the usual range"),
             ("placeholders", "Placeholder rates used"), ("status", "Status"), ("remarks", "Remarks")]
     df = pd.DataFrame([{h: r.get(k) for k, h in cols} for r in pick], columns=[h for _, h in cols])
     buf = io.BytesIO()

@@ -1067,7 +1067,9 @@ const plural = (n, w) => `${fmt(n, 0)} ${w}${n === 1 ? "" : "s"}`;
 const STANCE_ORDER = { push: 0, ask: 1, check: 2, below: 3, fair: 4 };
 PAGES.pack = async () => {
   const ui = state.packUI = state.packUI || { scope: null };
-  const lu = state.listUI, picked = lu && lu.picked && lu.picked.size ? [...lu.picked] : null;
+  // rows ticked in Right cost come over once, through this tab's session storage
+  let handed = null; try { handed = JSON.parse(sessionStorage.getItem("rp-pack-ids") || "null"); sessionStorage.removeItem("rp-pack-ids"); } catch (e) { /* none */ }
+  const lu = state.listUI, picked = handed && handed.length ? handed : lu && lu.picked && lu.picked.size ? [...lu.picked] : null;
   const move = lu && lu.pct !== "" && lu.pct !== undefined && Number(lu.pct) ? { [lu.yarn]: Number(lu.pct) } : null;
   let first;
   try { first = await (await postJSON("/api/pack", move ? { yarn_pct: move } : {})).json(); }
