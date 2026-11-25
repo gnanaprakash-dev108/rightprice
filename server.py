@@ -252,7 +252,7 @@ def brief(res, m, quantity=None, notes=(), sel=None):
     route = next((u["Choice"].split(", ")[1] for u in res["rates_used"] if u["Item"] == "Weaving" and ", " in str(u["Choice"])), None)
     basis = {u["Item"]: str(u["Basis"]) for u in res["rates_used"]}
     is_ph = lambda item: basis.get(item, "").startswith("Placeholder")
-    weak, caveats = [], []
+    weak, caveats, ph_share = [], [], None
 
     # placeholders: weighed by the share of the price that rests on them
     if res["placeholders"]:
@@ -261,8 +261,7 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         if share is None or share > PLACEHOLDER_SHARE_LIMIT:
             weak.append(f"placeholder rates are used for {names}" + ("" if share is None else f", and {share:.0%} of the price rests on them"))
         else:
-            caveats.append(f"A placeholder rate is used for {names}, but only {share:.1%} of the price rests on it: "
-                           f"even if it were off by half, the should-cost would move by under {share / 2 * 100:.1f}%, so the advice stands.")
+            ph_share = share           # whether the advice stands is decided once the range is known, below
 
     # the fit of this fabric type, in the dashboard's own figures (panel 1)
     cat, typ = None, None
@@ -270,9 +269,14 @@ def brief(res, m, quantity=None, notes=(), sel=None):
     if ins and ins[1]:
         weave = next((u["Choice"].split(" (")[0] for u in res["rates_used"] if u["Item"] == "Weaving"), None)
         cat = next((c for c in ins[1]["categories"] if c["route"] == route and c["weave"] == grp.get(weave)), None)
-        typ = f"{(route or '').lower()} {str(grp.get(weave) or weave or '').lower()}".strip()
+        g = str(grp.get(weave) or weave or "")
+        typ = f"{(route or '').lower()} {g.lower()}".strip()
+        if weave and g and g.lower() not in str(weave).lower():
+            typ_named = f"{(route or '').lower()} {str(weave).lower()} (counted with {g.lower()})"
+        else:
+            typ_named = typ
         if cat is None:
-            weak.append(f"there are too few purchases of {typ} fabrics to test the tool on")
+            weak.append(f"there are too few purchases of {typ_named} fabrics to test the tool on")
         elif cat["trust"] == "weak":
             weak.append(f"on {typ} the tool is within 10% of the price paid for only {cat['within10']:.0%} of the "
                         f"{cat['fabrics']} fabrics bought, and they were paid {cat['gap']:+.1f}% against should-cost on "
@@ -290,15 +294,43 @@ def brief(res, m, quantity=None, notes=(), sel=None):
                           f"; the tool always allows {BAND_MIN:.0f}% either way" if cat["p75"] < BAND_MIN or cat["p25"] > -BAND_MIN else "")
 
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
+    qty_only = False
     if why_qty:
-        weak.insert(0, why_qty)
+        same = False
+        if qty_fix:
+            try:
+                alt = dict(sel, **{qty_fix["field"]: qty_fix["value"]})
+                if qty_fix["field"] == "Order size":
+                    alt["Rate card quantity"] = rate_card.NO_QTY
+                same = abs(masters.cost(alt, m)["total_per_m"] - res["total_per_m"]) < 0.005
+            except Exception:
+                same = False
+        if not same:
+            qty_only = not weak
+            weak.insert(0, why_qty)
+        else:
+            qty_fix = None
     stance = "ask" if weak else ("push" if quote > upper else ("below" if quote < lower else "fair"))
+    if ph_share is not None:
+        swing = round(should * ph_share / 2, 2)            # a placeholder off by half moves the should-cost this much
+        edge = min(abs(quote - upper), abs(quote - lower))
+        if stance != "ask" and edge <= swing * (1 + hi / 100) + 0.005:
+            caveats.append(f"A placeholder rate is used for {', '.join(res['placeholders'])}; {ph_share:.1%} of the price rests on it. "
+                           f"If it were off by half the should-cost would move by up to Rs {swing:,.2f}, and this quote is only "
+                           f"Rs {edge:,.2f} from the edge of the usual range, so the advice could change: ask for the mill's charge for it first.")
+        else:
+            caveats.append(f"A placeholder rate is used for {', '.join(res['placeholders'])}, but only {ph_share:.1%} of the price rests on it: "
+                           f"even if it were off by half, the should-cost would move by up to Rs {swing:,.2f}, which would not change the advice.")
+    if gap / should < -0.30 if should else False:
+        caveats.insert(0, f"The quote is {abs(gap / should):.0%} below should-cost. That is almost always a different cloth, a typing slip "
+                          "or a price per something other than a metre; check it before treating it as a saving.")
+    near = stance == "push" and quote - upper <= 0.02 * should
     for n in notes or ():
         if "small-lot upcharge" not in str(n):
             caveats.insert(0, "From the mill's sheet: " + str(n)[0].upper() + str(n)[1:] + ".")
     return {
         "quote": quote, "should": should, "gap": gap, "gap_pct": gap / should if should else 0.0,
-        "stance": stance, "weak": weak, "caveats": caveats, "qty_fix": qty_fix,
+        "stance": stance, "weak": weak, "caveats": caveats, "qty_fix": qty_fix, "qty_only": qty_only, "near_edge": near,
         "open_at": should, "settle_up_to": upper, "lower": lower, "above_band": round(quote - upper, 2),
         "band": {"hi": hi / 100, "lo": lo / 100, "why": band_why},
         "fit": None if cat is None else {"type": typ, "fabrics": cat["fabrics"], "within10": cat["within10"], "gap": cat["gap"],
@@ -308,7 +340,8 @@ def brief(res, m, quantity=None, notes=(), sel=None):
             "yarn": None if f is None else {"warp": i["warp_rate"] * f, "weft": i["weft_rate"] * f, "warp_now": i["warp_rate"],
                                              "weft_now": i["weft_rate"], "pct": (f - 1) * 100,
                                              "placeholder": is_ph("Warp yarn") or is_ph("Weft yarn")},
-            "weaving": {"rate": i["weaving_rate"] + gap / mult / i["ppi"], "now": i["weaving_rate"], "placeholder": is_ph("Weaving")},
+            "weaving": {"rate": i["weaving_rate"] + gap / mult / i["ppi"], "now": i["weaving_rate"], "placeholder": is_ph("Weaving"),
+                        "per_m_before": gap / mult, "picks": i["ppi"]},
             "margin": {"rate": (quote + i.get("volume_discount_per_m", 0.0)) / cost_before_margin - 1, "now": i["margin"],
                        "placeholder": is_ph("Crimp, wastage, overhead, margin")},
         },
@@ -382,7 +415,11 @@ def cost(sel: dict = Body(...)):
     notes = sel.pop("_notes", None) or []
     qty = _quantity_or_400(sel.get("Order quantity (m)"))
     m = get_masters()
-    return result_json(cost_or_400(sel, m), qty, notes=notes, sel=sel)
+    out = result_json(cost_or_400(sel, m), qty, notes=notes, sel=sel)
+    q = _num_or_none(sel.get("Quoted price (Rs/m)"))
+    if q is not None and q <= 0:
+        out["warnings"].append(f"A quote of Rs {q:g} is not a price, so it is ignored: no negotiation brief is given.")
+    return out
 
 
 @app.post("/api/cost-sheet")
@@ -530,6 +567,8 @@ def list_view(options: dict = Body(default={})):
     m = get_masters()
     _warm_pilot()
     moves = {k: float(v) for k, v in (options.get("yarn_pct") or {}).items() if v not in ("", None) and float(v) != 0}
+    if any(abs(v) > 50 for v in moves.values()):
+        raise HTTPException(400, "A yarn move is limited to 50% either way")
     sim = None
     if moves:
         sim = dict(m)
