@@ -78,6 +78,17 @@ and those were fixed too. What the brief does now:
 Not fixed: the description does not follow a weave change (the title still says "Dobby" after
 the weave is changed); the list and panel 1 still scroll sideways on a phone (see "Next to build" 6).
 
+### Negotiation pack (25 Nov, pull request 11)
+
+One printable page (A4 landscape, about 20 rows) for a whole mill sheet, one upload, or the rows
+ticked on the list: totals counted on Push and in-line rows only (rows the tool is unsure of shown
+apart), "lead with" the money above the usual range, every row with open and aim prices, the mill's
+own sums done again (`mill_sheet.own_sums`), questions per row (the whole gap and what would explain
+it, a missing volume discount from 2,000 m except on 40s, the second yarn, an unknown finish), and
+rows not costed. A row repeating an order is counted once. With a yarn move on the list every figure
+follows it. Two cold reviews; the second's last three points (duplicates, uploads, a Push only paise
+over its range) were fixed after it and checked by `check_server.py`, not by a third reviewer.
+
 ### Waiting on the owner
 
 1. Real yarn rates for poly cotton and linen (six placeholders are in the yarn master).
