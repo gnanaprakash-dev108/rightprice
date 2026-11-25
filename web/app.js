@@ -77,13 +77,13 @@ const ICON = {
   pilot: '<path d="M5 20V10M10 20V4M15 20v-8M20 20v-5"/>',
 };
 const NAV = [
-  ["Costing", [["dashboard", "Dashboard"], ["cost", "Cost a fabric"], ["compare", "Compare"], ["bulk", "Bulk upload"]]],
+  ["Costing", [["dashboard", "Dashboard"], ["cost", "Cost a fabric"], ["bulk", "Bulk upload and list"], ["compare", "Compare"]]],
   ["Prices", [["yarn", "Yarn prices"], ["cotton", "Cotton prices"], ["intake", "Bring in prices"]]],
   ["Rates", [["rates", "Rate tables"], ["ratecard", "Mill rate card"], ["settings", "Settings"]]],
   ["Analysis", [["pilot", "Pilot results"]]],
 ];
 const PAGES = {};
-const state = { meta: null, sel: null, visited: new Set(), bySize: true, chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
+const state = { meta: null, sel: null, list: null, listId: null, sim: null, visited: new Set(), bySize: true, chart: "bars", wfMode: "groups", wfOpen: new Set(), showZero: false, bulk: null, dash: null };
 
 function buildNav() {
   const nav = $("#nav");
@@ -220,51 +220,117 @@ function tableCard(sheet, title, opts = {}) {
 }
 
 // ------------------------------------------------------------------ dashboard
+/* Everything on this page is the buyer's own data: purchase orders costed by the tool, the rate
+   master, and the cotton price history. Nothing here is an outside benchmark. */
+// a gap is coloured only where the tool can be leaned on; elsewhere it is shown plainly with a caution
+function gapTag(gap, trust) {
+  if (trust === "weak") return h("span", { class: "tag warn", title: "The tool fits past prices of this group poorly, so this gap says more about the tool than about the price" }, `${pctSigned(gap)} \u00B7 tool unsure`);
+  return h("span", { class: "tag " + (Math.abs(gap) <= 5 ? "flat" : gap > 0 ? "down" : "up"), title: Math.abs(gap) <= 5 ? "Within 5%: treat as noise" : gap > 0 ? "You paid above should-cost" : "You paid below should-cost" }, pctSigned(gap));
+}
+const pctSigned = (v, d = 1) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(d) + "%";
+function yarnWhatIf(ins, list) {
+  const ref = ins.reference, costed = list.rows.filter(r => r.should_cost !== null && r.inputs);
+  const pick = h("select", { id: "wi-yarn" }, h("option", { value: "*" }, "All yarns"), state.meta.yarns.map(y => h("option", { value: y.key }, `${y.key} · Rs ${fmt(y.rate, 0)}/kg`)));
+  const slider = h("input", { id: "wi-pct", type: "range", min: "-20", max: "20", step: "1", value: "5" });
+  const num = h("input", { id: "wi-num", type: "number", min: "-50", max: "50", step: "1", value: "5", "aria-label": "Yarn price change, per cent" });
+  const out = h("div", { class: "whatif-out", "aria-live": "polite" });
+  let turn = 0;
+  const run = async () => {
+    const p = Number(num.value) || 0, mine = ++turn, key = pick.value;
+    const parts = [];
+    // the reference fabric: worked out here from its rupees per Rs 10 a kilo
+    const uses = key === "*" || key === state.meta.example["Warp yarn"];
+    const dRef = uses ? (ref.warp_per_10 * ref.warp_rate + ref.weft_per_10 * ref.weft_rate) / 10 * p / 100 : 0;
+    parts.push(h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, "Reference shirting, 40s × 40s, 132 × 84"), h("b", { class: "num" }, `${rs(ref.total)} → ${rs(ref.total + dRef)}`), h("span", { class: "tag " + (dRef > 0.005 ? "down" : dRef < -0.005 ? "up" : "flat") }, uses ? `${dRef >= 0 ? "+" : "−"}${fmt(Math.abs(dRef))} /m (${pctSigned(dRef / ref.total * 100)})` : "does not use this yarn")));
+    if (costed.length) {
+      parts.push(h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Your ${costed.length} listed fabrics`), h("b", { class: "num" }, "working out…")));
+      out.replaceChildren(...parts);
+      try {
+        const v = await (await postJSON("/api/list", { yarn_pct: { [key]: p } })).json(); if (mine !== turn) return;
+        const moved = v.rows.filter(r => r.should_cost !== null && (p === 0 || r.simulated !== null)).map(r => p === 0 ? Object.assign({}, r, { simulated: r.should_cost }) : r);
+        const d = moved.map(r => r.simulated - r.should_cost), avg = d.reduce((a, x) => a + x, 0) / (d.length || 1), base = moved.reduce((a, r) => a + r.should_cost, 0) / (moved.length || 1);
+        const hit = d.filter(x => Math.abs(x) >= 0.005).length;
+        parts[1] = h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Your ${moved.length} listed fabrics, average`), h("b", { class: "num" }, `${rs(base)} → ${rs(base + avg)}`), h("span", { class: "tag " + (avg > 0.005 ? "down" : avg < -0.005 ? "up" : "flat") }, `${avg >= 0 ? "+" : "−"}${fmt(Math.abs(avg))} /m (${pctSigned(base ? avg / base * 100 : 0)})`), h("a", { href: "#bulk", class: "sub", style: "margin:0", onclick: () => { state.listUI = state.listUI || { groups: { Fabric: true, Order: false, "Mill's price build-up": true }, picked: new Set(), filter: "", show: "all" }; state.listUI.yarn = key; state.listUI.pct = String(p || ""); } }, p === 0 ? "see each in the list" : `${hit} of ${moved.length} use this yarn and move \u00B7 see each in the list`));
+      } catch (e) { parts[1] = h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, "Your listed fabrics"), h("span", { class: "sub", style: "margin:0" }, e.message)); }
+    }
+    out.replaceChildren(...parts);
+  };
+  slider.addEventListener("input", () => { num.value = slider.value; run(); });
+  num.addEventListener("input", () => { slider.value = Math.max(-20, Math.min(20, Number(num.value) || 0)); run(); });
+  pick.addEventListener("change", run); run();
+  return h("div", { class: "card whatif" },
+    h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "If yarn prices move"), h("div", { class: "sub", style: "margin:2px 0 0" }, `A yarn price move does not reach the fabric in full. On the reference shirting, 10% on yarn is about ${(ref.yarn_share * 10).toFixed(1)}% on the fabric. Each Rs 10 a kilo on the warp yarn is ${rs(ref.warp_per_10)} a metre; on the weft, ${rs(ref.weft_per_10)}.`))),
+    h("div", { class: "whatif-controls" }, h("div", { class: "field" }, h("label", { for: "wi-yarn" }, "Yarn"), pick), h("div", { class: "field grow" }, h("label", { for: "wi-pct" }, "Price change"), h("div", { class: "slider-row" }, h("span", { class: "sub", style: "margin:0" }, "−20%"), slider, h("span", { class: "sub", style: "margin:0" }, "+20%"), num, h("span", {}, "%")))),
+    out);
+}
+
 PAGES.dashboard = async () => {
-  const d = state.dash = await getJSON("/api/dashboard");
-  const c = d.cotton;
-  const stat = (lbl, val, note) => h("div", { class: "card stat" }, h("div", { class: "lbl" }, lbl), h("div", { class: "val num" }, val), note ? h("div", { class: "note" }, note) : null);
-  const stats = h("div", { class: "grid g4" },
-    stat("Fabrics costed and saved", String(d.saved_count)),
-    stat("Average quote gap", d.avg_gap_pct === null ? "—" : d.avg_gap_pct.toFixed(1) + "%", "Quote above should-cost, saved costings"),
-    stat("Shankar-6 cotton", c ? "Rs " + fmt(c.price, 0) : "—", c ? `per candy (355.6 kg of lint), as of ${day(c.date)}${c.age_days > 30 ? " · " + c.age_days + " days old" : ""}` : "No history loaded"),
-    stat("Placeholder rates", String(d.placeholders), "Starting guesses with no data behind them"));
+  const [ins, list] = await Promise.all([getJSON("/api/insights"), (await postJSON("/api/list", {})).json()]);
+  state.list = list;
+  const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders costed on your rate master; panel 3 is the cotton price history; panel 5 is from published accounts.")];
+  nodes.push(yarnWhatIf(ins, list));
 
-  const pos = { inside: ["flat", "● inside market range"], above: ["down", "▲ above market"], below: ["up", "▼ below market"] };
-  const yarnCards = d.yarns.map(y => h("a", { class: "card price-card click", href: "#yarn/" + encodeURIComponent(y.key) },
-    h("div", { class: "name" }, y.key, y.basis.startsWith("Placeholder") ? h("span", { class: "tag warn", title: y.basis }, "⚠ placeholder") : null),
-    h("div", { class: "big num" }, `Rs ${fmt(y.rate, 0)}/kg`),
-    y.position ? h("span", { class: "tag " + pos[y.position][0] }, pos[y.position][1]) : h("span", { class: "tag flat" }, "no market reference"),
-    h("div", { class: "meta" }, y.market_low !== null ? `Market Rs ${fmt(y.market_low, 0)}–${fmt(y.market_high, 0)} · ` : "", "rate of ", day(y.date))));
+  if (p) {
+    // 1. cost per metre by fabric type
+    const top = Math.max(...p.categories.map(c => Math.max(c.paid, c.should)));
+    const rows = p.categories.map(c => h("tr", {}, h("td", {}, h("b", {}, c.route), " · ", c.weave), h("td", { class: "cmp-cell" }, h("div", { class: "cmp-bars", "aria-hidden": "true" }, h("div", { class: "cmp-bar", style: `width:${c.paid / top * 100}%;background:var(--total)` }), h("div", { class: "cmp-bar", style: `width:${c.should / top * 100}%;background:var(--g1)` }))),
+      h("td", { class: "n" }, fmt(c.paid, 0)), h("td", { class: "n" }, fmt(c.should, 0)), h("td", { class: "n" }, gapTag(c.gap, c.trust)), h("td", { class: "n" }, pct(c.within10, 0)), h("td", { class: "n" }, fmt(c.fabrics, 0))));
+    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} 100% cotton fabrics bought Aug to Nov 2026, averaged over the metres bought. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
+      h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Fabric type"), h("th", { class: "cmp-cell" }, ""), h("th", { class: "n" }, "Paid Rs/m"), h("th", { class: "n" }, "Should-cost Rs/m"), h("th", { class: "n" }, "Paid above should-cost"), h("th", { class: "n", title: "Share of these fabrics where the should-cost is within 10% of the price paid" }, "Tool within 10%"), h("th", { class: "n" }, "Fabrics"))), h("tbody", {}, rows))),
+      h("p", { class: "sub", style: "margin:10px 0 0" }, "Poly cotton and linen are not here: there are no costed purchases of them yet.")));
 
-  const cols = d.saved.columns, ix = n => cols.indexOf(n);
-  const savedCards = d.saved.rows.slice(0, 12).map((r, n) => {
-    const gap = r[ix("Gap %")], item = (d.saved_items || [])[n] || {};
-    const open = item.inputs ? h("button", { class: "btn small", type: "button", onclick: () => { state.sel = selFromRow(item.inputs); state.reopened = item.then ? { then: item.then, on: item.saved_on } : null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); location.hash = "#cost"; } }, "Open") : null;
-    const del = item.id ? h("button", { class: "btn small", type: "button", onclick: async e => {
-      if (e.target.dataset.sure !== "1") { e.target.dataset.sure = "1"; e.target.textContent = "Delete: sure?"; setTimeout(() => { if (e.target.isConnected) { e.target.dataset.sure = ""; e.target.textContent = "Delete"; } }, 4000); return; }
-      try { await api("/api/saved/" + item.id, { method: "DELETE" }); state.dash = null; toast("Saved costing deleted"); route(); } catch (err) { toast(err.message); }
-    } }, "Delete") : null;
-    return h("div", { class: "card price-card" },
-      h("div", { class: "name" }, String(r[ix("Fabric code")] ?? "")),
-      h("div", { class: "big num" }, `Rs ${fmt(r[ix("Should-cost Rs/m")])}/m`),
-      blank(gap) ? h("span", { class: "tag flat" }, "no quote") : h("span", { class: "tag " + (gap > 0 ? "down" : "up") }, `${gap > 0 ? "\u25B2" : "\u25BC"} quote ${Math.abs(gap).toFixed(1)}% ${gap > 0 ? "above" : "below"} when saved`),
-      h("div", { class: "meta" }, [r[ix("Description")], r[ix("Supplier")], blank(r[ix("Saved on")]) ? null : "saved " + day(r[ix("Saved on")])].filter(v => !blank(v)).join(" · ")),
-      open || del ? h("div", { class: "row-actions", style: "margin-top:10px" }, open, del) : null);
-  });
-  return [
-    ...pageHead("Dashboard", "Saved costings, the yarn and cotton rates behind them, and how the yarn master sits against the market."),
-    stats,
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Saved costings"), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric")),
-      savedCards.length ? h("div", { class: "grid cards" }, savedCards) : h("p", { class: "empty" }, "Nothing saved yet. Cost a fabric and press Save to dashboard. A saved costing can be opened again and re-costed on the rates of the day."),
-      d.saved.rows.length ? h("details", { style: "margin-top:14px" }, h("summary", { style: "cursor:pointer;color:var(--muted)" }, `All ${d.saved.rows.length} saved costings as a table`), h("div", { style: "margin-top:12px" }, dataTable(d.saved, { filter: true, label: "Saved costings" }))) : null),
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Cotton yarn rates in the yarn master"), h("a", { href: "#yarn" }, "All yarn prices")),
-      h("div", { class: "grid cards" }, yarnCards)),
-    h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Supplier cost ratios, % of sales")),
-      h("p", { class: "sub" }, "Whole-company figures from published accounts; they include yarn, garments and other businesses."),
-      dataTable(d.benchmarks, { label: "Supplier cost ratios" })),
-  ];
+    // 2. where the rupee goes
+    const names = p.split[0].shares.map(s => s.name);
+    const bars = p.split.map(sp => { const conv = 1 - sp.shares[0].share; const seg = sp.shares.filter(s => s.share > 0.0005).map(s => { const i = names.indexOf(s.name); const el = h("div", { class: "stack-seg", tabindex: "0", style: `width:${s.share * 100}%;background:var(${GROUP_COLOR[i % 8]})` }, s.share > 0.06 ? h("span", {}, pct(s.share, 0)) : null); withTip(el, () => `<b>${s.name}</b>${pct(s.share)} of the should-cost of ${sp.route.toLowerCase()} fabrics`); return el; });
+      return h("div", { class: "stack-row" }, h("div", { class: "stack-name" }, h("b", {}, sp.route), h("small", {}, `${fmt(sp.fabrics, 0)} fabrics · median Rs ${fmt(sp.median_cost, 0)}/m`)), h("div", { class: "stack", role: "img", "aria-label": `${sp.route}: ` + sp.shares.map(s => `${s.name} ${pct(s.share, 0)}`).join(", ") }, seg), h("div", { class: "stack-note num" }, `conversion ${pct(conv, 0)}`)); });
+    const tbl = { columns: ["Cost group", ...p.split.map(s => s.route)], rows: names.map(n => [n, ...p.split.map(sp => pct((sp.shares.find(s => s.name === n) || { share: 0 }).share))]) };
+    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "2. Where the rupee goes, by process"), h("div", { class: "sub", style: "margin:2px 0 0" }, "Share of the should-cost, which is the tool's estimate, not the mill's accounts. Yarn, dyeing and weaving rest on rates and purchase prices; losses, overhead and margin are the percentages assumed in the rate master. Conversion is everything except yarn: what the mill adds, and where negotiation has room."))),
+      h("div", { class: "stacks" }, bars), h("div", { class: "legend", "aria-hidden": "true" }, names.map((n, i) => h("span", {}, h("i", { style: `background:var(${GROUP_COLOR[i % 8]})` }), n))),
+      h("details", { style: "margin-top:12px" }, h("summary", { style: "cursor:pointer;color:var(--muted)" }, "The same as a table"), h("div", { style: "margin-top:8px" }, dataTable(tbl, { label: "Share of should-cost by cost group and route" })))));
+  } else nodes.push(h("div", { class: "notice info" }, "Panels 1 and 2 need the pilot results, which are not on this server."));
+
+  // 3. the trend there is data for: cotton
+  const yrs = ins.cotton_years.filter(y => y.year >= 2022), ytop = Math.max(...yrs.map(y => y.average), 1), last = yrs[yrs.length - 1];
+  nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "3. Cost trend, 2022 to 2026: cotton"), h("div", { class: "sub", style: "margin:2px 0 0" }, "Shankar-6 cotton, average of the year, rupees per candy. Cotton is the trend the tool has data for; the yarn rates are of one date (Nov 2026), so a fabric cost per metre for earlier years cannot be drawn yet."))),
+    h("div", { class: "bars" }, yrs.map((y, i) => { const prev = yrs[i - 1]; const chg = prev ? y.average / prev.average - 1 : null; const el = h("div", { class: "bar-row grp", tabindex: "0" }, h("span", { class: "year num" }, String(y.year)), h("div", { class: "bar", style: `width:${y.average / ytop * 56}%;background:var(--g1)` }), h("span", { class: "bar-text" }, h("span", { class: "bar-amt num" }, `Rs ${fmt(y.average, 0)}`), chg === null ? null : h("span", { class: "bar-pct num" }, `${pctSigned(chg * 100)} on ${prev.year}`), y === last ? h("span", { class: "bar-pct" }, `to ${day(y.to)}`) : null)); withTip(el, () => `<b>${y.year}</b>average Rs ${fmt(y.average, 0)} per candy<br>low Rs ${fmt(y.low, 0)}, high Rs ${fmt(y.high, 0)}`); return el; })),
+    h("p", { class: "sub", style: "margin:10px 0 0" }, "To see what a yarn move does to a fabric, use “If yarn prices move” above, or on Cost a fabric. ", h("a", { href: "#cotton" }, "Cotton prices in full"))));
+
+  nodes.push(askCard(ins));
+
+  // 5. supplier cost ratios, and suppliers against should-cost
+  const sup = p ? h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Supplier"), h("th", { class: "n" }, "Fabrics costed"), h("th", { class: "n" }, "Paid above should-cost, middle fabric"), h("th", { class: "n" }, "Tool within 10%"), h("th", {}, "Mostly buys"))),
+    h("tbody", {}, p.suppliers.map(s => h("tr", {}, h("td", {}, s.supplier), h("td", { class: "n" }, String(s.fabrics)), h("td", { class: "n" }, gapTag(s.gap, s.trust)), h("td", { class: "n" }, pct(s.within10, 0)), h("td", {}, `${s.mostly} (${pct(s.mostly_share, 0)})`)))))) : null;
+  nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "5. Supplier cost ratios, % of sales")),
+    h("p", { class: "sub" }, "Whole-company figures from published accounts; they include yarn, garments and other businesses. Operating profit shows how much room a supplier has."),
+    dataTable(ins.benchmarks, { label: "Supplier cost ratios" }),
+    sup ? h("div", { style: "margin-top:16px" }, h("h3", {}, "Your purchases from each supplier, against should-cost"), sup) : null));
+  return nodes;
 };
+
+/* What to ask before a negotiation, from the buyer's chair. The answers quote the buyer's own figures. */
+function askCard(ins) {
+  const p = ins.pilot, ref = ins.reference, q = ins.card.quantity, col = n => q.columns.indexOf(n);
+  const small = q.rows.filter(r => r[col("Small-lot upcharge %")] > 0).map(r => `${r[col("Quantity band")]} +${r[col("Small-lot upcharge %")]}%`).join(", ");
+  const disc = q.rows.filter(r => r[col("Volume discount Rs per metre")] > 0).map(r => `${r[col("Quantity band")]} −Rs ${r[col("Volume discount Rs per metre")]}`).join(", ");
+  const share = ref.yarn_share;
+  const firm = p ? p.suppliers.filter(s => s.gap > 5 && s.trust === "firm").sort((a, b) => b.gap - a.gap) : [];
+  const unsure = p ? p.suppliers.filter(s => s.gap > 5 && s.trust === "weak").sort((a, b) => b.gap - a.gap) : [];
+  const above = firm.map(s => `${s.supplier} ${pctSigned(s.gap)} on ${s.fabrics} fabrics`).join(", ");
+  const qty = p ? p.quantity.filter(x => x.paid).map(x => `${x.band}: Rs ${fmt(x.paid, 0)}`).join("; ") : "";
+  const items = [
+    ["What should this fabric cost, and how sure is the figure?", `Cost it on Cost a fabric, or load the mill's sheet under Bulk upload. ${p ? `Across ${fmt(p.fabrics, 0)} of your cotton purchases the should-cost lands within 10% of the price paid for ${pct(p.within10, 0)} of fabrics, with a median gap of ${pctSigned(p.median_gap)}.` : ""} Treat a gap under 5% as noise and a gap over 10% as worth a question.`],
+    ["The mill says yarn has gone up. How much should the fabric go up?", `Not by the same percentage. On the reference shirting 5% on yarn is about ${(share * 5).toFixed(1)}% on the fabric, and each Rs 10 a kilo is ${rs(ref.warp_per_10 + ref.weft_per_10)} a metre for warp and weft together. Ask which count went up, from what rate to what, and on what date; then move that yarn in “If yarn prices move”.`],
+    ["What is the base price, for which construction, and what do I pay for each extra end and pick?", "Ask for the standard EPI and PPI behind the base price. On Arvind's rate card an extra end is Rs 0.60 and an extra pick Rs 0.90 (Rs 1.00 above 90 picks); on their sheet the base for 40s yarn dyed twill is Rs 164 at 122 \u00D7 76. Other mills will have their own figures: ask for them in the same form. The list under Bulk upload checks every row of a mill's sheet: base plus upcharges must equal the price."],
+    ["Am I paying for a small order, or missing a volume discount?", `Arvind's rate card adds ${small || "a percentage"} for yarn dyed lots below 800 m, and takes off ${disc || "a few rupees"} a metre for volume. The card gives no volume discount on its basic 40s quality, split deliveries or end-of-season orders. ${qty ? `Your median price paid by order size: ${qty}.` : ""} Ask whether lots of the same fabric code can be clubbed to reach the next band.`],
+    ["Which finish, print and dobby charges are in the price?", `Ask for each as its own line. Arvind's card: rotary print Rs ${ins.card.print.Rotary}, digital Rs ${ins.card.print.Digital} a metre; dobby 9 to 12 shafts Rs 8, 13 and above Rs 10, top beam Rs 10; ETI or Easy Care Rs 4, liquid ammonia Rs 10. A charge with no process behind it is the first to challenge.`],
+    ["Which suppliers are above should-cost?", (above ? `More than 5% above should-cost, where the tool fits well: ${above}.` : "No supplier is more than 5% above should-cost on fabrics where the tool fits well.") + (unsure.length ? ` Also above, but on fabric types where the tool is unsure, so check the type before raising it: ${unsure.map(s => `${s.supplier} ${pctSigned(s.gap)} (mostly ${s.mostly})`).join(", ")}.` : "") + " Panel 5 has every supplier."],
+    ["What break-up should I ask the mill for?", "Yarn count and rate per kilo for warp and weft; wastage per cent; weaving charge per pick; dyeing per kilo; finish; process loss; overhead and margin. With those seven the gap between the quote and the should-cost can be put on one line, instead of argued as a total."],
+    ["Is there a financing charge in the price?", "The mill's sheet carries an early-payment column (C2FO at 2.84%). Compare ex-mill prices, not the financed ones, and decide the payment terms separately."],
+    ["Where is the tool's figure weak, so I do not push on the wrong point?", `${ins.placeholders} rates are placeholders, mostly finishes; the cost view says so whenever one is used. Yarn dyed plain in Amsler or slub yarn is over-costed by about 10%, and printed twill and plain by more. Poly cotton and linen run on placeholder yarn rates. On those, ask for the break-up before quoting a number.`],
+  ];
+  return h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "4. Ask before you negotiate"), h("div", { class: "sub", style: "margin:2px 0 0" }, "Questions from the buyer's side, each answered with your own figures."))),
+    h("div", { class: "asks" }, items.map(([qn, an], i) => h("details", { class: "ask", open: i === 0 || null }, h("summary", {}, qn), h("p", {}, an)))));
+}
 
 // ------------------------------------------------------------------ cost a fabric
 const GROUP_COLOR = ["--g1", "--g2", "--g3", "--g4", "--g5", "--g6", "--g7", "--g8"];
@@ -335,7 +401,7 @@ PAGES.cost = async () => {
     return false;
   };
   const set = (name, value, repaint = true) => {
-    if (!["Fabric code", "Description", "Supplier", "Quoted price (Rs/m)"].includes(name)) state.reopened = null;      // once a costed choice changes, it is no longer the costing that was saved
+    if (!["Fabric code", "Description", "Supplier", "Quoted price (Rs/m)", "Order quantity (m)"].includes(name)) state.reopened = null;      // once a costed choice changes, it is no longer the costing that was saved
     const before = doneNow();
     if (name === "Count system") {          // the same yarn, written in the new system: the typed numbers follow
       const from = COUNT_TO_NE[sel["Count system"] || "English count (Ne)"], to = NE_TO_COUNT[value];
@@ -406,7 +472,7 @@ PAGES.cost = async () => {
       pick("Rate card quantity", null, { label: "Quantity band (mill rate card)", hint: "When set, used instead of Order size", options: L["Rate card quantity"].map(v => ({ value: v, text: v, disabled: sel.Route !== "Yarn Dyed" && M.small_lot_bands.includes(v) })) }),
       fieldOn(sel, "Order size") ? pick("Order size", "Order size", { label: "Order size (pilot slabs)" }) : null],
     name: () => [typed("Fabric code", { text: true }), typed("Supplier", { text: true }), typed("Description", { text: true, wide: true }),
-      typed("Quoted price (Rs/m)", { label: "Supplier's quote (Rs/m)" }), typed("Extra charge (Rs/m)"), typed("Weaving rate override (Rs/pick)", { step: "0.01", wide: true, hint: "Blank = use the rate table" })],
+      typed("Quoted price (Rs/m)", { label: "Supplier's quote (Rs/m)" }), typed("Order quantity (m)", { hint: "Shows the money at stake" }), typed("Extra charge (Rs/m)", { wide: true }), typed("Weaving rate override (Rs/pick)", { step: "0.01", wide: true, hint: "Blank = use the rate table" })],
   };
 
   /* One step is open at a time. A finished step folds to a line that says what was chosen;
@@ -433,8 +499,8 @@ PAGES.cost = async () => {
   paint(); recalc();
 
   const actions = h("div", { class: "row-actions", style: "margin:0" },
-    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.reopened = null; state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
-    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.reopened = null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = blankSel(); state.listId = null; state.sim = null; state.reopened = null; state.openStep = null; state.visited.clear(); route(); } }, "New fabric"),
+    h("button", { class: "btn small", type: "button", onclick: () => { state.sel = exampleSel(); state.listId = null; state.sim = null; state.reopened = null; state.openStep = null; STEPS.forEach(st => state.visited.add(st.id)); route(); } }, "Load the example"));
   // the two panes take exactly the height left on the screen, so the page itself does not scroll
   const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
   const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
@@ -442,6 +508,59 @@ PAGES.cost = async () => {
   split.firstChild.prepend(h("div", { class: "pane-head" }, h("h1", {}, "Cost a fabric"), actions));
   return [h("p", { class: "sub cost-intro" }, "Work down the steps on the left; each choice decides what the next step asks. The cost on the right updates as you go."), split];
 };
+
+/* The negotiation brief: what to say about one quote. Where the tool is unsure of this kind of fabric it
+   gives no target and says to ask for the break-up instead. */
+const STANCE = { push: ["down", "Push: the quote is above should-cost"], fair: ["flat", "Fair: within 5% of should-cost"], below: ["up", "Below should-cost: accept, or check the specification"], ask: ["warn", "Ask for the break-up before naming a price"] };
+function briefCard(b, sel) {
+  const w = b.would_need, above = b.gap >= 0, st = STANCE[b.stance];
+  const lines = [];
+  if (b.stance === "ask") lines.push(h("li", {}, h("b", {}, "Do not open with a number. "), "The should-cost is not firm here: " + b.weak.join("; ") + ". Ask for yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin, then cost it again."));
+  else if (b.stance === "push") lines.push(h("li", {}, h("b", {}, `Open at ${rs(b.open_at)} a metre. `), `Up to ${rs(b.settle_up_to)} is within the tool's 5% margin of error; above that, ask the mill to show where the extra ${rs(b.gap - (b.settle_up_to - b.open_at))} comes from.`));
+  else if (b.stance === "fair") lines.push(h("li", {}, h("b", {}, "The quote is in line. "), `It is ${rs(Math.abs(b.gap))} ${above ? "above" : "below"} should-cost, inside the tool's 5% margin of error. Use the time on quantity terms, finish and delivery instead.`));
+  else lines.push(h("li", {}, h("b", {}, "The quote is below should-cost. "), "Before accepting, confirm the yarn, the construction and the finish are the ones costed here; a low price sometimes means a lighter cloth."));
+  if (b.stance === "push" || b.stance === "ask") {
+    const parts = [];
+    if (w.yarn) parts.push(h("li", {}, `the yarn costs Rs ${fmt(w.yarn.warp, 0)} a kilo, not Rs ${fmt(w.yarn.warp_now, 0)}` + (Math.abs(w.yarn.weft_now - w.yarn.warp_now) > 0.5 ? ` (weft Rs ${fmt(w.yarn.weft, 0)}, not ${fmt(w.yarn.weft_now, 0)})` : "") + ` \u2014 ${pctSigned(w.yarn.pct, 0)}`));
+    parts.push(h("li", {}, `or weaving is Rs ${w.weaving.rate.toFixed(2)} a pick, not Rs ${w.weaving.now.toFixed(2)}`));
+    parts.push(h("li", {}, `or the mill's margin is ${pct(w.margin.rate, 0)}, not ${pct(w.margin.now, 0)}`));
+    lines.push(h("li", {}, h("b", {}, "For the quote to be right, one of these would have to be true: "), h("ul", {}, parts), "Ask which it is. Each can be checked: the yarn against the yarn master and the market, the others against the mill's own sheet."));
+  }
+  if (b.at_stake !== null && b.quantity) lines.push(h("li", {}, h("b", {}, `At stake: ${rs(Math.abs(b.at_stake), 0)} `), `on ${fmt(b.quantity, 0)} m (${rs(Math.abs(b.gap))} a metre).`));
+  return h("div", { class: "card brief" }, h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, "For the negotiation"), h("span", { class: "tag " + st[0] }, st[1])),
+    h("p", { class: "sub", style: "margin:0 0 8px" }, `Quote ${rs(b.quote)}, should-cost ${rs(b.should)}: the quote is ${rs(Math.abs(b.gap))} (${pct(Math.abs(b.gap_pct))}) ${above ? "above" : "below"}.`),
+    h("ul", { class: "brief-list" }, lines));
+}
+
+/* What a move in the yarn price does to this fabric. The sliders re-cost it with the warp and weft
+   rates moved; nothing is saved and the rate master is untouched. */
+function yarnSim(res, sel) {
+  const y = res.yarn, sim = state.sim = state.sim || { warp: 0, weft: 0, both: true };
+  const out = h("div", { class: "whatif-out", "aria-live": "polite" });
+  let turn = 0, timer;
+  const show = async () => {
+    const mine = ++turn;
+    if (!sim.warp && !sim.weft) return out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, "Move a slider to see the price at a different yarn rate."));
+    try {
+      const body = Object.assign({}, payload(sel), { "Warp yarn price override": y.warp_rate * (1 + sim.warp / 100), "Weft yarn price override": y.weft_rate * (1 + sim.weft / 100) });
+      const r = await (await postJSON("/api/cost", body)).json(); if (mine !== turn) return;
+      const d = r.total_per_m - res.total_per_m;
+      out.replaceChildren(h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Warp at Rs ${fmt(y.warp_rate * (1 + sim.warp / 100), 0)}/kg, weft at Rs ${fmt(y.weft_rate * (1 + sim.weft / 100), 0)}/kg`), h("b", { class: "num" }, `${rs(res.total_per_m)} \u2192 ${rs(r.total_per_m)}`), h("span", { class: "tag " + (d > 0.005 ? "down" : d < -0.005 ? "up" : "flat") }, `${d >= 0 ? "+" : "\u2212"}${fmt(Math.abs(d))} /m (${pctSigned(d / res.total_per_m * 100)})`),
+        r.quote !== null ? h("span", { class: "sub", style: "margin:0" }, `the quote would be ${pct(Math.abs(r.gap_pct))} ${r.gap >= 0 ? "above" : "below"}`) : null));
+    } catch (e) { if (mine === turn) out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, e.message)); }
+  };
+  const row = (key, label, rate) => {
+    const slider = h("input", { type: "range", min: "-20", max: "20", step: "1", value: String(sim[key]), id: "sim-" + key, "aria-label": label + " yarn price change, per cent" });
+    const val = h("span", { class: "num simval" }, pctSigned(sim[key], 0));
+    slider.addEventListener("input", () => { sim[key] = Number(slider.value); if (sim.both) { sim.warp = sim.weft = sim[key]; for (const k of ["warp", "weft"]) { $("#sim-" + k).value = sim[k]; $("#sim-" + k).nextSibling.textContent = pctSigned(sim[k], 0); } } else val.textContent = pctSigned(sim[key], 0); clearTimeout(timer); timer = setTimeout(show, 120); });
+    return h("div", { class: "simrow" }, h("label", { for: "sim-" + key }, `${label} \u00B7 Rs ${fmt(rate, 0)}/kg`), slider, val);
+  };
+  const both = h("input", { type: "checkbox", id: "sim-both" }); both.checked = sim.both; both.addEventListener("change", () => { sim.both = both.checked; });
+  show();
+  return h("div", { class: "card whatif" }, h("div", { class: "card-head", style: "margin-bottom:8px" }, h("div", {}, h("h2", {}, "If yarn prices move"), h("div", { class: "sub", style: "margin:2px 0 0" }, `On this fabric 10% on yarn is about ${(y.yarn_share * 10).toFixed(1)}% on the price. Each Rs 10 a kilo on the warp is ${rs(y.warp_per_10)} a metre; on the weft, ${rs(y.weft_per_10)}.`)),
+      h("div", { style: "display:flex;gap:12px;align-items:center" }, h("label", { for: "sim-both", class: "opt" }, both, "Move both together"), h("button", { class: "btn small", type: "button", onclick: () => { state.sim = null; const c = document.querySelector(".cost-out .whatif"); c.replaceWith(yarnSim(res, sel)); } }, "Reset"))),
+    row("warp", "Warp", y.warp_rate), row("weft", "Weft", y.weft_rate), out);
+}
 
 /* A saved costing opened again is costed on today's rates. Say what it cost then, what it costs now,
    and which rates behind it have changed. */
@@ -455,10 +574,10 @@ function movedCard(res, re) {
   const groups = res.buckets.filter(b => Math.abs(b.amount - (groupWas[b.name] ?? 0)) >= 0.005)
     .map(b => h("tr", {}, h("td", {}, b.name), h("td", { class: "n" }, fmt(groupWas[b.name] ?? 0)), h("td", { class: "n" }, fmt(b.amount)), h("td", { class: "n" }, (b.amount >= (groupWas[b.name] ?? 0) ? "+" : "") + fmt(b.amount - (groupWas[b.name] ?? 0)))));
   return h("div", { class: "card moved" },
-    h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, `Since it was saved on ${day(re.on)}`),
+    h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, `Since it was added on ${day(re.on)}`),
       h("span", { class: "tag " + (same ? "flat" : diff > 0 ? "down" : "up") }, same ? "no change" : `${diff > 0 ? "\u25B2" : "\u25BC"} ${rs(Math.abs(diff))} (${pct(Math.abs(diff) / then.total_per_m)}) ${diff > 0 ? "dearer" : "cheaper"}`)),
     h("p", { class: "sub", style: "margin:0 0 10px" }, same ? `It cost ${rs(then.total_per_m)} per metre then and costs the same on today's rates.` : `It cost ${rs(then.total_per_m)} per metre then and costs ${rs(res.total_per_m)} on today's rates.`),
-    rates.length ? h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Rate that changed"), h("th", {}, "Then"), h("th", {}, "Now"), h("th", {}, "Choice"))), h("tbody", {}, rates))) : (same ? null : h("p", { class: "sub", style: "margin:0" }, "No single rate in the list differs; a table behind the costing (for example crimp, wastage or a setting) has changed.")),
+    rates.length && !same ? h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Rate that changed"), h("th", {}, "Then"), h("th", {}, "Now"), h("th", {}, "Choice"))), h("tbody", {}, rates))) : (same ? null : h("p", { class: "sub", style: "margin:0" }, "No single rate in the list differs; a table behind the costing (for example crimp, wastage or a setting) has changed.")),
     groups.length ? h("details", { style: "margin-top:10px" }, h("summary", { style: "cursor:pointer;color:var(--muted)" }, "By cost group, Rs per metre"), h("div", { class: "table-wrap tall", style: "margin-top:8px" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Group"), h("th", { class: "n" }, "Then"), h("th", { class: "n" }, "Now"), h("th", { class: "n" }, "Change"))), h("tbody", {}, groups)))) : null);
 }
 
@@ -482,7 +601,7 @@ function costView(res, sel) {
     h("div", { class: "hero-row" },
       h("div", {}, h("div", { class: "lbl" }, title ? title + " · " : "", "ex-mill should-cost"), h("div", { class: "big num" }, `${rs(res.total_per_m)} / m`)),
       h("div", { class: "row-actions", style: "margin:0" },
-        h("button", { class: "btn primary", onclick: async e => { e.target.disabled = true; try { await postJSON("/api/save", payload(sel)); state.dash = null; toast("Saved to the dashboard"); } catch (err) { toast("Not saved: " + err.message); } e.target.disabled = false; } }, "Save to dashboard"),
+        h("button", { class: "btn primary", onclick: async e => { const b = e.currentTarget; b.disabled = true; try { const r = await (await postJSON("/api/list/add", Object.assign({}, payload(sel), state.listId ? { _id: state.listId } : {}))).json(); toast(state.listId ? "Row updated in the list" : "Added to the list under Bulk upload"); state.listId = r.id; state.list = null; b.textContent = "Update in list"; } catch (err) { toast("Not added: " + err.message); } b.disabled = false; } }, state.listId ? "Update in list" : "Add to list"),
         h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet"),
         h("button", { class: "btn", onclick: printSheet }, "Print"))),
     h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} \u00D7 ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
@@ -529,7 +648,7 @@ function costView(res, sel) {
   const chosen = Object.entries(payload(sel)).filter(([k]) => !["Fabric code", "Description", "Supplier"].includes(k));
   const choices = h("details", { class: "card" }, h("summary", {}, "Choices behind this cost"), dataTable({ columns: ["Choice", "Value"], rows: chosen.map(([k, v]) => [k, String(v)]) }, { label: "Choices behind this cost" }));
   const warn = res.placeholders.length ? h("div", { class: "notice", role: "status" }, h("b", {}, "Provisional. "), "Placeholder rates were used for: " + res.placeholders.join(", ") + ". These are starting guesses with no data behind them.") : null;
-  return [hero, odd, moved, warn, chart, tableView, choices, ratesView].filter(Boolean);
+  return [hero, odd, res.brief ? briefCard(res.brief, sel) : null, yarnSim(res, sel), moved, warn, chart, tableView, choices, ratesView].filter(Boolean);
 }
 
 /* Print the cost on paper or to PDF: the result pane only, in light colours, with every table opened. */
@@ -722,13 +841,12 @@ function waterfall(res) {
 
 // ------------------------------------------------------------------ compare two costings
 PAGES.compare = async () => {
-  const d = state.dash = await getJSON("/api/dashboard");
-  const cols = d.saved.columns, ix = n => cols.indexOf(n);
+  const list = state.list = await (await postJSON("/api/list", {})).json();
   const sources = [];
   if (state.sel && ready(state.sel)) sources.push({ id: "now", label: "On the Cost a fabric page now" + (state.sel["Fabric code"] ? ": " + state.sel["Fabric code"] : ""), inputs: payload(state.sel) });
-  d.saved.rows.forEach((r, n) => { const it = (d.saved_items || [])[n] || {}; if (it.inputs) sources.push({ id: it.id, label: [r[ix("Fabric code")], r[ix("Supplier")], r[ix("Description")], "saved " + day(r[ix("Saved on")])].filter(v => !blank(v)).join(" \u00B7 "), inputs: it.inputs }); });
-  const head = pageHead("Compare", "Two costings side by side, both on today's rates: two suppliers' quotes for one fabric, or one fabric built two ways.");
-  if (sources.length < 2) return [...head, h("div", { class: "card" }, h("p", { class: "empty" }, "Comparing needs two costings. Cost a fabric and press Save to dashboard, twice; a fabric open on the Cost a fabric page counts as one."), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric"))];
+  for (const r of list.rows) if (r.inputs && !r.problems.length) sources.push({ id: r.id, label: [r.mill["Fab Code"], r.supplier, r.description, "added " + day(r.added)].filter(v => !blank(v)).join(" \u00B7 "), inputs: r.inputs });
+  const head = pageHead("Compare", "Two fabrics from the list side by side, both on today's rates: two suppliers' quotes for one fabric, or one fabric built two ways.");
+  if (sources.length < 2) return [...head, h("div", { class: "card" }, h("p", { class: "empty" }, "Comparing needs two costed fabrics in the list. Upload a sheet under Bulk upload, or cost a fabric and press Add to list; a fabric open on Cost a fabric counts as one."), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric"))];
   const pickBox = (id, label, start) => { const sel = h("select", { id }, sources.map(s => h("option", { value: s.id }, s.label))); sel.value = sources[start].id; return [h("div", { class: "field" }, h("label", { for: id }, label), sel), sel]; };
   state.cmp = state.cmp || {};
   const startA = Math.max(0, sources.findIndex(s => s.id === state.cmp.a)), startB = sources.findIndex(s => s.id === state.cmp.b);
@@ -785,42 +903,110 @@ function compareView(A, ra, B, rb) {
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Choices that differ")), differ)];
 }
 
-// ------------------------------------------------------------------ bulk upload
-PAGES.bulk = async () => {
-  const out = h("div", { "aria-live": "polite" });
-  const show = () => {
-    const b = state.bulk;
-    if (!b) return out.replaceChildren();
-    const cols = b.results.columns, total = b.results.rows.length;
-    const stat = (lbl, val) => h("div", { class: "card stat" }, h("div", { class: "lbl" }, lbl), h("div", { class: "val num" }, String(val)));
-    out.replaceChildren(
-      h("div", { class: "grid g3", style: "margin-top:16px" }, stat("Rows read", total), stat("Costed", total - b.rejected), stat("Rejected", b.rejected)),
-      b.rejected ? h("div", { class: "notice" }, "Rejected rows carry the reason in the Error column.") : "",
-      h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Results"),
-        h("button", { class: "btn", onclick: async () => download(await postJSON("/api/bulk-download", b.results), "Should_Cost_Results.xlsx") }, "Download results")),
-        h("p", { class: "sub" }, "Click a costed row to open its cost view."),
-        dataTable(b.results, { filter: true, label: "Bulk results", onRow: r => {
-          if (r[cols.indexOf("Error")]) return toast("This row was rejected: " + r[cols.indexOf("Error")]);
-          const i = b.results.rows.indexOf(r);
-          state.sel = selFromRow(b.inputs[i]); state.openStep = null; STEPS.forEach(st => state.visited.add(st.id));
-          location.hash = "#cost";
-        } })));
+// ------------------------------------------------------------------ bulk upload and the fabric list
+/* One list of every fabric costed: added from Cost a fabric, or uploaded many at a time (the RightPrice
+   template, or a mill's price sheet as it comes). The columns are the mill sheet's own headings. Rows
+   are ticked to remove, open or compare them; the list stays until rows are removed. */
+PAGES.bulk = async (arg) => {
+  state.listUI = state.listUI || { groups: { Fabric: true, Order: false, "Mill's price build-up": true }, picked: new Set(), filter: "", show: "all" };
+  const ui = state.listUI;
+  if (ui.yarn === undefined) ui.yarn = "*"; if (ui.pct === undefined) ui.pct = ""; if (ui.byStake === undefined) ui.byStake = false;
+  // with a yarn move on, the gap that counts is the one after the move
+  const moving = () => ui.pct !== "" && !!Number(ui.pct);
+  const gapOf = r => moving() && r.sim_gap !== null && r.sim_gap !== undefined ? { rs: r.sim_gap, pct: r.sim_gap_pct } : { rs: r.gap, pct: r.gap_pct };
+  const stakeOf = r => { const g = gapOf(r); return g.rs === null || g.rs === undefined || !r.quantity ? null : g.rs * r.quantity; };
+  const box = h("div"), status = h("div", { "aria-live": "polite" });
+  let data = null;
+  const load = async () => {
+    const moves = ui.pct !== "" && Number(ui.pct) ? { [ui.yarn]: Number(ui.pct) } : null;
+    data = state.list = await (await postJSON("/api/list", moves ? { yarn_pct: moves } : {})).json();
+    for (const id of [...ui.picked]) if (!data.rows.some(r => r.id === id)) ui.picked.delete(id);
+    paint();
   };
-  const file = h("input", { type: "file", accept: ".xlsx", id: "bulk-file", style: "max-width:100%" });
+  const visible = () => {
+    const q = ui.filter.trim().toLowerCase();
+    const rows = data.rows.filter(r => (ui.show === "all" || (ui.show === "notcosted" && r.problems.length) || (ui.show === "sums" && r.sums && r.sums.length) || (ui.show === "above" && gapOf(r).pct > 0.05)) && (!q || JSON.stringify([r.mill, r.supplier, r.description]).toLowerCase().includes(q)));
+    for (const id of [...ui.picked]) if (!rows.some(r => r.id === id)) ui.picked.delete(id);      // a tick never outlives the row being in view
+    return ui.byStake ? [...rows].sort((a, b) => (stakeOf(b) ?? -Infinity) - (stakeOf(a) ?? -Infinity)) : rows;
+  };
+  const remarks = r => [...r.problems.map(x => "Not costed: " + x), ...(r.sums || []).map(x => "Sum off: " + x), ...r.notes.map(x => x.charAt(0).toUpperCase() + x.slice(1)), r.placeholders.length ? "Placeholder rates: " + r.placeholders.join(", ") : null].filter(Boolean);
+  const stanceCell = r => { const b = r.brief; if (!b) return ""; const g = gapOf(r); const st = b.stance === "ask" ? "ask" : Math.abs(g.pct) <= 0.05 ? "fair" : g.pct > 0 ? "push" : "below"; return h("span", { class: "tag " + STANCE[st][0], title: STANCE[st][1] + (st === "ask" ? ": " + b.weak.join("; ") : "") }, { push: "Push", fair: "Fair", below: "Below", ask: "Ask break-up" }[st]); };
+  const openRow = r => { if (!r.inputs) return toast("This row has no choices to open"); state.sel = selFromRow(r.inputs); if (r.quantity) state.sel["Order quantity (m)"] = r.quantity; state.listId = r.id; state.reopened = r.then ? { then: r.then, on: r.added } : null; state.openStep = r.problems.length ? "route" : null; STEPS.forEach(st => state.visited.add(st.id)); if (r.problems.length) toast(`${r.mill["Fab Code"] || "This row"} is not costed yet: ${r.problems[0]}`); location.hash = "#cost"; };
+  const cell = (c, v) => blank(v) ? "" : typeof v === "number" ? (Number.isInteger(v) ? String(v) : fmt(v, Math.abs(v) < 100 && !Number.isInteger(v * 10) ? 2 : 1).replace(/\.0$/, "")) : (/^\d{4}-\d\d-\d\d$/.test(v) ? day(v) : String(v));
+
+  const paint = () => {
+    const rows = visible(), cols = data.columns.filter(c => c !== "Fab Code" && Object.entries(data.groups).some(([g, list]) => ui.groups[g] && list.includes(c)));
+    const sim = data.rows.some(r => r.simulated !== null);
+    const all = h("input", { type: "checkbox", "aria-label": "Select every row shown" }); all.checked = rows.length > 0 && rows.every(r => ui.picked.has(r.id)); all.indeterminate = !all.checked && rows.some(r => ui.picked.has(r.id));
+    all.addEventListener("change", () => { rows.forEach(r => all.checked ? ui.picked.add(r.id) : ui.picked.delete(r.id)); paint(); });
+    const body = rows.map(r => {
+      const tick = h("input", { type: "checkbox", "aria-label": `Select ${r.mill["Fab Code"] || "row"}` }); tick.checked = ui.picked.has(r.id);
+      tick.addEventListener("change", () => { tick.checked ? ui.picked.add(r.id) : ui.picked.delete(r.id); paint(); });
+      const price = r.inputs && r.inputs["Quoted price (Rs/m)"];
+      const sc = r.problems.length ? h("span", { class: "tag warn", title: r.problems.join("; ") }, "⚠ not costed") : [fmt(r.should_cost), r.placeholders.length ? h("span", { class: "tag warn", title: "Placeholder rates used: " + r.placeholders.join(", "), style: "margin-left:6px" }, "⚠") : null];
+      const g = gapOf(r), weakRow = r.brief && r.brief.stance === "ask";
+      const gap = g.pct === null || g.pct === undefined ? "" : h("span", { class: "tag " + (weakRow ? "warn" : Math.abs(g.pct) <= 0.05 ? "flat" : g.pct > 0 ? "down" : "up"), title: weakRow ? "The tool is unsure of this kind of fabric: " + r.brief.weak.join("; ") : Math.abs(g.pct) <= 0.05 ? "Within 5%: treat as noise" : g.pct > 0 ? "The mill is above should-cost: room to negotiate" : "The mill is below should-cost" }, `${g.rs >= 0 ? "+" : "\u2212"}${fmt(Math.abs(g.rs))} (${pctSigned(g.pct * 100)})`);
+      const stake = stakeOf(r), rem = remarks(r);
+      const sums = r.sums === null ? h("span", { class: "sub", style: "margin:0" }, "—") : r.sums.length ? h("span", { class: "tag down", title: r.sums.join("; ") }, `✗ ${r.sums.length} off`) : h("span", { class: "tag ok" }, "✓ add up");
+      const simCells = sim ? [h("td", { class: "n rp" }, r.simulated === null ? "" : fmt(r.simulated)), h("td", { class: "n rp" }, r.simulated === null || r.should_cost === null ? "" : Math.abs(r.simulated - r.should_cost) < 0.005 ? "no change" : `${r.simulated - r.should_cost >= 0 ? "+" : "\u2212"}${fmt(Math.abs(r.simulated - r.should_cost))}`)] : [];
+      return h("tr", { class: ui.picked.has(r.id) ? "picked" : null },
+        h("td", { class: "stick s0" }, tick),
+        h("td", { class: "stick s1" }, h("button", { type: "button", class: "linkish", title: "Open in Cost a fabric", onclick: () => openRow(r) }, r.mill["Fab Code"] || "(no code)")),
+        h("td", { class: "n rp stick s2" }, sc), ...simCells, h("td", { class: "n rp" }, blank(price) ? "" : fmt(price)), h("td", { class: "n rp" }, gap), h("td", { class: "n rp" }, stake === null ? "" : (stake < 0 ? "\u2212" : "") + "Rs " + fmt(Math.abs(stake), 0)), h("td", { class: "rp" }, stanceCell(r)), h("td", { class: "rp" }, sums),
+        h("td", { class: "rp remarks" }, rem.length ? rem.map(x => h("div", {}, x)) : ""),
+        cols.map(c => h("td", { class: typeof r.mill[c] === "number" ? "n" : null }, cell(c, r.mill[c]))));
+    });
+    const n = ui.picked.size, picked = data.rows.filter(r => ui.picked.has(r.id));
+    const counts = { all: data.rows.length, notcosted: data.rows.filter(r => r.problems.length).length, sums: data.rows.filter(r => r.sums && r.sums.length).length, above: data.rows.filter(r => gapOf(r).pct > 0.05).length };
+    const stakeBox = h("input", { type: "checkbox", id: "ls-stake" }); stakeBox.checked = ui.byStake; stakeBox.addEventListener("change", () => { ui.byStake = stakeBox.checked; paint(); });
+    const chip = (key, label) => h("button", { type: "button", class: "chip", "aria-pressed": String(ui.show === key), onclick: () => { ui.show = key; paint(); } }, `${label} ${counts[key]}`);
+    const grp = g => h("button", { type: "button", class: "chip", "aria-pressed": String(!!ui.groups[g]), onclick: () => { ui.groups[g] = !ui.groups[g]; paint(); } }, g);
+    const filter = h("input", { class: "filter", type: "search", placeholder: "Filter the list...", "aria-label": "Filter the list", value: ui.filter, style: "max-width:220px" });
+    filter.addEventListener("input", () => { ui.filter = filter.value; const pos = filter.selectionStart; paint(); const f = $(".list-tools .filter"); if (f) { f.focus(); f.setSelectionRange(pos, pos); } });
+    const yarnPick = h("select", { id: "ls-yarn", "aria-label": "Yarn to move" }, h("option", { value: "*" }, "All yarns"), data.yarns_in_use.map(y => h("option", { value: y }, y))); yarnPick.value = data.yarns_in_use.includes(ui.yarn) ? ui.yarn : "*";
+    const pctBox = h("input", { id: "ls-pct", type: "number", step: "1", min: "-50", max: "50", value: ui.pct, placeholder: "0", "aria-label": "Yarn price change, per cent", style: "width:84px" });
+    const apply = () => { ui.yarn = yarnPick.value; ui.pct = pctBox.value; load(); };
+    yarnPick.addEventListener("change", apply); pctBox.addEventListener("change", apply);
+    const costedRows = data.rows.filter(r => r.should_cost !== null && gapOf(r).rs !== null && gapOf(r).rs !== undefined);
+    const sumGap = costedRows.reduce((a, r) => a + gapOf(r).rs, 0), staked = costedRows.filter(r => stakeOf(r) !== null), sumStake = staked.reduce((a, r) => a + stakeOf(r), 0);
+    const tot = costedRows.length ? h("p", { class: "sub", style: "margin:10px 0 0" }, `${costedRows.length} rows carry a mill price${moving() ? " (with the yarn move applied)" : ""}: on average it is ${rs(Math.abs(sumGap / costedRows.length))} a metre ${sumGap >= 0 ? "above" : "below"} should-cost.`, staked.length ? h("b", {}, ` On the ${fmt(staked.reduce((a, r) => a + r.quantity, 0), 0)} m ordered, that is Rs ${fmt(Math.abs(sumStake), 0)} ${sumStake >= 0 ? "above" : "below"} should-cost.`) : null, " Plus (red) means the mill is above should-cost; within 5% is noise.") : null;
+    box.replaceChildren(
+      h("div", { class: "list-tools" },
+        h("div", { class: "chips", role: "group", "aria-label": "Rows to show" }, chip("all", "All"), chip("above", "Over 5% above should-cost"), chip("notcosted", "Not costed"), chip("sums", "Mill's sums off")),
+        h("div", { class: "chips", role: "group", "aria-label": "Column groups to show" }, h("span", { class: "sub", style: "margin:0;align-self:center" }, "Columns:"), Object.keys(data.groups).map(grp)),
+        h("label", { for: "ls-stake", class: "opt" }, stakeBox, "Most at stake first"),
+        filter),
+      h("div", { class: "list-tools" },
+        h("div", { class: "simbar" }, h("span", { class: "sub", style: "margin:0" }, "If yarn moves:"), yarnPick, pctBox, h("span", {}, "%"), ui.pct !== "" && Number(ui.pct) ? h("button", { class: "btn small", type: "button", onclick: () => { ui.pct = ""; load(); } }, "Clear") : null),
+        h("div", { class: "actionbar" + (n ? " on" : "") }, h("b", {}, n ? `${n} selected` : "Tick rows to act on them"),
+          h("button", { class: "btn small", type: "button", disabled: n !== 1 || null, onclick: () => openRow(picked[0]) }, "Open"),
+          h("button", { class: "btn small", type: "button", disabled: n !== 2 || null, title: "Tick exactly two rows", onclick: () => { state.cmp = { a: picked[0].id, b: picked[1].id }; location.hash = "#compare"; } }, "Compare"),
+          h("button", { class: "btn small danger", type: "button", disabled: !n || null, onclick: async e => {
+            if (e.currentTarget.dataset.sure !== "1") { const b = e.currentTarget; b.dataset.sure = "1"; b.textContent = `Remove ${n}: sure?`; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
+            try { const r = await (await postJSON("/api/list/remove", { ids: [...ui.picked] })).json(); ui.picked.clear(); toast(`${r.removed} removed from the list`); load(); } catch (err) { toast(err.message); }
+          } }, "Remove"),
+          h("button", { class: "btn small", type: "button", onclick: async () => download(await postJSON("/api/list/download", ui.pct !== "" && Number(ui.pct) ? { yarn_pct: { [ui.yarn]: Number(ui.pct) } } : {}), "RightPrice_fabric_list.xlsx") }, "Download list"))),
+      data.rows.length ? h("div", { class: "table-wrap list-wrap", tabindex: "0", role: "region", "aria-label": "Fabric list" }, h("table", { class: "list" },
+        h("thead", {}, h("tr", {}, h("th", { class: "stick s0" }, all), h("th", { class: "stick s1" }, "Fab Code"), h("th", { class: "n rp stick s2" }, "Should-cost"), sim ? [h("th", { class: "n rp" }, "With yarn moved"), h("th", { class: "n rp" }, "Change")] : null, h("th", { class: "n rp" }, "Mill price"), h("th", { class: "n rp", title: "Plus: the mill is above should-cost" }, sim ? "Mill above should-cost, yarn moved" : "Mill above should-cost"), h("th", { class: "n rp", title: "Gap per metre times the order quantity" }, "At stake"), h("th", { class: "rp" }, "What to do"), h("th", { class: "rp" }, "Mill's sums"), h("th", { class: "rp" }, "Remarks"), cols.map(c => h("th", {}, c)))),
+        h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(9 + cols.length + (sim ? 2 : 0)) }, "No row matches."))))) : h("p", { class: "empty" }, "The list is empty. Upload a file above, or cost a fabric and press Add to list."),
+      tot);
+  };
+
+  const file = h("input", { type: "file", accept: ".xlsx,.xls", id: "bulk-file", style: "max-width:100%" });
   file.addEventListener("change", async () => {
     if (!file.files[0]) return;
     const fd = new FormData(); fd.append("file", file.files[0]);
-    out.replaceChildren(h("p", { class: "empty" }, "Costing every row..."));
-    try { state.bulk = await (await api("/api/bulk", { method: "POST", body: fd })).json(); show(); }
-    catch (e) { state.bulk = null; out.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
+    status.replaceChildren(h("p", { class: "empty" }, "Reading and costing every row..."));
+    try { const r = await (await api("/api/list/upload", { method: "POST", body: fd })).json(); status.replaceChildren(h("div", { class: "notice info", style: "margin-top:12px" }, `${r.added} rows added from a ${r.kind}.` + (r.already ? ` ${r.already} were already in the list and were not added again.` : "") + (r.added ? (r.not_costed ? ` ${r.not_costed} could not be costed yet; the reason is in Remarks.` : " All were costed.") : ""))); file.value = ""; await load(); }
+    catch (e) { status.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
   });
-  show();
-  return [...pageHead("Bulk upload", "Cost many fabrics at once. The template's drop-downs carry the same lists as the tool, and a value not on a list is rejected."),
-    h("div", { class: "card" }, h("div", { class: "grid g3" },
-      h("div", {}, h("h3", {}, "1. Get the template"), h("a", { class: "btn", href: "/api/template" }, "Download upload template"), h("p", { class: "sub", style: "margin-top:10px" }, "Download a fresh one after any list changes.")),
-      h("div", {}, h("h3", {}, "2. Fill one row per fabric"), h("p", { class: "sub" }, "Dark columns are required. Mill rate card columns are optional and charge nothing when left blank.")),
-      h("div", {}, h("h3", {}, "3. Upload it"), h("label", { for: "bulk-file", class: "sub", style: "display:block;margin-bottom:8px" }, "Filled template (.xlsx)"), file))),
-    out];
+  await load();
+  return [...pageHead("Bulk upload", "Upload a mill's price sheet as it comes, or the RightPrice template. Every row joins the list below, costed beside the mill's price."),
+    h("div", { class: "card upload" }, h("div", { class: "upload-row" },
+      h("div", {}, h("label", { for: "bulk-file", class: "lbl-strong" }, "Excel file"), file),
+      h("p", { class: "sub", style: "margin:0;flex:1;min-width:240px" }, "A mill sheet is recognised by its headings (Fab Code, Base Price, EPI, PPI and the rest). NYD rows are listed but not costed until you open them and choose piece dyed, printed or bleached."),
+      h("a", { class: "btn small", href: "/api/template" }, "RightPrice template")), status),
+    h("div", { class: "card" }, h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, "Fabric list"), h("span", { class: "sub", style: "margin:0" }, "Re-costed on today's rates each time it opens. It stays until rows are removed.")), box)];
 };
 
 // ------------------------------------------------------------------ prices
@@ -1029,7 +1215,7 @@ function searchIndex() {
   for (const s of ["Settings", "Mill_Tier", "Order_Slab", "Supplier_Benchmarks"]) home[s] = "#settings/" + s;
   for (const [sheet, label] of Object.entries(state.meta.tables)) items.push({ text: label, kind: "Rate table", href: home[sheet] || "#rates/" + sheet });
   for (const y of state.meta.yarns) items.push({ text: y.key, kind: `Yarn · Rs ${fmt(y.rate, 0)}/kg`, href: "#yarn/" + encodeURIComponent(y.key) });
-  if (state.dash) { const c = state.dash.saved.columns; for (const r of state.dash.saved.rows) items.push({ text: [r[c.indexOf("Fabric code")], r[c.indexOf("Description")]].filter(v => !blank(v)).join(" — "), kind: "Saved costing", href: "#dashboard" }); }
+  if (state.list) for (const r of state.list.rows) items.push({ text: [r.mill["Fab Code"], r.description, r.supplier].filter(v => !blank(v)).join(" \u2014 ") || "(no code)", kind: "In the list", href: "#bulk" });
   return items;
 }
 function setupSearch() {
@@ -1044,7 +1230,7 @@ function setupSearch() {
     box.hidden = false; input.setAttribute("aria-expanded", "true"); on = -1;
   };
   input.addEventListener("input", paint);
-  input.addEventListener("focus", async () => { if (!state.dash) { try { state.dash = await getJSON("/api/dashboard"); } catch (e) { /* search works without it */ } } paint(); });
+  input.addEventListener("focus", async () => { if (!state.list) { try { state.list = await (await postJSON("/api/list", {})).json(); } catch (e) { /* search works without it */ } } paint(); });
   input.addEventListener("keydown", e => {
     const links = [...box.querySelectorAll("a")];
     if (e.key === "Escape") { close(); input.blur(); }

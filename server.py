@@ -13,6 +13,7 @@ import io
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -25,6 +26,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import masters
+import mill_sheet
 import price_import as pi
 import yarn_seed
 
@@ -136,9 +138,67 @@ def sanity(inp, res):
     return out
 
 
-def result_json(res):
+def yarn_sensitivity(res):
+    """Rupees per metre that the price moves for each Rs 10 per kg on the warp yarn, and on the weft yarn."""
+    i = res["inputs"]
+    mult = (1 + i["process_wastage"] + i["overhead"]) * (1 + i["margin"]) / (1 - i["shrinkage"]) * (1 + i.get("small_lot_pct", 0.0))
+    # carry: the share of a yarn price move that reaches the fabric price. It is larger than yarn's own
+    # share of the cost, because losses, overhead and margin are charged on the yarn too.
+    return {"warp_per_10": res["warp_kg"] * mult * 10, "weft_per_10": res["weft_kg"] * mult * 10,
+            "warp_rate": i["warp_rate"], "weft_rate": i["weft_rate"],
+            "yarn_share": (res["warp_kg"] * i["warp_rate"] + res["weft_kg"] * i["weft_rate"]) * mult / res["total_per_m"] if res["total_per_m"] else 0.0}
+
+
+def brief(res, m, quantity=None):
+    """What a buyer takes into the meeting for one fabric with a quote on it.
+
+    The tool does not know the mill's break-up, so it cannot say where the quote differs. It can say
+    what would have to be true for the quote to be right: the yarn rate, the weaving rate or the
+    margin that, alone, would close the gap. Each is set beside the figure in the rate master.
+    """
+    if res["quote"] is None:
+        return None
+    i, total, quote = res["inputs"], res["total_per_m"], res["quote"]
+    gap, y = quote - total, yarn_sensitivity(res)
+    lot = 1 + i.get("small_lot_pct", 0.0)
+    before = (1 + i["process_wastage"] + i["overhead"]) / (1 - i["shrinkage"]) * lot        # mark-up before margin
+    mult = before * (1 + i["margin"])
+    yarn_cost = res["warp_kg"] * i["warp_rate"] + res["weft_kg"] * i["weft_rate"]
+    f = 1 + gap / (yarn_cost * mult) if yarn_cost else None
+    cost_before_margin = (total + i.get("volume_discount_per_m", 0.0)) / (1 + i["margin"])      # close enough: upcharges are small
+    grp = dict(zip(m["Weaves"]["Weave"], m["Weaves"]["Weave group"]))
+    route = next((u["Choice"].split(", ")[1] for u in res["rates_used"] if u["Item"] == "Weaving" and ", " in str(u["Choice"])), None)
+    weak, why = [], None
+    if res["placeholders"]:
+        weak.append("placeholder rates are used for " + ", ".join(res["placeholders"]))
+    ins = _cache.get(PILOT + "#insights")
+    if ins and ins[1]:
+        weave = next((u["Choice"].split(" (")[0] for u in res["rates_used"] if u["Item"] == "Weaving"), None)
+        cat = next((c for c in ins[1]["categories"] if c["route"] == route and c["weave"] == grp.get(weave)), None)
+        if cat is None:
+            weak.append("there are too few purchases of this fabric type to test the tool on")
+        elif cat["trust"] == "weak":
+            weak.append(f"on {route.lower()} {cat['weave'].lower()} the tool fits only {cat['within10']:.0%} of past purchases within 10% "
+                        f"(middle gap {cat['median_gap']:+.1f}%)")
     return {
+        "quote": quote, "should": total, "gap": gap, "gap_pct": gap / total,
+        "stance": "ask" if weak else ("fair" if abs(gap) / total <= 0.05 else ("push" if gap > 0 else "below")),
+        "weak": weak, "open_at": total, "settle_up_to": total * 1.05,
+        "quantity": quantity, "at_stake": None if quantity is None else gap * quantity,
+        "would_need": {
+            "yarn": None if f is None else {"warp": i["warp_rate"] * f, "weft": i["weft_rate"] * f, "warp_now": i["warp_rate"],
+                                             "weft_now": i["weft_rate"], "pct": (f - 1) * 100},
+            "weaving": {"rate": i["weaving_rate"] + gap / mult / i["ppi"], "now": i["weaving_rate"]},
+            "margin": {"rate": (quote + i.get("volume_discount_per_m", 0.0)) / cost_before_margin - 1, "now": i["margin"]},
+        },
+    }
+
+
+def result_json(res, quantity=None):
+    return {
+        "brief": brief(res, get_masters(), quantity),
         "warnings": sanity(res["inputs"], res),
+        "yarn": yarn_sensitivity(res),
         "total_per_m": res["total_per_m"], "per_kg": res["per_kg"], "gsm": res["gsm"],
         "finished_g_per_m": res["finished_g_per_m"], "quote": res["quote"], "gap": res["gap"],
         "gap_pct": res["gap_pct"], "placeholders": res["placeholders"],
@@ -177,9 +237,18 @@ def meta():
     }
 
 
+def _warm_pilot():
+    if PILOT + "#insights" not in _cache and os.path.exists(PILOT):
+        try:
+            insights()
+        except Exception:
+            pass
+
+
 @app.post("/api/cost")
 def cost(sel: dict = Body(...)):
-    return result_json(cost_or_400(sel, get_masters()))
+    _warm_pilot()
+    return result_json(cost_or_400(sel, get_masters()), _num_or_none(sel.get("Order quantity (m)")))
 
 
 @app.post("/api/cost-sheet")
@@ -203,33 +272,204 @@ def cost_sheet(sel: dict = Body(...)):
                     headers={"Content-Disposition": 'attachment; filename="Should cost.xlsx"'})
 
 
-@app.post("/api/save")
-def save(sel: dict = Body(...)):
-    res = cost_or_400(sel, get_masters())
+# ------------------------------------------------------------------ the fabric list
+# One list holds every fabric costed here: added one at a time from Cost a fabric, or many at once
+# from an upload (the RightPrice template, or a mill's own price sheet). It is kept in a small file
+# beside the rate master, and each row is re-costed on today's rates whenever the list is shown.
+LIST_COLS = LOG_COLS + ["Id", "Inputs", "Result", "Mill", "Problems", "Notes"]
+
+
+def _then(res):
+    return json.dumps({"total_per_m": res["total_per_m"],
+                       "buckets": [{"name": b["name"], "amount": b["amount"]} for b in res["buckets"]],
+                       "rates": [{"Item": u["Item"], "Choice": str(u["Choice"]),
+                                  "Value": u["Value"] if isinstance(u["Value"], str) else clean(u["Value"]),
+                                  "Unit": u["Unit"]} for u in res["rates_used"]]})
+
+
+def _list_row(sel, m, mill=None, problems=(), notes=(), n=0):
+    """One list row. A fabric that cannot be costed yet is kept, with the reason, and no cost."""
     now = dt.datetime.now()
-    row = {"Saved on": now.date().isoformat(), "Fabric code": sel.get("Fabric code"),
-           "Description": sel.get("Description"), "Supplier": sel.get("Supplier"),
-           "Should-cost Rs/m": round(res["total_per_m"], 2), "Should-cost Rs/kg": round(res["per_kg"], 1),
-           "Quoted Rs/m": res["quote"], "Gap Rs/m": None if res["gap"] is None else round(res["gap"], 2),
-           "Gap %": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
-           # the choices themselves, so the costing can be opened again and re-costed on today's rates
-           "Id": f"{now:%Y%m%d%H%M%S%f}", "Inputs": json.dumps(sel),
-           # what it cost and on which rates, so a later look can say what has moved since
-           "Result": json.dumps({"total_per_m": res["total_per_m"],
-                                 "buckets": [{"name": b["name"], "amount": b["amount"]} for b in res["buckets"]],
-                                 "rates": [{"Item": u["Item"], "Choice": str(u["Choice"]), "Value": clean(u["Value"]) if not isinstance(u["Value"], str) else u["Value"],
-                                            "Unit": u["Unit"]} for u in res["rates_used"]]})}
+    sel = {k: (v if isinstance(v, str) else clean(v)) for k, v in sel.items() if v not in ("", None)}
+    problems, res = list(problems), None
+    if not problems:
+        try:
+            res = masters.cost(sel, m)
+        except Exception as e:
+            problems.append(str(e))
+    return {"Saved on": now.date().isoformat(), "Fabric code": sel.get("Fabric code"), "Description": sel.get("Description"),
+            "Supplier": sel.get("Supplier"),
+            "Should-cost Rs/m": None if res is None else round(res["total_per_m"], 2),
+            "Should-cost Rs/kg": None if res is None else round(res["per_kg"], 1),
+            "Quoted Rs/m": sel.get("Quoted price (Rs/m)"),
+            "Gap Rs/m": None if res is None or res["gap"] is None else round(res["gap"], 2),
+            "Gap %": None if res is None or res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
+            "Id": f"{now:%Y%m%d%H%M%S%f}{n:04d}", "Inputs": json.dumps(sel), "Result": None if res is None else _then(res),
+            "Mill": json.dumps(mill) if mill else None, "Problems": json.dumps(problems) if problems else None,
+            "Notes": json.dumps(list(notes)) if notes else None}
+
+
+def _num_or_none(v):
+    try:
+        return None if v is None or v == "" else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _write_list(df):
     os.makedirs(os.path.dirname(masters.LOG_PATH), exist_ok=True)
-    pd.concat([read_log(), pd.DataFrame([row])], ignore_index=True).to_csv(masters.LOG_PATH, index=False)
+    df.to_csv(masters.LOG_PATH, index=False)
+
+
+def _loads(v, default):
+    try:
+        return json.loads(v) if isinstance(v, str) and v else default
+    except ValueError:
+        return default
+
+
+@app.post("/api/save")
+@app.post("/api/list/add")
+def list_add(sel: dict = Body(...)):
+    """Add the fabric on Cost a fabric to the list. With '_id' it takes the place of that row (its mill columns stay)."""
+    sel = dict(sel)
+    replace = str(sel.pop("_id", "") or "")
+    m = get_masters()
+    cost_or_400(sel, m)                      # a fabric typed on screen must cost before it is listed
+    log = read_log()
+    mill = None
+    if replace and "Id" in log.columns and (log["Id"].astype(str) == replace).any():
+        old = log[log["Id"].astype(str) == replace].iloc[0]
+        mill = _loads(old.get("Mill"), None)
+        log = log[log["Id"].astype(str) != replace]
+    row = _list_row(sel, m, mill=mill)
+    _write_list(pd.concat([log, pd.DataFrame([row])], ignore_index=True))
     return {"saved": True, "id": row["Id"]}
+
+
+@app.post("/api/list/upload")
+async def list_upload(file: UploadFile = File(...)):
+    """Many fabrics at once: the RightPrice template, or a mill's price sheet as it comes."""
+    m = get_masters()
+    data = await file.read()
+    try:
+        book = pd.read_excel(io.BytesIO(data), sheet_name=None)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read this file as an Excel workbook: {e}")
+    rows, kind = [], None
+    for name, df in book.items():
+        df = df.rename(columns=lambda c: str(c).strip()).dropna(how="all")
+        if mill_sheet.is_mill_sheet(df):
+            kind = "mill sheet"
+            for n, (_, r) in enumerate(df.iterrows()):
+                r = r.to_dict()
+                if all(mill_sheet._blank(r.get(c)) for c in ("Fab Code", "EPI", "PPI", "Warp")):
+                    continue
+                sel, problems, notes = mill_sheet.to_inputs(r, m)
+                rows.append(_list_row(sel, m, mill=mill_sheet.clean_row(r), problems=problems, notes=notes, n=n))
+            break
+        if {"Fabric code", "Route", "EPI", "PPI"} <= set(df.columns):
+            kind = "RightPrice template"
+            for n, (_, r) in enumerate(df.iterrows()):
+                rows.append(_list_row({k: v for k, v in r.to_dict().items() if not mill_sheet._blank(v)}, m, n=n))
+            break
+    if kind is None:
+        raise HTTPException(400, "No sheet in this file has the headings of the RightPrice template (Fabric code, Route, "
+                                 "EPI, PPI) or of a mill price sheet (Fab Code, Base Price, EPI, PPI)")
+    if not rows:
+        raise HTTPException(400, "The sheet has the right headings but no fabric rows")
+    log = read_log()
+    have = set()
+    for col, key in (("Mill", None), ("Inputs", None)):
+        if col in log.columns:
+            have |= {v for v in log[col].dropna().astype(str)}
+    fresh = [r for r in rows if (r["Mill"] or r["Inputs"]) not in have]
+    if fresh:
+        _write_list(pd.concat([log, pd.DataFrame(fresh)], ignore_index=True))
+    return {"added": len(fresh), "already": len(rows) - len(fresh), "kind": kind, "not_costed": sum(1 for r in fresh if r["Problems"])}
+
+
+@app.post("/api/list")
+def list_view(options: dict = Body(default={})):
+    """The list, newest first, each row re-costed on today's rates. options.yarn_pct = {yarn key or '*': % change}
+    also costs every row with those yarn rates moved, to show what a yarn price move would do."""
+    m = get_masters()
+    _warm_pilot()
+    moves = {k: float(v) for k, v in (options.get("yarn_pct") or {}).items() if v not in ("", None) and float(v) != 0}
+    sim = None
+    if moves:
+        sim = dict(m)
+        yr = m["Yarn_Rates"].copy()
+        yr["Rate Rs/kg"] = [float(r) * (1 + moves.get(k, moves.get("*", 0.0)) / 100) for k, r in zip(yr["Yarn key"], yr["Rate Rs/kg"])]
+        sim["Yarn_Rates"] = yr
+    out = []
+    log = read_log().iloc[::-1]
+    for _, r in log.iterrows():
+        inputs, problems = _loads(r.get("Inputs"), None), _loads(r.get("Problems"), [])
+        mill = _loads(r.get("Mill"), None)
+        item = {"id": None if pd.isna(r.get("Id")) else str(r.get("Id")).split(".")[0], "added": clean(r.get("Saved on")),
+                "inputs": inputs, "then": _loads(r.get("Result"), None), "notes": _loads(r.get("Notes"), []),
+                "from_mill": mill is not None, "mill": mill or (mill_sheet.from_choices(inputs) if inputs else {}),
+                "sums": mill_sheet.check_sums(mill) if mill else None, "problems": problems,
+                "should_cost": None, "gap": None, "gap_pct": None, "placeholders": [], "simulated": None, "sim_gap": None,
+                "sim_gap_pct": None, "quantity": None, "at_stake": None, "brief": None,
+                "supplier": clean(r.get("Supplier")), "description": clean(r.get("Description"))}
+        if inputs is None:                   # a costing saved before choices were kept: shown, not re-costed
+            item["should_cost"], item["mill"] = clean(r.get("Should-cost Rs/m")), {"Fab Code": clean(r.get("Fabric code")), "Ex mill price": clean(r.get("Quoted Rs/m"))}
+            item["problems"] = ["saved before choices were kept; it cannot be re-costed or opened"]
+        elif not problems:
+            try:
+                res = masters.cost(inputs, m)
+                item.update(should_cost=res["total_per_m"], per_kg=res["per_kg"], gsm=res["gsm"], gap=res["gap"],
+                            gap_pct=res["gap_pct"], placeholders=res["placeholders"], yarn=yarn_sensitivity(res))
+                qty = _num_or_none((mill or {}).get("Total order qnty"))
+                item["quantity"] = qty
+                item["at_stake"] = None if qty is None or res["gap"] is None else res["gap"] * qty
+                item["brief"] = brief(res, m, qty)
+                if sim is not None:
+                    moved = masters.cost(inputs, sim)
+                    item.update(simulated=moved["total_per_m"], sim_gap=moved["gap"], sim_gap_pct=moved["gap_pct"])
+            except Exception as e:
+                item["problems"] = [str(e)]
+        out.append(item)
+    return {"columns": mill_sheet.COLUMNS, "groups": mill_sheet.GROUPS, "rows": out,
+            "yarns_in_use": sorted({i["inputs"][k] for i in out if i["inputs"] for k in ("Warp yarn", "Weft yarn") if i["inputs"].get(k)})}
+
+
+@app.post("/api/list/remove")
+def list_remove(payload: dict = Body(...)):
+    ids = {str(i) for i in payload.get("ids", [])}
+    log = read_log()
+    if "Id" not in log.columns or not ids:
+        raise HTTPException(400, "Choose the rows to remove")
+    keep = log[~log["Id"].astype(str).isin(ids)]
+    _write_list(keep)
+    return {"removed": len(log) - len(keep)}
+
+
+@app.post("/api/list/download")
+def list_download(options: dict = Body(default={})):
+    v = list_view(options)
+    rows = []
+    for i in v["rows"]:
+        row = {c: i["mill"].get(c) for c in v["columns"]}
+        row.update({"Should-cost Rs/m": None if i["should_cost"] is None else round(i["should_cost"], 2),
+                    "Mill price above should-cost Rs/m": None if i["gap"] is None else round(i["gap"], 2),
+                    "Mill price above should-cost %": None if i["gap_pct"] is None else round(i["gap_pct"] * 100, 1),
+                    "Should-cost with yarn moved Rs/m": None if i["simulated"] is None else round(i["simulated"], 2),
+                    "Mill's sums": "" if i["sums"] is None else ("add up" if not i["sums"] else "; ".join(i["sums"])),
+                    "Not costed because": "; ".join(i["problems"]), "Notes": "; ".join(i["notes"]),
+                    "Placeholder rates used": ", ".join(i["placeholders"]), "Added on": i["added"]})
+        rows.append(row)
+    buf = io.BytesIO()
+    pd.DataFrame(rows).to_excel(buf, index=False)
+    return Response(buf.getvalue(), media_type=XLSX, headers={"Content-Disposition": 'attachment; filename="RightPrice_fabric_list.xlsx"'})
 
 
 @app.delete("/api/saved/{saved_id}")
 def delete_saved(saved_id: str):
-    log = read_log()
-    if "Id" not in log.columns or not (log["Id"].astype(str) == saved_id).any():
-        raise HTTPException(404, "That saved costing is no longer there")
-    log[log["Id"].astype(str) != saved_id].to_csv(masters.LOG_PATH, index=False)
+    if list_remove({"ids": [saved_id]})["removed"] == 0:
+        raise HTTPException(404, "That row is no longer in the list")
     return {"deleted": True}
 
 
@@ -277,6 +517,80 @@ def dashboard():
     return {"saved": records(shown[[c for c in LOG_COLS if c in shown.columns]]), "saved_items": items,
             "saved_count": len(log),
             "avg_gap_pct": None if gaps.empty else float(gaps.mean()), "cotton": cotton, "yarns": yarns,
+            "placeholders": placeholder_count(m), "benchmarks": records(m["Supplier_Benchmarks"])}
+
+
+# ------------------------------------------------------------------ dashboard insights
+def trust(within10, median_gap):
+    """How far the should-cost can be leaned on for a group of fabrics, from how it fits the prices paid.
+    'firm': at least half land within 10% and the middle gap is small. Otherwise 'weak': the gap says
+    more about the tool than about the supplier, and no colour should call it a good or bad deal."""
+    return "firm" if within10 >= 0.5 and abs(median_gap) <= 6 else "weak"
+
+
+BUCKETS = ["Yarn", "Yarn dyeing", "Sizing and weaving", "Dyeing and finishing", "Losses", "Overhead", "Margin",
+           "Upcharges and quantity terms"]
+
+
+@app.get("/api/insights")
+def insights():
+    """The dashboard's own-data panels: what was paid and what it should cost by fabric type, where the
+    rupee goes by route, the cotton price by year, and how far a yarn price move carries into a fabric."""
+    m = get_masters()
+
+    def from_pilot():
+        if not os.path.exists(PILOT):
+            return None
+        f = pd.read_excel(PILOT, sheet_name="Fabrics")
+        gap = "PO above should-cost %"
+        cats = []
+        for (route, grp), d in f.groupby(["Route", "Weave group"]):
+            if len(d) >= 20:
+                # averages over the metres bought, so paid, should-cost and the gap between them agree
+                metres = d["PO metres"].sum()
+                paid, should = (d["PO price Rs/m"] * d["PO metres"]).sum() / metres, (d["Should-cost Rs/m"] * d["PO metres"]).sum() / metres
+                within = float((d[gap].abs() <= 10).mean())
+                cats.append({"route": route, "weave": grp, "fabrics": len(d), "metres": float(metres), "paid": float(paid),
+                             "should": float(should), "gap": float((paid / should - 1) * 100), "within10": within,
+                             "median_gap": float(d[gap].median()), "trust": trust(within, float(d[gap].median()))})
+        cats.sort(key=lambda c: -c["fabrics"])
+        split = []
+        for route, d in f.groupby("Route"):
+            if len(d) >= 50:
+                total = d["Should-cost Rs/m"].sum()
+                split.append({"route": route, "fabrics": len(d), "median_cost": float(d["Should-cost Rs/m"].median()),
+                              "shares": [{"name": b, "share": float(d[f"{b} Rs/m"].sum() / total)} for b in BUCKETS if f"{b} Rs/m" in d]})
+        split.sort(key=lambda c: -c["fabrics"])
+        sup = []
+        for name, d in f.groupby("Supplier"):
+            if len(d) >= 15:
+                within = float((d[gap].abs() <= 10).mean())
+                mix = d.groupby(["Route", "Weave group"]).size().sort_values(ascending=False)
+                sup.append({"supplier": re.sub(r"^\d+\s+", "", str(name)).title(), "fabrics": len(d), "gap": float(d[gap].median()),
+                            "within10": within, "trust": trust(within, float(d[gap].median())),
+                            "mostly": f"{mix.index[0][0]} {mix.index[0][1].lower()}", "mostly_share": float(mix.iloc[0] / len(d))})
+        sup.sort(key=lambda c: -c["fabrics"])
+        qty = []
+        for label, lo, hi in (("Below 1,000 m", 0, 1000), ("1,000 to 3,000 m", 1000, 3000), ("3,000 m and above", 3000, 1e12)):
+            d = f[(f["PO metres"] >= lo) & (f["PO metres"] < hi)]
+            qty.append({"band": label, "fabrics": len(d), "paid": float(d["PO price Rs/m"].median()) if len(d) else None})
+        return {"categories": cats, "split": split, "suppliers": sup, "quantity": qty, "fabrics": len(f),
+                "median_gap": float(f[gap].median()), "within10": float((f[gap].abs() <= 10).mean())}
+
+    p = cached(PILOT + "#insights", from_pilot) if os.path.exists(PILOT) else None
+    cot = m["Cotton_Prices"].copy()
+    cot["Date"] = pd.to_datetime(cot["Date"], errors="coerce")
+    cot = cot.dropna(subset=["Date"]).sort_values("Date")
+    years = [{"year": int(y), "average": float(d["Price"].mean()), "low": float(d["Price"].min()), "high": float(d["Price"].max()),
+              "to": clean(d["Date"].max())} for y, d in cot.groupby(cot["Date"].dt.year)]
+    ref = masters.cost(masters.EXAMPLE_ROW, m)
+    ys = yarn_sensitivity(ref)
+    slab = m["Order_Slab"].set_index("Order size")["Overhead add (points)"].to_dict()
+    card = {"print": m["Print_Methods"].set_index("Print method")["Rs per metre"].to_dict(),
+            "quantity": records(m["Quantity_Terms"][["Quantity band", "Small-lot upcharge %", "Volume discount Rs per metre"]])}
+    return {"pilot": p, "cotton_years": years, "cotton_unit": str(cot["Unit"].iloc[-1]) if len(cot) else "",
+            "reference": {"name": masters.EXAMPLE_ROW["Description"], "total": ref["total_per_m"], **ys},
+            "order_slab": {k: clean(v) for k, v in slab.items()}, "card": card,
             "placeholders": placeholder_count(m), "benchmarks": records(m["Supplier_Benchmarks"])}
 
 

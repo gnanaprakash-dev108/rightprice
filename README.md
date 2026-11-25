@@ -40,10 +40,10 @@ full-screen view.
 
 | Screen | What it does |
 |---|---|
-| Dashboard | Saved costings as cards, quote gap, cotton yarn rates against the market, supplier cost ratios |
+| Dashboard | Yarn price what-if; price paid against should-cost by fabric type; share of each cost group by route; cotton price by year; questions to ask before a negotiation; supplier cost ratios. All from the buyer's own data |
 | Cost a fabric | Numbered steps on the left (fabric content, route, yarn, dyeing, construction, finish), each deciding what the next asks; live cost on the right; chart switchable between bars, waterfall, pie, treemap and line, by cost group or every sub-cost |
 | Compare | Two costings side by side on today's rates: every group and sub-cost, the difference, and the choices that differ |
-| Bulk upload | Excel template with the same drop-downs; costs every row and rejects values not on a list |
+| Bulk upload and list | Upload a mill's price sheet as it comes, or the RightPrice template. One list of every fabric costed, in the mill sheet's headings, with should-cost, the gap and a check of the mill's sums; tick rows to open, compare or remove; move a yarn price across the whole list |
 | Yarn prices | Yarn master and market reference, both editable; master against market |
 | Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference |
 | Cotton prices | Shankar-6 history and chart |
@@ -83,6 +83,7 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `server.py` | The web server: serves `web/`, answers its requests, and passes `/classic` through to the Streamlit screens |
 | `web/` | The front end: `index.html`, `app.css`, `app.js` |
 | `app.py` | The earlier Streamlit screens, now at `/classic` |
+| `mill_sheet.py` | Reads a mill's price sheet (base price plus upcharges), turns each row into the tool's choices, and checks the mill's arithmetic |
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
 | `check_server.py` | Checks the server gives the engine's numbers and refuses bad input. Must print `ALL OK` |
 | `grouping.py` | Folds blend spellings into 17 content groups and weave names into 7 weave groups |
