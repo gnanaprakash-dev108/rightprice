@@ -878,7 +878,7 @@ def costs():
             if "lo" in v:
                 r["range"] = [v["lo"], v["hi"]]
         elif verdicts is None:
-            r["band"] = "Working out"
+            r["band"] = "Working it out"
     for i in list_view({})["rows"]:
         b, inp = i["brief"], i["inputs"] or {}
         st = None if b is None else ("Check quote" if b["implausible"] else STANCE_BAND[b["stance"]])

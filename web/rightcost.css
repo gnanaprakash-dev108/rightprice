@@ -9,9 +9,26 @@
   --edited: #FFF8D6;
   font-family: "Open Sans", "Segoe UI", Arial, sans-serif; font-size: 13px; color: var(--text);
 }
+:root[data-theme="dark"] {
+  --text: #E6E8EE; --text2: #9AA1B2; --muted: #C3C8D4; --border: #343A4A; --bg: #161A23;
+  --link: #4FC3E8; --primary: #6C7BD8; --hover: #1F2430; --selected: #1C3138; --edited: #3A3418;
+  --rail: #262A38; --rail-active: #343A4E; --toast: #0B0D12; color-scheme: dark;
+}
+:root[data-theme="dark"] .grid th, :root[data-theme="dark"] .grid td, :root[data-theme="dark"] .card, :root[data-theme="dark"] .menu,
+:root[data-theme="dark"] .drawer, :root[data-theme="dark"] .side, :root[data-theme="dark"] .dialog, :root[data-theme="dark"] .popup,
+:root[data-theme="dark"] .selbar, :root[data-theme="dark"] .colpanel, :root[data-theme="dark"] .search,
+:root[data-theme="dark"] input, :root[data-theme="dark"] select, :root[data-theme="dark"] textarea { background-color: var(--bg); color: var(--text); }
+:root[data-theme="dark"] .grid tr:hover td { background: var(--hover); }
+:root[data-theme="dark"] .grid tr.picked td { background: var(--selected); }
+:root[data-theme="dark"] .grid td.changed { background: var(--edited) !important; }
+:root[data-theme="dark"] .card .img { background-color: #202533; }
+:root[data-theme="dark"] .skel td span.b { background: #2A3040; }
+:root[data-theme="dark"] .form2 .f, :root[data-theme="dark"] .bk, :root[data-theme="dark"] .log div { border-color: var(--border); }
+:root[data-theme="dark"] .chip.bad { background: #3A1E22; color: #F4A9A9; }
+:root[data-theme="dark"] .menu button, :root[data-theme="dark"] .title, :root[data-theme="dark"] .selbtn { color: var(--text); }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { margin: 0; height: 100%; background: var(--bg); }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
 button { font: inherit; color: inherit; }
 a { color: var(--link); }
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

@@ -1,5 +1,17 @@
 # Questions for GP
 
+## Answers given 25 Nov 2026, night
+
+- Data: the 1,696 purchase-order costings (plus the fabric list). Done.
+- Right cost stays its own page at /rightcost. Done.
+- Status and Remarks: each browser only. Done.
+- Other PLM modules: the Library setup pages only. Built (Library on the rail; lists kept in the browser).
+- In-line band: 5% floor, 10% cap. Opening figure: the mirror rule. Placeholder limit: 10%. Kept.
+- Real wastage, overhead and margin: GP will send mill cost sheets.
+- Tabs: Views and Samples removed. Card colours: the verdict. Share: copy codes and note.
+- Dark mode: added, following RightPrice's switch. Avatar: initials from the Microsoft sign-in
+  (read from Azure's /.auth/me; off Azure it shows RP).
+
 Doubts recorded while building, newest first. Each says what was done meanwhile, so nothing waits on
 the answer. Answer beside a question (or just tell the build session) and it will be acted on.
 

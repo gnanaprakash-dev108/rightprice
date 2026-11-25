@@ -4,7 +4,7 @@
 "use strict";
 
 // ================================================================== CONFIG
-const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Tool unsure": "#F5C542", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working out": "#DADADA" };
+const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Tool unsure": "#F5C542", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
 const ROUTE_COLOR = { "Yarn Dyed": "#5C6BC0", "Piece Dyed": "#26A69A", "Printed": "#EF6C00", "RFD / Bleached": "#90A4AE" };
 const STATUS = ["Not started", "To negotiate", "In negotiation", "Agreed", "Dropped"];
 const n0 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -18,7 +18,7 @@ const CONFIG = {
     costs: {
       crumbs: ["Costing", "Right cost"],
       classes: [["Purchase orders", "Purchase-order costings"], ["Fabric list", "Fabric list (mill sheets)"], ["*", "All costings"]],
-      tabs: [["items", "Items"], ["suppliers", "Suppliers"], ["views", "Views"], ["samples", "Samples"]],
+      tabs: [["items", "Items"], ["suppliers", "Suppliers"]],
       // id, header, width, pinned, type (num, link, band, edit-dd, edit-text, thumb, select, status), value
       columns: [
         { id: "select", header: "", width: 40, pinned: true, type: "select" },
@@ -71,7 +71,8 @@ const CONFIG = {
       { id: "costs", icon: "list", label: "Right cost", page: true },
       { id: "costing", icon: "fabric", label: "Costing", fly: "costing" },
       { id: "prices", icon: "chart", label: "Prices", fly: "prices" },
-      { id: "rates", icon: "box", label: "Rates", fly: "rates" },
+      { id: "rates", icon: "table", label: "Rates", fly: "rates" },
+      { id: "library", icon: "box", label: "Library", fly: "library" },
       { id: "tools", icon: "tools", label: "Tools", fly: "tools" },
     ],
     bottom: [
@@ -85,9 +86,15 @@ const CONFIG = {
   flyouts: {
     costing: { title: "Costing", icon: "fabric", groups: [["Costing", [["Right cost", "/rightcost"], ["Cost a fabric (popup)", "popup:cost"], ["Bulk upload and list", "/#bulk"], ["Compare", "/#compare"], ["Negotiation pack", "/#pack"]]], ["Analysis", [["Dashboard", "/#dashboard"], ["Pilot results", "/#pilot"]]]] },
     prices: { title: "Prices", icon: "chart", groups: [["Prices", [["Yarn prices", "/#yarn"], ["Cotton prices", "/#cotton"], ["Bring in prices", "/#intake"]]]] },
-    rates: { title: "Rates", icon: "box", groups: [["Rate master", [["Rate tables", "/#rates"], ["Mill rate card", "/#ratecard"], ["Settings", "/#settings"]]]] },
+    rates: { title: "Rates", icon: "table", groups: [["Rate master", [["Rate tables", "/#rates"], ["Mill rate card", "/#ratecard"], ["Settings", "/#settings"]]]] },
     tools: { title: "Tools", icon: "tools", groups: [["Utilities", [["Bulk Uploads", "/#bulk"], ["Earlier screens", "/classic/"]]]] },
-    settings: { title: "Settings", icon: "gear", groups: [["Application", [["Settings", "/#settings"], ["Rate tables", "/#rates"]]]] },
+    settings: { title: "Settings", icon: "gear", groups: [["Application", [["Light or dark", "theme:toggle"], ["Settings", "/#settings"], ["Rate tables", "/#rates"]]]] },
+    library: { title: "Library", icon: "box", groups: [
+      ["Relationships", [["Suppliers", "lib:Suppliers"]]],
+      ["Standard Specifications", ["Product Life Cycle Stages", "Color Cards", "Size Cards", "Seasons", "Units of measurement", "Points of Measure", "Body Types", "Approval Forms", "Genders", "BOM Layouts", "Material Contents", "Care Label Instructions", "Constructions", "Made In"].map(n => [n, "lib:" + n])],
+      ["Costing", ["Rating Scale Types", "Rating Scales", "Cost Sheet Types", "Material Cost Configuration", "Seasonal Exchange Rates"].map(n => [n, "lib:" + n])],
+      ["Sourcing", ["Payment Terms", "Delivery Terms", "Sample Type"].map(n => [n, "lib:" + n])],
+      ["Templates", [["Page Templates", "lib:Page Templates"]]]] },
   },
 };
 const ICONS = {
@@ -95,6 +102,7 @@ const ICONS = {
   list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   fabric: '<path d="M4 6c3-2 5 2 8 0s5-2 8 0v12c-3 2-5-2-8 0s-5 2-8 0z"/>',
   chart: '<path d="M4 17l5-5 4 4 7-8M15 8h5v5"/>',
+  table: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/>',
   box: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
   tools: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8 7.5 20 18M8 16.5 20 6"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
@@ -134,6 +142,7 @@ const state = {
   sort: { field: "excess", dir: "desc" }, saved: "Default", selection: new Set(), shown: CONFIG.pageSize, cardSize: store.get("cardSize", 115),
   colOrder: store.get("colOrder", null), colHidden: new Set(store.get("colHidden", [])), colWidth: store.get("colWidth", {}),
   edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
+  me: { initials: "RP", name: "Signed-in user", email: "" }, library: null, libs: store.get("libs", {}),
   downloads: [], log: store.get("log", []), rows: [], counts: {}, detail: null, loading: false,
 };
 
@@ -246,11 +255,11 @@ function railActive(id) {
 }
 function renderRail() {
   const item = it => it === "div" ? h("div", { class: "div" }) : tipOn(h("button", { type: "button", class: "item", "data-id": it.id, html: svg(it.icon), onclick: e => {
-    if (it.href) location.href = it.href; else if (it.page) { state.detail = null; closeLayers(); render(); }
+    if (it.href) location.href = it.href; else if (it.page) { state.detail = null; state.library = null; closeLayers(); render(); }
     else openFly(it.fly, e.currentTarget);
-  }, onmouseenter: it.fly && ["costing", "prices", "rates", "tools"].includes(it.fly) ? e => openFly(it.fly, e.currentTarget, true) : null }, it.id === "notes" ? h("span", { class: "badge", id: "notebadge", hidden: true }) : null), it.label);
+  }, onmouseenter: it.fly && ["costing", "prices", "rates", "library", "tools"].includes(it.fly) ? e => openFly(it.fly, e.currentTarget, true) : null }, it.id === "notes" ? h("span", { class: "badge", id: "notebadge", hidden: true }) : null), it.label);
   $("#rail").replaceChildren(h("div", { class: "grp" }, CONFIG.rail.top.map(item)), h("div", { class: "grp bottom" }, CONFIG.rail.bottom.map(item),
-    tipOn(h("button", { type: "button", class: "avatar", onclick: e => openFly("profile", e.currentTarget) }, "GP"), "GP")));
+    tipOn(h("button", { type: "button", class: "avatar", id: "avatar", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials), state.me.name)));
   railActive();
 }
 function bookmarkBtn(label, href) {
@@ -261,7 +270,7 @@ function bookmarkBtn(label, href) {
     toast(on ? "Bookmark removed" : "Bookmarked"); openFly(openFly.last, null, false, true);
   } }), on ? "Remove bookmark" : "Bookmark this page");
 }
-function go(href) { closeLayers(); if (href === "popup:cost") return openCostPopup(); if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); } location.href = href; }
+function go(href) { closeLayers(); if (href === "popup:cost") return openCostPopup(); if (href === "theme:toggle") return toggleTheme(); if (href.startsWith("lib:")) { state.detail = null; state.library = { name: href.slice(4), page: 0, size: 20 }; return render(); } if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); } location.href = href; }
 function openFly(name, anchor, hover, keep) {
   const fly = $("#flyout");
   if (!keep && !fly.hidden && openFly.last === name && !hover) { fly.hidden = true; railActive(); return; }
@@ -282,7 +291,7 @@ function openFly(name, anchor, hover, keep) {
     kids.push(h("div", { class: "ttl", html: svg("download") + "<span>Download Center</span>" }), h("div", { class: "note" }, "Files made in this visit. The browser keeps the files themselves."),
       state.downloads.length ? state.downloads.map(d => h("div", { class: "lnk" }, `${d.name} · ${ago(d.at)}`)) : h("div", { class: "empty", style: "margin-top:8px" }, "No downloads yet."));
   } else if (name === "profile") {
-    kids.push(h("div", { class: "ttl" }, h("span", {}, "GP")), h("div", { class: "note" }, "RightPrice"), h("div", { class: "g" }, "Account"),
+    kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), h("div", { class: "note" }, state.me.email || "RightPrice"), h("div", { class: "g" }, "Account"),
       h("button", { type: "button", class: "lnk", onclick: () => go("/#settings") }, "User Preferences"), h("button", { type: "button", class: "lnk", onclick: () => go("/.auth/logout") }, "Log Out"));
   }
   fly.replaceChildren(...kids); fly.hidden = false;
@@ -292,6 +301,7 @@ function openFly(name, anchor, hover, keep) {
 
 function render() {
   const main = $("#main");
+  if (state.library) return renderLibrary(main);
   if (state.detail) return renderDetail(main);
   const mod = CONFIG.modules.costs, rows = filtered(), cls = mod.classes.find(c => c[0] === state.cls) || mod.classes[0];
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", mod.crumbs[0], "›", h("span", {}, cls[1]));
@@ -463,7 +473,7 @@ function quickView(r) {
   document.body.append(p);
 }
 function openDetail(r) {
-  closeLayers();
+  closeLayers(); state.library = null;
   state.detail = { key: keyOf(r), tab: "item", editing: false };
   state.recent = [{ key: keyOf(r), code: r.code, at: new Date().toISOString() }, ...state.recent.filter(v => v.key !== keyOf(r))].slice(0, 12); store.set("recent", state.recent);
   scrollTo(0, 0); render();
@@ -530,6 +540,61 @@ function openCostPopup(r) {
   s.dataset.popup = "1";
   frame.addEventListener("load", () => { const w = frame.contentWindow; const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); });
   $("#layer").append(s);
+}
+
+// ------------------------------------------------------------------ Library: setup lists (kept in this browser)
+function libSeed(name) {
+  if (name === "Suppliers") return [...new Set(state.rows.map(r => r.supplier).filter(Boolean))].sort().map(n => ({ name: n, active: true }));
+  if (name === "Material Contents") return ["100% cotton", "Poly cotton", "Linen"].map(n => ({ name: n, active: true }));
+  if (name === "Constructions") return [...new Set(state.rows.map(r => r.weave).filter(Boolean))].sort().map(n => ({ name: n, active: true }));
+  if (name === "Units of measurement") return ["Metre", "Kilogram", "Yard"].map(n => ({ name: n, active: true }));
+  return [];
+}
+function renderLibrary(main) {
+  const L = state.library, saved = state.libs[L.name], base = () => JSON.parse(JSON.stringify(saved || libSeed(L.name)));
+  const rows = L.draft || (L.draft = base());
+  const pages = Math.max(1, Math.ceil(rows.length / L.size)); L.page = Math.min(L.page, pages - 1);
+  const shown = rows.slice(L.page * L.size, (L.page + 1) * L.size);
+  const clean = x => x.map(r => ({ name: r.name, active: r.active }));
+  const changed = JSON.stringify(clean(rows)) !== JSON.stringify(clean(base()));
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Library", "›", h("span", {}, L.name));
+  const tools = h("div", { class: "toolbar" },
+    h("button", { type: "button", class: "btn fill", disabled: !changed || null, onclick: () => { state.libs[L.name] = clean(rows).filter(r => r.name.trim()); store.set("libs", state.libs); L.draft = null; toast("Saved Successfully!"); render(); } }, "Save"),
+    h("button", { type: "button", class: "btn line", onclick: () => { rows.push({ name: "", active: true }); L.page = Math.ceil(rows.length / L.size) - 1; render(); const ins = document.querySelectorAll(".libname"); if (ins.length) ins[ins.length - 1].focus(); } }, "Add"),
+    h("button", { type: "button", class: "btn line", disabled: !rows.some(r => r.picked) || null, onclick: () => { L.draft = rows.filter(r => !r.picked); render(); } }, "Delete"),
+    h("span", { class: "spacer" }), h("span", { class: "count" }, `${rows.length} ${rows.length === 1 ? "entry" : "entries"}${changed ? " · unsaved changes" : ""}`));
+  const table = h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, h("th", { style: { width: "40px" } }, ""), h("th", {}, "Name"), h("th", { style: { width: "90px" } }, "Active"))),
+    h("tbody", {}, shown.length ? shown.map(r => {
+      const pick = h("input", { type: "checkbox", class: "cb", "aria-label": "Select " + (r.name || "new entry") }); pick.checked = !!r.picked; pick.addEventListener("change", () => { r.picked = pick.checked; render(); });
+      const name = h("input", { type: "text", class: "libname", value: r.name, "aria-label": "Name" }); name.addEventListener("change", () => { r.name = name.value; render(); });
+      const act = h("input", { type: "checkbox", class: "cb", "aria-label": "Active" }); act.checked = r.active; act.addEventListener("change", () => { r.active = act.checked; render(); });
+      return h("tr", { class: r.picked ? "picked" : null }, h("td", {}, pick), h("td", {}, name), h("td", {}, act));
+    }) : h("tr", {}, h("td", { colspan: "3", class: "empty" }, "No records to view"))));
+  const pager = h("div", { class: "toolbar", style: "justify-content:flex-end" },
+    h("button", { type: "button", class: "btn", "aria-label": "Previous page", disabled: L.page === 0 || null, onclick: () => { L.page--; render(); } }, "‹"),
+    h("span", { class: "count" }, `Page ${L.page + 1} of ${pages}`),
+    h("button", { type: "button", class: "btn", "aria-label": "Next page", disabled: L.page >= pages - 1 || null, onclick: () => { L.page++; render(); } }, "›"),
+    [20, 50, 100].map(n => h("button", { type: "button", class: "btn" + (L.size === n ? " fill" : ""), onclick: () => { L.size = n; L.page = 0; render(); } }, String(n))));
+  main.replaceChildren(crumbs, h("h1", { class: "title", style: "cursor:default" }, L.name),
+    h("p", { style: "color:var(--text2);font-size:11px" }, "A setup list kept in this browser. RightPrice's costing does not read it yet."), tools, table, pager);
+  $("#selbar").hidden = true;
+}
+function toggleTheme() {
+  const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = t; try { localStorage.setItem("rp-theme", t); } catch (e) { /* kept for this visit */ }
+  toast(t === "dark" ? "Dark" : "Light");
+}
+async function whoAmI() {
+  // Azure's sign-in answers /.auth/me with the signed-in person's claims; off Azure there is none
+  try {
+    const r = await fetch("/.auth/me", { credentials: "same-origin" }); if (!r.ok) return;
+    const d = await r.json(), u = Array.isArray(d) ? d[0] : null; if (!u) return;
+    const claim = t => ((u.user_claims || []).find(c => c.typ === t || c.typ.endsWith("/" + t)) || {}).val;
+    const name = claim("name") || u.user_id || "", email = claim("preferred_username") || claim("emailaddress") || u.user_id || "";
+    const parts = name.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);
+    state.me = { name: name || "Signed-in user", email, initials: (parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : (parts[0] || "RP").slice(0, 2)).toUpperCase() };
+    renderRail();
+  } catch (e) { /* not on Azure: keep the default */ }
 }
 
 // ================================================================== EVENTS (actions)
@@ -677,4 +742,4 @@ async function load() {
     render();
   } catch (err) { $("#main").replaceChildren(h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
-renderRail(); render(); load();
+renderRail(); render(); load(); whoAmI();
