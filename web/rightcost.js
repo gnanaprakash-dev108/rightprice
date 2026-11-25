@@ -4,7 +4,7 @@
 "use strict";
 
 // ================================================================== CONFIG
-const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Tool unsure": "#F5C542", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
+const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Ask break-up": "#F5C542", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
 const ROUTE_COLOR = { "Yarn Dyed": "#5C6BC0", "Piece Dyed": "#26A69A", "Printed": "#EF6C00", "RFD / Bleached": "#90A4AE" };
 const STATUS = ["Not started", "To negotiate", "In negotiation", "Agreed", "Dropped"];
 const n0 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -37,10 +37,10 @@ const CONFIG = {
         { id: "epippi", header: "EPI × PPI", width: 80, value: r => r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : "" },
         { id: "width", header: "Width (in)", width: 70, type: "num", fmt: v => v ? Number(v).toFixed(1) : "" },
         { id: "should", header: "Should-cost Rs/m", width: 110, type: "num", fmt: n2 },
-        { id: "price", header: "Price Rs/m", width: 90, type: "num", fmt: n2, help: "Purchase orders: the price paid. Fabric list: the mill's quote" },
+        { id: "price", header: "Paid or Quoted Rs/m", width: 110, type: "num", fmt: n2, help: "Purchase orders: the price paid. Fabric list: the mill's quote, not yet paid" },
         { id: "gap_pct", header: "Above Should-cost", width: 110, type: "num", fmt: pc },
         { id: "metres", header: "Metres", width: 80, type: "num", fmt: n0 },
-        { id: "excess", header: "Paid Above, Rs", width: 110, type: "num", fmt: n0, help: "Price minus should-cost, times the metres" },
+        { id: "excess", header: "Above Should-cost, Rs", width: 120, type: "num", fmt: n0, help: "Price minus should-cost, times the metres. Purchase orders: money paid above should-cost. Fabric list: on a quote, not yet paid" },
         { id: "order_size", header: "Order Size", width: 110 },
         { id: "source", header: "Source", width: 110 },
         { id: "remarks", header: "Remarks", width: 170, type: "edit-text", help: "Your note. Kept in this browser" },
@@ -49,11 +49,12 @@ const CONFIG = {
       savedSearches: [
         { name: "Default", filters: {} },
         { name: "Above the usual range", filters: { band: ["Above range"] } },
-        { name: "Tool unsure", filters: { band: ["Tool unsure"] } },
+        { name: "Ask for the break-up", filters: { band: ["Ask break-up"] } },
+        { name: "More than 20% above should-cost (any verdict)", filters: { gap_pct: { min: "20", max: "" } } },
         { name: "Held-back third", filters: { held_back: ["Yes"] } },
         { name: "Orders of 3,000 m and above", filters: { order_size: ["3,000 m and above"] } },
       ],
-      sortFields: [["code", "Fabric Code"], ["description", "Description"], ["supplier", "Supplier"], ["should", "Should-cost"], ["price", "Price"], ["gap_pct", "Above Should-cost"], ["excess", "Paid Above"], ["metres", "Metres"], ["added", "Added On"]],
+      sortFields: [["code", "Fabric Code"], ["description", "Description"], ["supplier", "Supplier"], ["should", "Should-cost"], ["price", "Price"], ["gap_pct", "Above Should-cost"], ["excess", "Above Should-cost, Rs"], ["band", "Against Range (most to ask about first)"], ["metres", "Metres"], ["added", "Added On"]],
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
@@ -158,6 +159,8 @@ function h(tag, attrs, ...kids) {
   for (const kid of kids.flat(Infinity)) if (kid !== null && kid !== undefined && kid !== false) el.append(kid);
   return el;
 }
+// replaceChildren turns an array or a null into text: flatten and drop the empties first
+const fill = (el, ...kids) => { el.replaceChildren(...kids.flat(Infinity).filter(k => k !== null && k !== undefined && k !== false)); return el; };
 const keyOf = r => `${r.source}|${r.id || r.code}`;
 const val = (r, id) => {
   const col = CONFIG.modules.costs.columns.find(c => c.id === id);
@@ -165,11 +168,13 @@ const val = (r, id) => {
   if (id === "remarks") return (state.pending[keyOf(r)] || {}).remarks ?? (state.edits[keyOf(r)] || {}).remarks ?? "";
   if (id === "held_back") return r.held_back === null || r.held_back === undefined ? "" : r.held_back ? "Yes" : "No";
   if (id === "placeholder") return r.placeholders ? "Yes" : "No";
+  if (id === "added") return r.id || r.added || "";            // list ids carry the time they were added
+  if (id === "band_rank") return { "Above range": 0, "Check quote": 1, "Ask break-up": 2, "Below range": 3, "In range": 4 }[r.band] ?? 5;
   if (col && col.value) return col.value(r);
   return r[id];
 };
 function toast(msg, ok = true) {
-  const t = $("#toast"); t.replaceChildren(ok ? h("span", { class: "ok" }, "✓") : null, msg); t.hidden = false;
+  const t = $("#toast"); fill(t, ok ? h("span", { class: "ok" }, "✓") : null, msg); t.hidden = false;
   clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 3000);
 }
 const tip = $("#tip");
@@ -203,6 +208,7 @@ function dialog(title, body, actions) {
 }
 function addLog(text) { state.log.unshift({ at: new Date().toISOString(), text }); state.log = state.log.slice(0, 300); store.set("log", state.log); }
 const ago = iso => { const s = (Date.now() - new Date(iso)) / 1000; return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} minutes ago` : s < 86400 ? `${Math.round(s / 3600)} hours ago` : `${Math.round(s / 86400)} days ago`; };
+const extras = rows => Object.fromEntries(rows.map(r => [keyOf(r), { status: val(r, "status"), remarks: val(r, "remarks") }]));
 async function download(path, body, name) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(r.statusText);
@@ -212,14 +218,18 @@ async function download(path, body, name) {
 }
 
 // ------------------------------------------------------------------ the rows shown: class, search, filters, sort
-function terms(text) { return text.split(/[\n,\t ]+/).map(t => t.trim()).filter(Boolean); }
+function terms(text) { return (/[\n,\t]/.test(text) ? text.split(/[\n,\t]+/) : text.split(/ +/)).map(t => t.trim()).filter(Boolean); }
 function filtered() {
   let rows = state.rows.filter(r => state.cls === "*" || r.source === state.cls);
   const s = state.search.active;
   if (s) {
     const ts = terms(s.text).map(t => t.toLowerCase());
     if (s.mode === "exact") rows = rows.filter(r => ts.includes(String(r.code).toLowerCase()));
-    else rows = rows.filter(r => ts.some(t => [r.code, r.description, r.supplier].some(v => String(v || "").toLowerCase().includes(t))));
+    else {
+      // a pasted list (commas or new lines) finds any of its entries; words typed with spaces must all match
+      const list = /[\n,\t]/.test(s.text), hay = r => [r.code, r.description, r.supplier].map(v => String(v || "").toLowerCase()).join(" \u0001 ");
+      rows = rows.filter(r => list ? ts.some(t => hay(r).includes(t)) : ts.every(t => hay(r).includes(t)));
+    }
   }
   for (const [id, f] of Object.entries(state.filters)) {
     if (id === "_codes") { const set = new Set(f); rows = rows.filter(r => set.has(keyOf(r))); continue; }
@@ -228,17 +238,21 @@ function filtered() {
     else rows = rows.filter(r => { const v = Number(val(r, id)); return val(r, id) !== null && val(r, id) !== "" && (f.min === "" || f.min === undefined || v >= Number(f.min)) && (f.max === "" || f.max === undefined || v <= Number(f.max)); });
   }
   if (state.costedOnly) rows = rows.filter(r => r.should !== null && r.should !== undefined);
-  const { field, dir } = state.sort, k = dir === "asc" ? 1 : -1;
+  const { field, dir } = state.sort, k = dir === "asc" ? 1 : -1, f2 = field === "band" ? "band_rank" : field;
   return [...rows].sort((a, b) => {
-    const x = val(a, field), y = val(b, field);
+    const x = val(a, f2), y = val(b, f2);
     if (x === null || x === undefined || x === "") return 1; if (y === null || y === undefined || y === "") return -1;
     return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "en", { numeric: true })) * k;
   });
 }
 function missingCodes() {
-  const s = state.search.active; if (!s || s.mode !== "exact") return [];
-  const have = new Set(state.rows.filter(r => state.cls === "*" || r.source === state.cls).map(r => String(r.code).toLowerCase()));
-  return terms(s.text).filter(t => !have.has(t.toLowerCase()));
+  // codes not in this view: either in another view (say which) or nowhere
+  const s = state.search.active; if (!s) return [];
+  const here = new Set(state.rows.filter(r => state.cls === "*" || r.source === state.cls).map(r => String(r.code).toLowerCase()));
+  const where = {}; for (const r of state.rows) where[String(r.code).toLowerCase()] = r.source;
+  const ts = /[\n,\t]/.test(s.text) || s.mode === "exact" ? terms(s.text) : [];
+  return ts.filter(t => s.mode === "exact" ? !here.has(t.toLowerCase()) : !state.rows.some(r => (state.cls === "*" || r.source === state.cls) && [r.code, r.description, r.supplier].some(v => String(v || "").toLowerCase().includes(t.toLowerCase()))))
+    .map(t => ({ t, elsewhere: here.has(t.toLowerCase()) ? null : where[t.toLowerCase()] || null }));
 }
 function columns() {
   const all = CONFIG.modules.costs.columns, order = state.colOrder || all.map(c => c.id);
@@ -257,8 +271,8 @@ function renderRail() {
   const item = it => it === "div" ? h("div", { class: "div" }) : tipOn(h("button", { type: "button", class: "item", "data-id": it.id, html: svg(it.icon), onclick: e => {
     if (it.href) location.href = it.href; else if (it.page) { state.detail = null; state.library = null; closeLayers(); render(); }
     else openFly(it.fly, e.currentTarget);
-  }, onmouseenter: it.fly && ["costing", "prices", "rates", "library", "tools"].includes(it.fly) ? e => openFly(it.fly, e.currentTarget, true) : null }, it.id === "notes" ? h("span", { class: "badge", id: "notebadge", hidden: true }) : null), it.label);
-  $("#rail").replaceChildren(h("div", { class: "grp" }, CONFIG.rail.top.map(item)), h("div", { class: "grp bottom" }, CONFIG.rail.bottom.map(item),
+  }, onmouseenter: it.fly && ["costing", "prices", "rates", "library", "tools"].includes(it.fly) ? e => openFly(it.fly, e.currentTarget, true) : null, onmouseleave: () => setTimeout(() => { const f = $("#flyout"); if (openFly.hover && !f.matches(":hover") && !document.querySelector(".rail .item:hover")) { f.hidden = true; railActive(); } }, 250) }, it.id === "notes" ? h("span", { class: "badge", id: "notebadge", hidden: true }) : null), it.label);
+  fill($("#rail"), h("div", { class: "grp" }, CONFIG.rail.top.map(item)), h("div", { class: "grp bottom" }, CONFIG.rail.bottom.map(item),
     tipOn(h("button", { type: "button", class: "avatar", id: "avatar", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials), state.me.name)));
   railActive();
 }
@@ -294,7 +308,7 @@ function openFly(name, anchor, hover, keep) {
     kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), h("div", { class: "note" }, state.me.email || "RightPrice"), h("div", { class: "g" }, "Account"),
       h("button", { type: "button", class: "lnk", onclick: () => go("/#settings") }, "User Preferences"), h("button", { type: "button", class: "lnk", onclick: () => go("/.auth/logout") }, "Log Out"));
   }
-  fly.replaceChildren(...kids); fly.hidden = false;
+  fill(fly, ...kids); fly.hidden = false;
   if (!openFly.bound) { openFly.bound = true; fly.addEventListener("mouseleave", () => { if (openFly.hover) { fly.hidden = true; railActive(); } }); }
   openFly.hover = !!hover;
 }
@@ -309,7 +323,7 @@ function render() {
     CONFIG.appName, h("span", { class: "caret" }, "▾"));
   const fab = tipOn(h("button", { type: "button", class: "fab", html: svg("plus"), onclick: () => openCostPopup() }), "Create cost: cost a new fabric");
   const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label, h("span", { class: "dots", "aria-hidden": "true" }, "⋮"))), fab);
-  main.replaceChildren(crumbs, h("div", {}, title, h("span", { style: "margin-left:12px;color:var(--text2);font-size:13px" }, cls[1])), tabs, toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
+  fill(main, crumbs, h("div", {}, title, h("span", { style: "margin-left:12px;color:var(--text2);font-size:13px" }, cls[1])), tabs, toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
   const badge = $("#notebadge"); if (badge) { const n = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range").length; badge.hidden = !n; badge.textContent = n; }
 }
@@ -340,7 +354,7 @@ function toolbar(rows) {
 }
 function chipsRow() {
   const chips = [];
-  for (const id of missingCodes()) chips.push(h("span", { class: "chip bad" }, `No Results For: ${id}`));
+  for (const m of missingCodes()) chips.push(m.elsewhere ? h("span", { class: "chip" }, `${m.t} is under ${m.elsewhere === "Fabric list" ? "Fabric list" : "Purchase-order costings"}`, h("button", { type: "button", title: "Show all costings", onclick: () => { state.cls = "*"; store.set("cls", "*"); rerunWithSkeleton(); } }, "\u2192")) : h("span", { class: "chip bad" }, `No Results For: ${m.t}`));
   for (const [id, f] of Object.entries(state.filters)) {
     const a = CONFIG.modules.costs.filterAttrs.find(x => x.id === id);
     const text = id === "_codes" ? `${state.saved}: ${f.length} items` : Array.isArray(f) ? `${a.label}: ${f.join(", ")}` : f.date ? `${a.label}: ${f.from || "…"} to ${f.to || "…"}` : `${a.label}: ${f.min === "" || f.min === undefined ? "…" : f.min} to ${f.max === "" || f.max === undefined ? "…" : f.max}`;
@@ -395,7 +409,7 @@ function cellFor(r, c, cls, pinStyle, pend) {
   if (c.type === "select") { const b = h("input", { type: "checkbox", class: "cb", "aria-label": `Select ${r.code}` }); b.checked = state.selection.has(k); b.addEventListener("change", () => { b.checked ? state.selection.add(k) : state.selection.delete(k); render(); }); return h("td", { class: cls(c), style: st }, b); }
   if (c.type === "thumb") return h("td", { class: cls(c), style: st }, h("div", { class: "thumb", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" }, title: r.route || "" }, (r.route || "—").split(/[ /]/)[0].slice(0, 5).toUpperCase()));
   if (c.type === "link") return h("td", { class: cls(c), style: st }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code));
-  if (c.type === "band") return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: r.band === "Tool unsure" && r.why_unsure ? r.why_unsure.join("; ") : null }, h("i", { style: { background: BAND_COLOR[r.band] || "#B9BEC7" } }), r.band));
+  if (c.type === "band") return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: r.band === "Ask break-up" && r.why_unsure ? r.why_unsure.join("; ") : null }, h("i", { style: { background: BAND_COLOR[r.band] || "#B9BEC7" } }), r.band));
   if (c.type === "status") return h("td", { class: cls(c), style: st }, pend ? tipOn(h("button", { type: "button", class: "discard", onclick: () => { delete state.pending[k]; render(); } }, "✕"), "Discard the unsaved change") : "");
   if (c.type === "edit-dd" || c.type === "edit-text") {
     const changed = pend && pend[c.id] !== undefined;
@@ -407,7 +421,7 @@ function cellFor(r, c, cls, pinStyle, pend) {
       const done = keep => { if (keep && inp.value !== String(val(r, c.id) || "")) { state.pending[k] = Object.assign(state.pending[k] || {}, { [c.id]: inp.value }); toast("Changed: press Save on the bar below to keep it", false); } render(); };
       inp.addEventListener("keydown", e => { if (e.key === "Enter") done(true); if (e.key === "Escape") { e.stopPropagation(); done(false); } });
       inp.addEventListener("blur", () => done(true)); if (c.type === "edit-dd") inp.addEventListener("change", () => done(true));
-      td.replaceChildren(inp); inp.focus();
+      fill(td, inp); inp.focus();
     };
     td.addEventListener("click", startEdit); td.addEventListener("keydown", e => { if (e.key === "Enter") startEdit(); });
     return td;
@@ -424,7 +438,7 @@ function cardView(rows) {
     return h("div", { class: "card" + (state.selection.has(k) ? " picked" : "") },
       h("div", { class: "img", style: { background: (ROUTE_COLOR[r.route] || "#B9BEC7") + "22" }, html: svg("fabric") }), bar,
       h("div", { class: "txt" }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code), h("div", { class: "desc", title: r.description }, r.description || ""),
-        h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Rs ${n2(r.should)} · ${r.price ? pc(r.gap_pct) : "no price"}` : r.band)),
+        h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Should-cost ${n2(r.should)} \u00B7 ${r.price ? `${r.source === "Purchase orders" ? "paid" : "quoted"} ${n2(r.price)} (${pc(r.gap_pct)})` : "no price"}` : r.band)),
       ck, h("button", { type: "button", class: "qv", onclick: () => quickView(r) }, "Quick View"));
   }));
   grid.addEventListener("scroll", () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 80 && state.shown < rows.length) { const t = grid.scrollTop; state.shown += CONFIG.pageSize; render(); const g = $(".cards"); if (g) g.scrollTop = t; } });
@@ -433,8 +447,8 @@ function cardView(rows) {
 function suppliersTab(rows) {
   const by = {};
   for (const r of rows) { const s = r.supplier || "(none)"; (by[s] = by[s] || []).push(r); }
-  const list = Object.entries(by).map(([s, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should); const met = m.reduce((a, r) => a + r.metres, 0); return { s, n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Above range").length, unsure: rs.filter(r => r.band === "Tool unsure").length }; }).sort((a, b) => b.n - a.n);
-  return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier", "Fabrics", "Metres", "Paid Rs/m (avg over metres)", "Should-cost Rs/m", "Paid above", "Above range", "Tool unsure"].map((t, i) => h("th", { class: i ? "n" : "" }, t)))),
+  const list = Object.entries(by).map(([s, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should); const met = m.reduce((a, r) => a + r.metres, 0); return { s, n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
+  return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier", "Fabrics", "Metres", "Paid Rs/m (avg over metres)", "Should-cost Rs/m", "Paid above", "Above range", "Ask break-up"].map((t, i) => h("th", { class: i ? "n" : "" }, t)))),
     h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, h("button", { type: "button", class: "code", onclick: () => { state.filters.supplier = [x.s]; state.tab = "items"; rerunWithSkeleton(); } }, x.s)), h("td", { class: "n" }, n0(x.n)), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.unsure)))))));
 }
 function renderSelbar() {
@@ -442,7 +456,7 @@ function renderSelbar() {
   if (!n && !pend) { bar.hidden = true; return; }
   bar.hidden = false;
   const picked = state.rows.filter(r => state.selection.has(keyOf(r)));
-  bar.replaceChildren(
+  fill(bar, 
     n ? [tipOn(h("button", { type: "button", class: "clear", onclick: () => { state.selection.clear(); render(); } }), "Clear the selection"), h("span", { class: "n" }, String(n)), h("span", { class: "lbl" }, n === 1 ? "ITEM SELECTED" : "ITEMS SELECTED")] : null,
     pend ? h("span", { class: "lbl", style: "margin-left:16px" }, `${pend} unsaved ${pend === 1 ? "change" : "changes"}`) : null,
     pend ? h("button", { type: "button", class: "btn fill", onclick: saveEdits }, "Save") : null,
@@ -451,7 +465,7 @@ function renderSelbar() {
     n ? [ib("edit", "Edit: set status or remarks on the selected rows", () => bulkEdit(picked)), ib("share", "Share: copy the codes and a note", () => share(picked)),
       ib("dots", "More", e => menu(e.currentTarget, [
         { label: "Add Items to Save Search", run: () => addToSaved(picked) },
-        { label: "Download Selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
+        { label: "Download Selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
         { label: picked.length === 1 ? "Open in Cost a fabric" : "Open in Cost a fabric (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
       ], { right: true }))] : null);
 }
@@ -461,8 +475,8 @@ function fields(r) {
   return [["Fabric code", r.code], ["Source", r.source], ["Description", r.description], ["Supplier", r.supplier], ["Route", r.route], ["Weave", r.weave], ["Weave group", r.weave_group],
     ["Finish", r.finish], ["Pattern", r.pattern], ["Warp yarn", r.warp], ["Weft yarn", r.weft], ["EPI × PPI", r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : ""], ["Finished width (in)", r.width],
     ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", n2(r.price)],
-    ["Above should-cost", r.price ? `Rs ${n2(r.gap)} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Tool unsure" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
-    ["Paid above should-cost, Rs", n0(r.excess)], ["Order size", r.order_size], ["Quantity band", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
+    ["Above should-cost", r.price ? `Rs ${n2(r.gap)} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
+    [r.source === "Purchase orders" ? "Paid above should-cost, Rs" : "Quote above should-cost, Rs (not paid)", n0(r.excess)], ["Order size", r.order_size], ["Quantity band", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
     ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
@@ -475,6 +489,7 @@ function quickView(r) {
 function openDetail(r) {
   closeLayers(); state.library = null;
   state.detail = { key: keyOf(r), tab: "item", editing: false };
+  if (decodeURIComponent(location.hash.slice(1)) !== "item/" + keyOf(r)) history.pushState(null, "", "#item/" + encodeURIComponent(keyOf(r)));
   state.recent = [{ key: keyOf(r), code: r.code, at: new Date().toISOString() }, ...state.recent.filter(v => v.key !== keyOf(r))].slice(0, 12); store.set("recent", state.recent);
   scrollTo(0, 0); render();
 }
@@ -482,7 +497,7 @@ function renderDetail(main) {
   const r = state.rows.find(x => keyOf(x) === state.detail.key);
   if (!r) { state.detail = null; return render(); }
   const d = state.detail, k = keyOf(r);
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Costing", "›", h("button", { type: "button", onclick: () => { state.detail = null; render(); } }, CONFIG.appName), "›", h("span", {}, r.code));
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Costing", "›", h("button", { type: "button", onclick: () => { state.detail = null; history.pushState(null, "", location.pathname); render(); } }, CONFIG.appName), "›", h("span", {}, r.code));
   const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.detail = null; state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; render(); }),
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
     ib("open", "Open in Cost a fabric", () => openCostPopup(r)));
@@ -497,31 +512,42 @@ function renderDetail(main) {
       h("div", { class: "form2" }, h("div", { class: "f" }, h("span", {}, "Status"), statusIn), h("div", { class: "f" }, h("label", { for: "f-remarks" }, "Remarks"), remIn), fields(r).map(([k2, v]) => h("div", { class: "f" }, h("span", {}, k2), h("span", {}, String(v))))),
       h("p", { style: "color:var(--text2);font-size:11px;margin-top:10px" }, "Status and remarks are kept in this browser only.")];
   } else if (d.tab === "costing") {
-    content = r.buckets ? costingTab(r) : h("div", { class: "empty" }, "Open it in Cost a fabric for the full build-up.", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Cost a fabric")));
+    if (r.buckets) content = costingTab(r);
+    else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Cost a fabric")));
+    else { content = h("div", { class: "buckets" }, "Working it out…"); liveCosting(r, content); }
   } else if (d.tab === "negotiation") {
     content = h("div", { class: "brief" }, "Working it out…"); negotiationTab(r, content);
   } else {
     const mine = state.log.filter(x => x.text.startsWith(r.code + ":"));
     content = h("div", { class: "log" }, mine.length ? mine.map(x => h("div", {}, `${new Date(x.at).toLocaleString("en-IN")} · ${x.text.slice(r.code.length + 2)}`)) : h("div", { class: "empty" }, "No changes recorded in this browser."));
   }
-  main.replaceChildren(crumbs, head, tabs, content);
+  fill(main, crumbs, head, tabs, content);
   renderSelbar();
 }
-function costingTab(r) {
+function costingTab(r, when) {
   const b = r.buckets, top = Math.max(...Object.values(b).map(v => Math.abs(v || 0)), 1);
   return h("div", { class: "buckets" }, Object.entries(b).map(([name, v]) => h("div", { class: "bk" }, h("span", {}, name), h("div", {}, h("div", { class: "b", style: { width: Math.abs(v || 0) / top * 100 + "%" } })), h("span", { style: "text-align:right" }, n2(v)), h("span", { style: "text-align:right;color:var(--text2)" }, r.should ? (100 * (v || 0) / r.should).toFixed(1) + "%" : ""))),
     h("div", { class: "bk tot" }, h("span", {}, "Should-cost"), h("span"), h("span", { style: "text-align:right" }, n2(r.should)), h("span", { style: "text-align:right" }, "100%")),
-    r.price ? h("div", { class: "bk" }, h("span", {}, "Price paid"), h("span"), h("span", { style: "text-align:right" }, n2(r.price)), h("span", { style: "text-align:right" }, pc(r.gap_pct))) : null,
-    h("p", { style: "color:var(--text2);font-size:11px" }, "Rs per metre, as costed in the pilot on the rates of 24 Nov 2026. Opened in Cost a fabric it is costed again on today's rates."),
+    r.price ? h("div", { class: "bk" }, h("span", {}, r.source === "Purchase orders" ? "Price paid" : "Mill's quote"), h("span"), h("span", { style: "text-align:right" }, n2(r.price)), h("span", { style: "text-align:right" }, pc(r.gap_pct))) : null,
+    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : "Rs per metre, as costed in the pilot on the rates of 24 Nov 2026. Opened in Cost a fabric it is costed again on today's rates."),
     h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Cost a fabric"));
 }
+async function liveCosting(r, box) {
+  // a fabric-list row is costed on today's rates, as the list does
+  try {
+    const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.choices) })).json();
+    const b = Object.fromEntries(res.buckets.map(x => [x.name, x.amount]));
+    fill(box, costingTab(Object.assign({}, r, { buckets: b, should: res.total_per_m }), "today"));
+  } catch (e) { box.textContent = "Could not cost it: " + e.message; }
+}
 async function negotiationTab(r, box) {
+  if (r.problems && r.problems.length) { box.textContent = "Not costed yet: " + r.problems.join("; ") + ". Open it in Cost a fabric to finish it."; return; }
   if (!r.choices || !r.price) { box.textContent = "No price on this row, so there is nothing to negotiate yet."; return; }
   try {
     const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.choices) })).json();
     const b = res.brief; if (!b) { box.textContent = "No brief: the price is not usable."; return; }
     const label = { push: ["Push", "#E5484D"], fair: ["Fair", "#2E9E5B"], below: ["Below", "#3D8BFD"], ask: ["Ask for the break-up", "#B98900"] }[b.stance];
-    box.replaceChildren(h("div", {}, h("span", { class: "st", style: { background: label[1] + "22", color: label[1] } }, b.implausible ? "Check the quote first" : label[0]), ` On today's rates the should-cost is Rs ${n2(b.should)}; the price is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`),
+    fill(box, h("div", {}, h("span", { class: "st", style: { background: label[1] + "22", color: label[1] } }, b.implausible ? "Check the quote first" : label[0]), ` On today's rates the should-cost is Rs ${n2(b.should)}; the price is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`),
       h("ul", {}, h("li", {}, `Usual range for this fabric: Rs ${n2(b.lower)} to Rs ${n2(b.settle_up_to)} (${b.band.why}).`), b.stance === "push" ? h("li", {}, `Open at Rs ${n2(b.open_at)}; aim for Rs ${n2(b.settle_up_to)}.`) : null,
         b.weak.length ? h("li", {}, "Why no target: " + b.weak.join("; ") + ".") : null, (b.caveats || []).map(c => h("li", {}, c)),
         b.at_stake !== null && b.quantity ? h("li", {}, `On ${n0(b.quantity)} m that is Rs ${n0(Math.abs(b.at_stake))} ${b.gap >= 0 ? "above" : "below"} should-cost.`) : null),
@@ -535,7 +561,7 @@ function openCostPopup(r) {
   const frame = h("iframe", { src: "/?embed=1#cost", title: "Cost a fabric" });
   const close = () => { s.remove(); load(); };
   const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "Create cost" },
-    h("div", { class: "ph" }, h("h2", {}, r ? `Cost ${r.code}` : "Create cost"), h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { style: "color:var(--text2);font-size:11px" }, "Add to list keeps it; it then shows here under Fabric list"), ib("x", "Close", close))), frame);
+    h("div", { class: "ph" }, h("h2", {}, r ? `Cost ${r.code}${r.source === "Purchase orders" ? " (a purchase order: Add to list copies it into the fabric list)" : ""}` : "Create cost"), h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { style: "color:var(--text2);font-size:11px" }, "Add to list keeps it; it then shows here under Fabric list"), ib("x", "Close", close))), frame);
   const s = h("div", { class: "scrim", onmousedown: e => { if (e.target === s) close(); } }, pop);
   s.dataset.popup = "1";
   frame.addEventListener("load", () => { const w = frame.contentWindow; const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); });
@@ -575,7 +601,7 @@ function renderLibrary(main) {
     h("span", { class: "count" }, `Page ${L.page + 1} of ${pages}`),
     h("button", { type: "button", class: "btn", "aria-label": "Next page", disabled: L.page >= pages - 1 || null, onclick: () => { L.page++; render(); } }, "›"),
     [20, 50, 100].map(n => h("button", { type: "button", class: "btn" + (L.size === n ? " fill" : ""), onclick: () => { L.size = n; L.page = 0; render(); } }, String(n))));
-  main.replaceChildren(crumbs, h("h1", { class: "title", style: "cursor:default" }, L.name),
+  fill(main, crumbs, h("h1", { class: "title", style: "cursor:default" }, L.name),
     h("p", { style: "color:var(--text2);font-size:11px" }, "A setup list kept in this browser. RightPrice's costing does not read it yet."), tools, table, pager);
   $("#selbar").hidden = true;
 }
@@ -600,7 +626,7 @@ async function whoAmI() {
 // ================================================================== EVENTS (actions)
 function runSearch(mode) { state.search.mode = mode; store.set("searchMode", mode); const t = state.search.text.trim(); state.search.active = t ? { text: t, mode } : null; rerunWithSkeleton(); }
 function setView(v) { state.view = v; store.set("view", v); state.shown = CONFIG.pageSize; render(); }
-function applySaved(x) { state.saved = x.name; state.filters = JSON.parse(JSON.stringify(x.filters || {})); if (x.codes) state.filters._codes = x.codes; if (x.search) { state.search.active = x.search; state.search.text = x.search.text; } else { state.search.active = null; state.search.text = ""; } rerunWithSkeleton(); }
+function applySaved(x) { state.saved = x.name; state.filters = JSON.parse(JSON.stringify(x.filters || {})); if (x.codes) state.filters._codes = x.codes; if (x.search) { state.search.active = x.search; state.search.text = x.search.text; } rerunWithSkeleton(); }
 function deleteSaved() {
   const sel = h("select", {}, state.userSearches.map(s => h("option", {}, s.name)));
   const d = dialog("Delete a saved search", sel, [h("button", { type: "button", class: "btn", onclick: () => d.remove() }, "Cancel"), h("button", { type: "button", class: "btn fill", onclick: () => { state.userSearches = state.userSearches.filter(s => s.name !== sel.value); store.set("searches", state.userSearches); if (state.saved === sel.value) state.saved = "Default"; d.remove(); toast("Deleted"); render(); } }, "Delete")]);
@@ -647,8 +673,8 @@ function saveEdits() {
 }
 function moreAction(a, rows) {
   const src = state.cls === "*" ? null : state.cls;
-  if (a === "Download Excel") download("/api/costs/download", { keys: rows.map(keyOf) }, "RightCost.xlsx").then(() => toast("Download Excel ready – see Downloads")).catch(e => toast(e.message, false));
-  else if (a === "Download Excel with Images") download("/api/costs/download", { keys: rows.map(keyOf) }, "RightCost.xlsx").then(() => toast("There are no fabric images yet; downloaded without them – see Downloads")).catch(e => toast(e.message, false));
+  if (a === "Download Excel") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("Download Excel ready – see Downloads")).catch(e => toast(e.message, false));
+  else if (a === "Download Excel with Images") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("RightPrice holds no fabric images, so the file has none – see Downloads")).catch(e => toast(e.message, false));
   else if (a === "Bulk Upload") location.href = "/#bulk";
   else if (a === "Download Templatised Data") { location.href = "/api/template"; state.downloads.unshift({ name: "RightPrice template.xlsx", at: new Date().toISOString() }); toast("Template downloading – see Downloads"); }
   else if (a === "Negotiation Pack") location.href = "/#pack";
@@ -686,10 +712,11 @@ function openDrawer() {
   closeLayers();
   const dr = $("#drawer"), attrs = CONFIG.modules.costs.filterAttrs, draft = JSON.parse(JSON.stringify(state.filters)); delete draft._codes;
   let costed = state.costedOnly;
-  const pool = state.rows.filter(r => state.cls === "*" || r.source === state.cls);
+  // each attribute counts the rows the other filters (as drafted) leave
+  const poolFor = id => { const keep = state.filters; state.filters = Object.fromEntries(Object.entries(draft).filter(([k]) => k !== id)); const sAct = state.search.active; const rows = filtered(); state.filters = keep; state.search.active = sAct; return rows; };
   const open = new Set(Object.keys(draft));
   const list = h("div", { class: "body" });
-  const paintList = q => list.replaceChildren(...attrs.filter(a => !q || a.label.toLowerCase().includes(q)).map(a => {
+  const paintList = q => fill(list, ...attrs.filter(a => !q || a.label.toLowerCase().includes(q)).map(a => {
     const cnt = Array.isArray(draft[a.id]) ? draft[a.id].length : draft[a.id] ? 1 : 0;
     const box = h("div", { class: "attr" }, h("button", { type: "button", "aria-expanded": String(open.has(a.id)), onclick: () => { open.has(a.id) ? open.delete(a.id) : open.add(a.id); paintList(q); } }, h("span", {}, a.label, cnt ? h("span", { class: "cnt" }, `(${cnt})`) : null), h("span", {}, open.has(a.id) ? "⌄" : "›")));
     if (open.has(a.id)) {
@@ -701,11 +728,11 @@ function openDrawer() {
         i1.addEventListener("input", upd); i2.addEventListener("input", upd);
         box.append(h("div", { class: "vals" }, a.date ? [h("span", {}, "From"), i1, h("span", {}, "To"), i2] : h("div", { class: "mm" }, i1, i2)));
       } else {
-        const counts = {}; for (const r of pool) { const v = String(val(r, a.id) ?? ""); if (v) counts[v] = (counts[v] || 0) + 1; }
+        const counts = {}; for (const r of poolFor(a.id)) { const v = String(val(r, a.id) ?? ""); if (v) counts[v] = (counts[v] || 0) + 1; }
         const values = Object.keys(counts).sort((x, y) => counts[y] - counts[x]);
         const mini = h("input", { type: "text", placeholder: "Search", "aria-label": `Search ${a.label}` });
         const vals = h("div");
-        const paintVals = () => vals.replaceChildren(...values.filter(v => !mini.value || v.toLowerCase().includes(mini.value.toLowerCase())).slice(0, 200).map(v => {
+        const paintVals = () => fill(vals, ...values.filter(v => !mini.value || v.toLowerCase().includes(mini.value.toLowerCase())).slice(0, 200).map(v => {
           const cb = h("input", { type: "checkbox", class: "cb" }); cb.checked = (draft[a.id] || []).includes(v);
           cb.addEventListener("change", () => { const cur = new Set(draft[a.id] || []); cb.checked ? cur.add(v) : cur.delete(v); if (cur.size) draft[a.id] = [...cur]; else delete draft[a.id]; });
           return h("label", {}, cb, `${v} (${counts[v]})`);
@@ -719,7 +746,7 @@ function openDrawer() {
   const search = h("input", { type: "text", placeholder: "Search Filter", "aria-label": "Search the filter attributes" });
   search.addEventListener("input", () => paintList(search.value.toLowerCase()));
   const sw = h("input", { type: "checkbox", class: "cb" }); sw.checked = costed; sw.addEventListener("change", () => { costed = sw.checked; });
-  dr.replaceChildren(h("div", { class: "hd" }, "Advanced Filter", ib("x", "Close", () => { dr.hidden = true; })), h("div", { class: "fs", html: svg("search", 'width="14" height="14"') }, search), list,
+  fill(dr, h("div", { class: "hd" }, "Advanced Filter", ib("x", "Close", () => { dr.hidden = true; })), h("div", { class: "fs", html: svg("search", 'width="14" height="14"') }, search), list,
     h("div", { class: "ft" }, h("label", { class: "switch" }, "Costed only (leave out rows not costed)", sw), h("div", { style: "display:flex;justify-content:space-between" },
       h("button", { type: "button", class: "btn", onclick: () => { for (const k of Object.keys(draft)) delete draft[k]; costed = false; sw.checked = false; open.clear(); paintList(""); } }, "Clear Filter"),
       h("button", { type: "button", class: "btn fill", onclick: () => { const codes = state.filters._codes; state.filters = draft; if (codes) state.filters._codes = codes; state.costedOnly = costed; state.saved = "Default"; dr.hidden = true; rerunWithSkeleton(); if (Object.keys(draft).length) setTimeout(saveSearchPrompt, 450); } }, "Apply Filter"))));
@@ -730,6 +757,13 @@ addEventListener("keydown", e => {
   if (e.key === "Escape") { const pop = document.querySelector(".scrim"); if (pop) { if (pop.dataset.popup) { pop.remove(); load(); } else pop.remove(); return; } closeLayers(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail) { e.preventDefault(); const s = $("#search"); if (s) s.focus(); }
 });
+// the address follows the page: #item/<source|code> is a fabric's detail page; Back returns to the list
+function fromHash() {
+  const hsh = decodeURIComponent(location.hash.slice(1));
+  if (hsh.startsWith("item/")) { const r = state.rows.find(x => keyOf(x) === hsh.slice(5)); if (r) { if (!state.detail || state.detail.key !== keyOf(r)) openDetail(r); return; } }
+  if (state.detail) { state.detail = null; render(); }
+}
+addEventListener("popstate", fromHash);
 addEventListener("message", e => { if (e.origin === location.origin && e.data && e.data.rp === "listChanged") load(); });
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
@@ -739,7 +773,7 @@ async function load() {
     state.rows = d.rows; state.counts = d.counts;
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
-    render();
-  } catch (err) { $("#main").replaceChildren(h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
+    render(); fromHash();
+  } catch (err) { fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
 renderRail(); render(); load(); whoAmI();

@@ -290,8 +290,8 @@ def brief(res, m, quantity=None, notes=(), sel=None):
     else:
         fit = (f"half of the {cat['fabrics']} {typ} fabrics you bought were priced between {cat['p25']:+.1f}% and "
                f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)")
-        band_why = fit + (f"; the tool never counts more than {BAND_MAX:.0f}% above as in line" if cat["p75"] > BAND_MAX else
-                          f"; the tool always allows {BAND_MIN:.0f}% either way" if cat["p75"] < BAND_MIN or cat["p25"] > -BAND_MIN else "")
+        adjusted = (lo, hi) != (cat["p25"], cat["p75"])
+        band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%" if adjusted else "")
 
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False
@@ -833,7 +833,7 @@ def _pilot_briefs(rows, key):
     return None
 
 
-STANCE_BAND = {"push": "Above range", "fair": "In range", "below": "Below range", "ask": "Tool unsure", "error": "Not costed"}
+STANCE_BAND = {"push": "Above range", "fair": "In range", "below": "Below range", "ask": "Ask break-up", "error": "Not costed"}
 
 
 @app.get("/api/costs")
@@ -903,13 +903,21 @@ def costs():
 def costs_download(payload: dict = Body(default={})):
     """The Right cost rows asked for (codes), or all of one source, as Excel."""
     rows = costs()["rows"]
-    src, keys = payload.get("source"), set(payload.get("keys") or [])
-    pick = [r for r in rows if (not src or r["source"] == src) and (not keys or f"{r['source']}|{r.get('id') or r['code']}" in keys)]
+    src, order, extra = payload.get("source"), payload.get("keys") or [], payload.get("extra") or {}
+    key = lambda r: f"{r['source']}|{r.get('id') or r['code']}"
+    if order:           # the rows asked for, in the order the page shows them
+        at = {key(r): r for r in rows}
+        pick = [at[k] for k in order if k in at]
+    else:
+        pick = [r for r in rows if not src or r["source"] == src]
+    for r in pick:
+        e = extra.get(key(r)) or {}
+        r["status"], r["remarks"] = e.get("status"), e.get("remarks")
     cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("route", "Route"),
             ("weave", "Weave"), ("finish", "Finish"), ("warp", "Warp yarn"), ("weft", "Weft yarn"), ("epi", "EPI"), ("ppi", "PPI"),
-            ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid or quoted Rs/m"),
+            ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid (purchase orders) or quoted (fabric list) Rs/m"),
             ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"), ("band", "Against the usual range"),
-            ("placeholders", "Placeholder rates used")]
+            ("placeholders", "Placeholder rates used"), ("status", "Status"), ("remarks", "Remarks")]
     df = pd.DataFrame([{h: r.get(k) for k, h in cols} for r in pick], columns=[h for _, h in cols])
     buf = io.BytesIO()
     df.to_excel(buf, index=False)
