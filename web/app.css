@@ -459,6 +459,15 @@ table.list td.remarks { white-space: normal; min-width: 260px; max-width: 360px;
 table.list td.remarks div + div { margin-top: 3px; }
 .brief-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; max-width: 100ch; }
 .brief-list ul { margin: 6px 0; padding-left: 18px; }
+.brief-list li.caveat b { color: var(--amber); }
 .card.brief { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 @media (max-width: 820px) { table.list .s2 { position: static; } table.list td.remarks { min-width: 200px; } }
 @media print { .card.brief { border-color: #0b7d57; } }
+/* the list on paper: the tool's columns with the fabric code; the mill's own columns are left to the download */
+@media print {
+  table.list .stick { position: static !important; }
+  table.list .millcol, .list-tools, .card.upload, table.list th.s0, table.list td.s0 { display: none !important; }
+  .list-wrap { max-height: none !important; overflow: visible !important; }
+  table.list .linkish { display: inline !important; color: inherit; }
+}
+@media print { table { width: 100% !important; table-layout: auto; } td, th { overflow-wrap: anywhere; } }

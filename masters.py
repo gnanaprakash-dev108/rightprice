@@ -334,6 +334,7 @@ def cost(sel, masters):
     res["rates_used"] = used
     res["inputs"] = inp
     quote = _num(sel.get("Quoted price (Rs/m)"))
+    quote = quote if quote and quote > 0 else None      # a quote of zero or less is no quote
     res["quote"] = quote
     res["gap"] = None if quote is None else quote - res["total_per_m"]
     res["gap_pct"] = None if quote is None else quote / res["total_per_m"] - 1
