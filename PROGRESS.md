@@ -122,8 +122,10 @@ cost; supplier names are cut short in the purchase-order data itself ("Rajapalay
 
 1. Done 25 Nov: the ten findings of the sixth cold review (pull request 10).
 2. Done 25 Nov: the negotiation pack (pull request 11).
-3. Mill sheet rows in materials other than 100% cotton; base price and per-end, per-pick figures
-   per mill in the rate master instead of in code.
+3. Done 25 Nov (pull request 13): mill sheet rows in poly cotton and linen are read (on the
+   placeholder yarns, and said so); the per-end, per-pick and C2FO figures are per mill in the rate
+   master sheet `Mill_Sheet_Terms` (Arvind's from the card; a sheet from a mill not in it is checked on
+   its additions only, and says so). Base price stays per row: it is on each row of the mill's sheet.
 4. Date the yarn rates, so an order is costed on the rates of its month and panel 3 of the
    dashboard can show fabric cost by year.
 5. The 265 purchase-order fabrics still not costed (two yarns in one direction).

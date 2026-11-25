@@ -8,8 +8,9 @@ A mill prices a fabric as a base price for a standard construction plus upcharge
 This module turns such a row into the choices RightPrice costs from, so the mill's price can sit
 beside the should-cost, and it checks that the mill's own arithmetic adds up.
 
-Nothing here is a costing rate. PER_END and PER_PICK are the mill rate card's figures
-(docs/Mill_Rate_Card.md, section 1) and are used only to check the sheet.
+Nothing here is a costing rate. The per-end and per-pick figures a mill prices its sheet with are kept
+per mill in the rate master, sheet "Mill_Sheet_Terms" (Arvind's from its rate card,
+docs/Mill_Rate_Card.md, section 1), and are used only to check the sheet.
 """
 import math
 import re
@@ -26,8 +27,38 @@ COLUMNS = ["Brand", "Fab Code", "YD/NYD", "Material Type", "Warp", "Weft", "EPI"
            "Upcharge/Print/Mcount", "Double beam", "Price", "Upcharge for less qnty", "Discoun>2000 mts",
            "Total price with qnty disc/upcharge", "Ex mill price", "C2FO @2.84%"]
 GROUPS = {"Fabric": COLUMNS[:15], "Order": COLUMNS[15:22], "Mill's price build-up": COLUMNS[22:]}
+# Arvind's figures, the first row of the "Mill_Sheet_Terms" table; used when no table is given
 PER_END, PER_PICK, PER_PICK_ABOVE_90 = 0.60, 0.90, 1.00
 C2FO = 1.0284
+TERMS_SHEET = "Mill_Sheet_Terms"
+TERMS_COLUMNS = ["Mill", "Reference column", "Per end Rs", "Per pick up to 90 Rs", "Per pick above 90 Rs", "C2FO factor", "Basis", "Note"]
+DEFAULT_TERMS = {"mill": "Arvind", "end": PER_END, "pick": PER_PICK, "pick90": PER_PICK_ABOVE_90, "c2fo": C2FO}
+
+
+def apply(m):
+    """Add the per-mill sheet terms to a rate master that has none (once). Returns the changes made."""
+    if TERMS_SHEET in m:
+        return []
+    m[TERMS_SHEET] = pd.DataFrame([["Arvind", "Arvind Ref", PER_END, PER_PICK, PER_PICK_ABOVE_90, C2FO,
+                                    "Mill rate card 23 Nov 2026",
+                                    "Price change for one end or pick over the standard construction (confirmed 25 Nov 2026 by the "
+                                    "AS Sweetan sheet). C2FO factor from the same sheet. Used only to check a mill's sheet."]],
+                                  columns=TERMS_COLUMNS)
+    return [f"Added sheet {TERMS_SHEET} (Arvind's per-end and per-pick figures, moved from the code)"]
+
+
+def terms_for(row, m=None):
+    """The per-end and per-pick figures for the mill a sheet row comes from: the mill whose reference
+    column is filled in. None when the row names no mill the table knows."""
+    table = None if m is None else m.get(TERMS_SHEET)
+    if table is None or table.empty:
+        return dict(DEFAULT_TERMS) if not _blank(row.get("Arvind Ref")) else None
+    for _, t in table.iterrows():
+        col = str(t["Reference column"]).strip()
+        if col and not _blank(row.get(col)):
+            return {"mill": str(t["Mill"]), "end": float(t["Per end Rs"]), "pick": float(t["Per pick up to 90 Rs"]),
+                    "pick90": float(t["Per pick above 90 Rs"]), "c2fo": float(t["C2FO factor"])}
+    return None
 QUANTITY_BANDS = [(500, 600, "500 to 599 m"), (600, 700, "600 to 699 m"), (700, 800, "700 to 799 m"),
                   (800, 2000, "800 to 1,999 m"), (2000, 4000, "2,000 to 3,999 m"),
                   (4000, 6000.5, "4,000 to 6,000 m"), (6000.5, 1e12, "Above 6,000 m")]
@@ -65,8 +96,22 @@ def clean_row(row):
     return out
 
 
-def _yarn(text, yarns):
-    """'40', '40s', '2/80', '40+2/80 (98/2)' -> (yarn key, note). The first count is the main yarn."""
+def content_of_material(text):
+    """'100% Cotton' -> '100% cotton'; 'PC 65/35', 'Poly Cotton', 'Polyester Cotton' -> 'Poly cotton';
+    '100% Linen' -> 'Linen'. None for anything else (a blend the tool has no yarns for)."""
+    t = re.sub(r"\s+", "", str(text or "").lower())
+    if t in ("100%cotton", "cotton", "100%cottonfabric"):
+        return "100% cotton"
+    if re.search(r"poly(ester)?cotton|^pc|cotton/?poly|65/35|polycot", t) and "visc" not in t and "lin" not in t:
+        return "Poly cotton"
+    if re.search(r"^(100%)?linen$", t):
+        return "Linen"
+    return None
+
+
+def _yarn(text, yarns, content="100% cotton"):
+    """'40', '40s', '2/80', '40+2/80 (98/2)' -> (yarn key, note). The first count is the main yarn.
+    For poly cotton and linen the count is looked up among that content's yarns (linen counts in lea)."""
     t = str(text).strip().lower()
     main, note = re.split(r"\+", t)[0], ""
     if "+" in t:
@@ -78,10 +123,20 @@ def _yarn(text, yarns):
     want = f"2/{ply.group(1)}" if ply else (main + "s" if re.fullmatch(r"\d+(\.0)?", main) else None)
     if want:
         want = want.replace(".0s", "s")
+        blends = yarn_seed.CONTENTS.get(content, ("Cotton",))
         for _, y in yarns.iterrows():
-            if str(y["Blend"]) == "Cotton" and str(y["Count"]).strip().lower() in (want, want.replace("2/", "") + "/2"):
-                return y["Yarn key"], note
-    return None, f"yarn count '{text}' is not in the yarn master"
+            count = str(y["Count"]).strip().lower()
+            if content == "100% cotton":
+                hit = str(y["Blend"]) == "Cotton" and count in (want, want.replace("2/", "") + "/2")
+            elif content == "Linen":
+                hit = str(y["Blend"]) in blends and count == want.rstrip("s") + " lea"
+            else:
+                hit = str(y["Blend"]) in blends and count == want
+            if hit:
+                extra = " (read as lea)" if content == "Linen" else ""
+                more = f"count '{text}'{extra} costed on the {content.lower()} yarn {y['Yarn key']}, a placeholder rate" if content != "100% cotton" else ""
+                return y["Yarn key"], "; ".join(x for x in (note, more) if x)
+    return None, f"yarn count '{text}' is not in the yarn master" + ("" if content == "100% cotton" else f" for {content.lower()}")
 
 
 def _weave(text, weaves):
@@ -125,17 +180,17 @@ def to_inputs(row, m):
     else:
         problems.append("YD/NYD is blank")
 
-    content = "" if _blank(row.get("Material Type")) else re.sub(r"\s+", "", str(row.get("Material Type")).lower())
-    if content in ("100%cotton", "cotton"):
-        sel["Content"] = list(yarn_seed.CONTENTS)[0]
+    content = content_of_material(row.get("Material Type"))
+    if content:
+        sel["Content"] = content
     else:
-        problems.append(f"material '{row.get('Material Type')}' is not covered yet (100% cotton only from a mill sheet)")
+        problems.append(f"material '{row.get('Material Type')}' is not covered yet (100% cotton, poly cotton and linen only)")
 
     for side in ("Warp", "Weft"):
         if _blank(row.get(side)):
             problems.append(f"{side} count is blank")
             continue
-        key, note = _yarn(row.get(side), m["Yarn_Rates"])
+        key, note = _yarn(row.get(side), m["Yarn_Rates"], content or "100% cotton")
         if key:
             sel[f"{side} yarn"] = key
             if note:
@@ -195,8 +250,11 @@ def to_inputs(row, m):
     return sel, problems, notes
 
 
-def check_sums(row):
-    """Does the mill's own arithmetic add up? Returns a list of what does not (empty = it does)."""
+def check_sums(row, m=None):
+    """Does the mill's own arithmetic add up? Returns a list of what does not (empty = it does).
+    The per-end and per-pick checks need the mill's figures; a row from a mill the table does not
+    know is checked on its additions only, and says so."""
+    t = terms_for(row, m)
     n = lambda c: _num(row.get(c))
     z = lambda c: n(c) or 0.0
     off = []
@@ -208,12 +266,12 @@ def check_sums(row):
             off.append(f"Diff {name} is {n(f'Diff {name}'):g}, but Actual - Std is {n(f'Actual {name}') - n(f'Std {name}'):g}")
         if n(name) is not None and n(f"Actual {name}") is not None and abs(n(name) - n(f"Actual {name}")) > 0.01:
             off.append(f"{name} {n(name):g} differs from Actual {name} {n(f'Actual {name}'):g}")
-    if n("Diff EPI") is not None and n("EPI Upch") is not None and abs(n("Diff EPI") * PER_END - n("EPI Upch")) > 0.011:
-        off.append(f"EPI Upch {n('EPI Upch'):g} is not {n('Diff EPI'):g} ends x Rs {PER_END:.2f} = {n('Diff EPI') * PER_END:.2f}")
-    if n("Diff PPI") is not None and n("PPI Upch") is not None:
-        ok = [n("Diff PPI") * r for r in (PER_PICK, PER_PICK_ABOVE_90)]
+    if t and n("Diff EPI") is not None and n("EPI Upch") is not None and abs(n("Diff EPI") * t["end"] - n("EPI Upch")) > 0.011:
+        off.append(f"EPI Upch {n('EPI Upch'):g} is not {n('Diff EPI'):g} ends x Rs {t['end']:.2f} = {n('Diff EPI') * t['end']:.2f}")
+    if t and n("Diff PPI") is not None and n("PPI Upch") is not None:
+        ok = [n("Diff PPI") * r for r in (t["pick"], t["pick90"])]
         if all(abs(v - n("PPI Upch")) > 0.011 for v in ok):
-            off.append(f"PPI Upch {n('PPI Upch'):g} is not {n('Diff PPI'):g} picks x Rs {PER_PICK:.2f} = {ok[0]:.2f}")
+            off.append(f"PPI Upch {n('PPI Upch'):g} is not {n('Diff PPI'):g} picks x Rs {t['pick']:.2f} = {ok[0]:.2f}")
     build = z("Base Price") + z("EPI Upch") + z("PPI Upch") + z("Finish Upch") + z("Dobby Upch") \
         + z("Upcharge/Print/Mcount") + z("Double beam")
     if abs(build - n("Price")) > 0.011:
@@ -222,12 +280,12 @@ def check_sums(row):
         total = n("Price") + z("Upcharge for less qnty") - z("Discoun>2000 mts")
         if abs(total - n("Total price with qnty disc/upcharge")) > 0.011:
             off.append(f"Total {n('Total price with qnty disc/upcharge'):g} is not price plus quantity terms = {total:.2f}")
-    if n("Ex mill price") is not None and n("C2FO @2.84%") is not None and abs(n("Ex mill price") * C2FO - n("C2FO @2.84%")) > 0.011:
-        off.append(f"C2FO {n('C2FO @2.84%'):g} is not ex-mill x {C2FO} = {n('Ex mill price') * C2FO:.2f}")
+    if t and n("Ex mill price") is not None and n("C2FO @2.84%") is not None and abs(n("Ex mill price") * t["c2fo"] - n("C2FO @2.84%")) > 0.011:
+        off.append(f"C2FO {n('C2FO @2.84%'):g} is not ex-mill x {t['c2fo']} = {n('Ex mill price') * t['c2fo']:.2f}")
     return off
 
 
-def own_sums(row):
+def own_sums(row, m=None):
     """The ex-mill price the mill's own sheet gives when its sums are done again: base price, plus the
     differences in ends and picks at the card's rates, plus the other upcharges, plus or minus the
     quantity terms. (price by the sums, rupees per metre the stated ex-mill price is above it), or
@@ -239,11 +297,12 @@ def own_sums(row):
         return None, None
     d_epi = n("Diff EPI") if n("Diff EPI") is not None else (z("Actual EPI") - z("Std EPI") if n("Std EPI") is not None else None)
     d_ppi = n("Diff PPI") if n("Diff PPI") is not None else (z("Actual PPI") - z("Std PPI") if n("Std PPI") is not None else None)
-    epi_u = z("EPI Upch") if d_epi is None else d_epi * PER_END
-    if d_ppi is None:
+    t = terms_for(row, m)
+    epi_u = z("EPI Upch") if d_epi is None or t is None else d_epi * t["end"]
+    if d_ppi is None or t is None:
         ppi_u = z("PPI Upch")
     else:       # the card charges Rs 1.00 a pick above 90 picks; take whichever rate the sheet is nearer to
-        ppi_u = min((d_ppi * r for r in (PER_PICK, PER_PICK_ABOVE_90)), key=lambda v: abs(v - z("PPI Upch")))
+        ppi_u = min((d_ppi * r for r in (t["pick"], t["pick90"])), key=lambda v: abs(v - z("PPI Upch")))
     price = z("Base Price") + epi_u + ppi_u + z("Finish Upch") + z("Dobby Upch") + z("Upcharge/Print/Mcount") + z("Double beam")
     price += z("Upcharge for less qnty") - z("Discoun>2000 mts")
     price = round(price, 2)

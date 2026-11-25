@@ -103,6 +103,16 @@ def main():
               f"{by['T-1']['should_cost']:.2f}")
         check("Mill's own sums checked", by["T-1"]["sums"] == [] and len(by["T-2"]["sums"]) >= 1 and "188" in by["T-2"]["sums"][0])
         check("NYD row listed, not costed, not guessed", by["T-3"]["should_cost"] is None and "NYD" in by["T-3"]["problems"][0])
+        import mill_sheet as _ms
+        check("Mill sheet: poly cotton and linen rows are read", _ms.content_of_material("PC 65/35") == "Poly cotton" and _ms.content_of_material("100% Linen") == "Linen"
+              and _ms.content_of_material("Poly Viscose") is None)
+        pc_row = dict(base_row, **{"Fab Code": "PC-1", "Material Type": "PC 65/35"})
+        pc_sel, pc_prob, pc_notes = _ms.to_inputs(pc_row, masters.load())
+        check("Mill sheet: a poly cotton row is costed on the poly cotton yarn, and says it is a placeholder",
+              not pc_prob and pc_sel["Warp yarn"].startswith("Poly Cotton") and any("placeholder" in n for n in pc_notes))
+        unknown = dict(base_row, **{"Arvind Ref": None})
+        check("Mill sheet: per-end and per-pick come from the rate master, by mill", _ms.terms_for(base_row, masters.load())["mill"] == "Arvind"
+              and _ms.terms_for(unknown, masters.load()) is None)
         check("Mixed warp costed on its main yarn, and said so", by["T-4"]["should_cost"] is not None and by["T-4"]["notes"])
         check("Yarn move across the list", by["T-1"]["simulated"] > by["T-1"]["should_cost"] + 4 and by["T-3"]["simulated"] is None)
         added = c.post("/api/list/add", json=dict(masters.EXAMPLE_ROW, Content="100% cotton")).json()["id"]
