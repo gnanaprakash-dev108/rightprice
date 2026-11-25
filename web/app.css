@@ -530,3 +530,7 @@ table.list td.remarks div + div { margin-top: 3px; }
 }
 @media print { table { width: 100% !important; table-layout: auto; } td, th { overflow-wrap: anywhere; } }
 @media print { .pack-tools { display: none !important; } }
+/* inside Right cost's popup: Cost a fabric alone */
+html.embed .side, html.embed .top, html.embed .skip { display: none !important; }
+html.embed .shell { display: block; }
+html.embed main { padding-top: 12px !important; }

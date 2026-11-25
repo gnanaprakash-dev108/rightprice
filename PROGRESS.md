@@ -89,6 +89,21 @@ rows not costed. A row repeating an order is counted once. With a yarn move on t
 follows it. Two cold reviews; the second's last three points (duplicates, uploads, a Push only paise
 over its range) were fixed after it and checked by `check_server.py`, not by a third reviewer.
 
+### Right cost (25 Nov, night, pull request 12)
+
+`/rightcost`: every costing in one list page laid out after the company PLM list screens (design
+tokens measured at 1366x768), asked for by GP on 25 Nov. Lists the 1,696 purchase-order costings and
+the fabric list; "Against Range" is the brief's verdict on today's rates for every row (worked out in
+the background, about 20 s, kept until the rate master changes). The "+" opens Cost a fabric in a
+popup. Search, filters, saved searches, sort, list and card views, column chooser, selection bar,
+detail pages with their own address, Library setup lists, light and dark. Status, Remarks, saved
+searches and Library lists are kept in each browser (GP's choice). GP's answers to the questions are
+in `docs/QUESTIONS_FOR_GP.md`. Two cold reviews; the second's findings were fixed after it and checked
+in the browser by the build session, not by a third reviewer.
+
+Known and left: Cost a fabric calls a purchase-order price a "quote" when one is opened from Right
+cost; supplier names are cut short in the purchase-order data itself ("Rajapalayam Mills Limite").
+
 ### Waiting on the owner
 
 1. Real yarn rates for poly cotton and linen (six placeholders are in the yarn master).
@@ -98,7 +113,9 @@ over its range) were fixed after it and checked by `check_server.py`, not by a t
    Rs 390 to 410 a kilo).
 4. Print method for printed fabrics, and a mill cost sheet for one print.
 5. The Scribd fabric costing document as pasted text or a PDF (the site could not be opened).
-6. Price sheets from mills other than Arvind: `mill_sheet.py` checks sums against Arvind's
+6. Mill cost sheets for real wastage, overhead and margin (GP will send them, 25 Nov): 67% of the
+   purchase-order costings are "ask break-up" mostly because those rates are placeholders.
+7. Price sheets from mills other than Arvind: `mill_sheet.py` checks sums against Arvind's
    Rs 0.60 an end and Rs 0.90 a pick.
 
 ### Next to build, in the owner's order unless told otherwise
