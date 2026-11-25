@@ -15,6 +15,24 @@
 Doubts recorded while building, newest first. Each says what was done meanwhile, so nothing waits on
 the answer. Answer beside a question (or just tell the build session) and it will be acted on.
 
+## Open, 26 Nov 2026, early morning (nothing waits on these; the items are paused)
+
+A. **Dating the yarn rates (Next to build, item 4).** The yarn price history in hand
+   (`inputs/Yarn_Inteliigence_Master.xlsx`, sheet Yarn_Master: 5,275 prices by count, 2022 to June
+   2026) stops in June 2026, and the purchase orders run August to November 2026, so no order can be
+   costed on the rates of its own month yet. Choices:
+   1. Build panel 3 by year now: a fabric's cost for 2022 to 2026, each yarn rate scaled by that year's
+      average market price for its count (a what-if; no rate changes). Order-month costing waits.
+   2. Wait for yarn prices for July to November 2026, then build both.
+   3. Add a dated yarn rate table to the rate master now and cost each order on the nearest month
+      with data, marking the months without any.
+   *Which?* (Recommended: 1, and send July to November yarn prices when you can.)
+B. **The 265 purchase-order fabrics not costed (item 5)**, mostly two yarns in one direction
+   ("40s + 40s melange"). Costing them means re-running `pilot.py`, which changes the dashboard's fit
+   figures and so the brief's usual ranges for every fabric type. Choices: cost them on the first
+   yarn only (as mill sheets are, with a note), or on an even split of the two yarns, or leave them
+   out. *Which, and may the pilot be re-run?*
+
 ## Right cost (the PLM-style list page), 25 Nov 2026, night
 
 1. **Which "1,600+ existing costs"?** Taken as the 1,696 purchase-order fabrics costed in the pilot
