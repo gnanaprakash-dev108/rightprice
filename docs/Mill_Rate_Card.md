@@ -91,7 +91,7 @@ Not applicable for 40s quality, split deliveries or EOSS.
 
 | Section | In the tool | Rate master sheet |
 |---|---|---|
-| 1. End and pick | Not used. Kept for comparison with the tool's own cost of one end or pick | none |
+| 1. End and pick | Not in the costing. Used to check a mill's price sheet (EPI and PPI upcharges); kept per mill in the rate master since 25 Nov 2026 | `Mill_Sheet_Terms` |
 | 2. Dobby | Drop-downs "Dobby shafts" and "Top beam". The six figures are shafts (0, 8, 10) plus top beam (10) | `Dobby_Charges` |
 | 3. Finish | The "Finish" drop-down. Finishing per kg stays at the Normal rate; the named finish adds the card's Rs per metre | `Finishing_Rates`, column "Upcharge Rs per metre" |
 | 4. Minimum order upcharge | Drop-down "Rate card quantity", bands 500 to 799 m, yarn dyed only | `Quantity_Terms` |

@@ -50,6 +50,7 @@ TABLES = {
     "Dobby_Charges": "Dobby shafts and top beam", "Weft_Options": "Weft (yarn dyed)",
     "Quantity_Terms": "Rate card quantity", "Settings": "Calculation settings", "Mill_Tier": "Mill tiers",
     "Order_Slab": "Order size slabs", "Supplier_Benchmarks": "Supplier cost ratios",
+    "Mill_Sheet_Terms": "Mill sheet terms (per end, per pick)",
 }
 
 _classic = None
@@ -589,10 +590,13 @@ def list_view(options: dict = Body(default={})):
         item = {"id": None if pd.isna(r.get("Id")) else str(r.get("Id")).split(".")[0], "added": clean(r.get("Saved on")),
                 "inputs": inputs, "then": _loads(r.get("Result"), None), "notes": _loads(r.get("Notes"), []),
                 "from_mill": mill is not None, "mill": mill or (mill_sheet.from_choices(inputs) if inputs else {}),
-                "sums": mill_sheet.check_sums(mill) if mill else None, "problems": problems,
+                "sums": mill_sheet.check_sums(mill, m) if mill else None, "problems": problems,
+                "sheet_terms": None if not mill else (mill_sheet.terms_for(mill, m) or {}).get("mill"),
                 "should_cost": None, "gap": None, "gap_pct": None, "placeholders": [], "simulated": None, "sim_gap": None,
                 "sim_gap_pct": None, "quantity": None, "at_stake": None, "brief": None,
                 "supplier": clean(r.get("Supplier")), "description": clean(r.get("Description")), "upload": clean(r.get("Upload"))}
+        if mill and item["sheet_terms"] is None:
+            item["notes"] = list(item["notes"]) + ["no per-end and per-pick figures for this mill in the rate master (Mill sheet terms), so those upcharges were not checked"]
         if inputs is None:                   # a costing saved before choices were kept: shown, not re-costed
             item["should_cost"], item["mill"] = clean(r.get("Should-cost Rs/m")), {"Fab Code": clean(r.get("Fabric code")), "Ex mill price": clean(r.get("Quoted Rs/m"))}
             item["problems"] = ["saved before choices were kept; it cannot be re-costed or opened"]
@@ -711,7 +715,7 @@ def pack(options: dict = Body(default={})):
     for r in chosen:
         code = r["mill"].get("Fab Code") or (r["inputs"] or {}).get("Fabric code") or "(no code)"
         desc = r["description"] or " ".join(str(r["mill"].get(c)) for c in ("Weave", "Variety") if r["mill"].get(c))
-        own_price, own_gap = mill_sheet.own_sums(r["mill"]) if r["from_mill"] else (None, None)
+        own_price, own_gap = mill_sheet.own_sums(r["mill"], m) if r["from_mill"] else (None, None)
         b = r.get("sim_brief") or r["brief"]
         if r["problems"] or b is None:
             k = ("sheet", json.dumps({k2: v for k2, v in r["mill"].items() if k2 != "Fab Code"}, sort_keys=True, default=str)) if r["from_mill"] else None

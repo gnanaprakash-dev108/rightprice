@@ -44,12 +44,15 @@ def _add_missing_tables(m):
     rate card tables are added to it here; every other rate, and every edit made in the app,
     stays as it is. A dated copy is saved beside it first.
     """
+    import mill_sheet
     card = rate_card.apply(m)
     log = card + yarn_seed.apply(m)       # placeholder yarns for poly cotton and linen, added once
+    terms = mill_sheet.apply(m)           # per-mill sheet terms, moved from the code
+    log += terms
     if log:
         import datetime as dt
         import shutil
-        what = "rate card" if card else "blend yarns"
+        what = "rate card" if card else ("mill sheet terms" if terms else "blend yarns")
         backup = MASTER_PATH.replace(".xlsx", f" before {what} {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
         shutil.copyfile(MASTER_PATH, backup)
         save(m)
