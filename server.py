@@ -582,6 +582,113 @@ def list_remove(payload: dict = Body(...)):
     return {"removed": len(log) - len(keep)}
 
 
+# ------------------------------------------------------------------ negotiation pack
+def _stance_for(b, gap_pct):
+    """The stance of a row once its gap has moved (a yarn move): the same range, the new gap."""
+    if b["stance"] == "ask":
+        return "ask"
+    return "push" if gap_pct > b["band"]["hi"] + 1e-9 else ("below" if gap_pct < b["band"]["lo"] - 1e-9 else "fair")
+
+
+def _questions(r, b, stance, own_gap):
+    """What to ask the mill about one row, most useful first."""
+    q = []
+    code = r["mill"].get("Fab Code") or "this fabric"
+    if own_gap is not None and abs(own_gap) >= 0.01:
+        q.append(f"Your own sums for {code} give Rs {r['own_price']:,.2f}, not Rs {r['quote']:,.2f}: "
+                 + ("which is right?" if own_gap > 0 else "confirm the lower figure stands."))
+    elif r["sums"] and own_gap is not None:
+        q.append(f"Correct the sheet for {code}: {'; '.join(r['sums'])}. The ex-mill price itself agrees with the sums.")
+    if stance == "push":
+        w = b["would_need"]
+        alts = []
+        if w["yarn"] and not w["yarn"]["placeholder"]:
+            alts.append(f"yarn at about Rs {w['yarn']['warp']:,.0f} a kilo (master Rs {w['yarn']['warp_now']:,.0f})")
+        if not w["weaving"]["placeholder"]:
+            alts.append(f"weaving at about Rs {w['weaving']['rate']:.3f} a pick (master Rs {w['weaving']['now']:.3f})")
+        if not w["margin"]["placeholder"]:
+            alts.append(f"a margin of about {w['margin']['rate']:.1%} (master {w['margin']['now']:.1%})")
+        q.append(f"{code} is Rs {r['above_band']:,.2f} a metre above the top of the usual range (Rs {r['upper']:,.2f}). "
+                 "Show where it comes from" + (": " + "; or ".join(alts) + "?" if alts else "."))
+    elif stance == "ask":
+        q.append(f"Send the break-up for {code} (yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish, "
+                 f"margin) before a price is named. Why: {b['weak'][0]}.")
+    elif stance == "below":
+        q.append(f"{code} is below the usual range: confirm the yarn, the construction and the finish are as specified.")
+    for n in r["notes"]:
+        if "second yarn" in n:
+            q.append(f"{code}: name the second yarn in {n.split(chr(39))[1] if chr(39) in n else 'the warp or weft'} and its rate.")
+        elif "not recognised" in n:
+            q.append(f"{code}: {n[0].upper() + n[1:]}. Which finish is it, and what does it add?")
+    return q
+
+
+@app.post("/api/pack")
+def pack(options: dict = Body(default={})):
+    """The negotiation pack for a whole mill sheet (or the rows asked for): every row with its stance, the
+    money at stake, the mill's sums that are off and the questions to ask, plus the sheet's totals.
+    options: ids (the rows; default every row), yarn_pct (a yarn move, as on the list)."""
+    v = list_view({"yarn_pct": options.get("yarn_pct")} if options.get("yarn_pct") else {})
+    ids = {str(i) for i in (options.get("ids") or [])}
+    chosen = [r for r in v["rows"] if not ids or r["id"] in ids]
+    if not chosen:
+        raise HTTPException(400, "There are no rows to put in the pack")
+    rows, not_costed = [], []
+    for r in chosen:
+        code = r["mill"].get("Fab Code") or (r["inputs"] or {}).get("Fabric code") or "(no code)"
+        desc = r["description"] or " ".join(str(r["mill"].get(c)) for c in ("Weave", "Variety") if r["mill"].get(c))
+        own_price, own_gap = mill_sheet.own_sums(r["mill"]) if r["from_mill"] else (None, None)
+        b = r["brief"]
+        if r["problems"] or b is None:
+            not_costed.append({"code": code, "description": desc, "why": "; ".join(r["problems"]) or "no mill price on this row",
+                               "sums": r["sums"] or [], "own_price": own_price, "own_gap": own_gap})
+            continue
+        moved = r["simulated"] is not None
+        should = round(r["simulated"], 2) if moved else b["should"]
+        gap = round(b["quote"] - should, 2)
+        gap_pct = gap / should if should else 0.0
+        stance = _stance_for(b, gap_pct) if moved else b["stance"]
+        upper = round(should * (1 + b["band"]["hi"]), 2)
+        qty = r["quantity"]
+        row = {"id": r["id"], "code": code, "description": desc, "supplier": r["supplier"], "quantity": qty,
+               "quote": b["quote"], "should": should, "gap": gap, "gap_pct": gap_pct, "stance": stance,
+               "upper": upper, "above_band": round(b["quote"] - upper, 2),
+               "at_stake": None if qty is None else round(gap * qty), "weak": b["weak"], "caveats": b["caveats"],
+               "sums": r["sums"] or [], "own_price": own_price, "own_gap": own_gap,
+               "own_at_stake": None if own_gap is None or qty is None else round(own_gap * qty),
+               "notes": r["notes"], "mill": r["mill"]}
+        row["questions"] = _questions(row, b, stance, own_gap if row["sums"] else None)
+        rows.append(row)
+    staked = [r for r in rows if r["at_stake"] is not None]
+    by = lambda st: [r for r in rows if r["stance"] == st]
+    sums_rows = [r for r in rows + not_costed if r["sums"]]
+    totals = {
+        "rows": len(chosen), "costed": len(rows), "not_costed": len(not_costed),
+        "metres": sum(r["quantity"] or 0 for r in rows),
+        "at_mill_price": round(sum(r["quote"] * r["quantity"] for r in staked)),
+        "at_should_cost": round(sum(r["should"] * r["quantity"] for r in staked)),
+        "push_stake": sum(r["at_stake"] for r in by("push") if r["at_stake"] is not None),
+        "push_above_range": round(sum(r["above_band"] * r["quantity"] for r in by("push") if r["quantity"])),
+        "ask_stake": sum(r["at_stake"] for r in by("ask") if r["at_stake"] is not None and r["at_stake"] > 0),
+        "savings": -sum(r["at_stake"] for r in by("below") if r["at_stake"] is not None),
+        "sums_off": len(sums_rows),
+        "sums_money": sum(r.get("own_at_stake") or 0 for r in rows if r["sums"] and (r.get("own_at_stake") or 0) > 0),
+        "count": {st: len(by(st)) for st in ("push", "ask", "fair", "below")},
+        "no_quantity": sum(1 for r in rows if r["quantity"] is None),
+    }
+    lead = sorted([r for r in by("push") if r["at_stake"]], key=lambda r: -r["at_stake"])[:3]
+    suppliers = sorted({r["supplier"] for r in chosen if r["supplier"]})
+    sheets = {}         # the list's rows by supplier and the day they were added: one uploaded sheet each, as a rule
+    for r in v["rows"]:
+        key = f"{r['supplier'] or 'No supplier'} \u00b7 added {str(r['added'] or '')[:10]}"
+        sheets.setdefault(key, []).append(r["id"])
+    return {"rows": rows, "not_costed": not_costed, "totals": totals, "lead": [r["code"] for r in lead],
+            "sheets": [{"label": k, "ids": i} for k, i in sheets.items()],
+            "suppliers": suppliers, "added": sorted({str(r["added"])[:10] for r in chosen if r["added"]}),
+            "moved": v["rows"] and any(r["simulated"] is not None for r in v["rows"]),
+            "yarn_pct": options.get("yarn_pct") or None}
+
+
 @app.post("/api/list/download")
 def list_download(options: dict = Body(default={})):
     v = list_view(options)

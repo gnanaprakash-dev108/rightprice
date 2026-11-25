@@ -463,3 +463,59 @@ table.list td.remarks div + div { margin-top: 3px; }
 .card.brief { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 @media (max-width: 820px) { table.list .s2 { position: static; } table.list td.remarks { min-width: 200px; } }
 @media print { .card.brief { border-color: #0b7d57; } }
+
+/* ---------- negotiation pack */
+.pack-tools { display: flex; gap: 10px 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.pack-tools h1 { margin: 0 8px 0 0; }
+.pack-tools select { max-width: 100%; }
+.pack-head { margin: 4px 0 12px; }
+.pack-title { font-size: 20px; font-weight: 700; }
+.pack-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.pack-tile { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+.pack-tile.push { border-left: 4px solid var(--red); }
+.pack-tile.ask { border-left: 4px solid var(--amber); }
+.pack-tile.sums { border-left: 4px solid var(--red); }
+.pack-big { font-size: 20px; font-weight: 700; margin: 2px 0; }
+.pack-lead { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); }
+.pack-table table { width: 100%; }
+.pack-table td { vertical-align: top; }
+.pack-desc { color: var(--muted); font-size: 12px; white-space: normal; max-width: 34ch; }
+.pack-cols { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; margin-top: 14px; }
+.pack-cols h2 { font-size: 15px; margin: 0 0 6px; }
+.pack-q { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 13.5px; }
+.pack-foot { margin-top: 14px; font-size: 12px; }
+@media screen and (max-width: 820px) {
+  .pack-cols { grid-template-columns: 1fr; }
+  .pack-table { overflow: visible; }
+  .pack-table thead { display: none; }
+  .pack-table table, .pack-table tbody { display: block; width: 100%; min-width: 0 !important; }
+  .pack-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 12px; padding: 10px 4px; border-bottom: 1px solid var(--border); }
+  .pack-table td { display: flex; justify-content: space-between; gap: 8px; white-space: normal !important; min-width: 0; padding: 2px 0 !important; border: 0 !important; text-align: right; font-size: 13px; }
+  .pack-table td::before { content: attr(data-l); color: var(--muted); text-align: left; }
+  .pack-table td.pack-fab { grid-column: 1 / -1; display: block; text-align: left; }
+  .pack-table td.pack-fab::before { content: none; }
+  .pack-desc { max-width: none; }
+}
+@media print {
+  body.printing-pack, body.printing-pack .shell, body.printing-pack main { min-height: 0 !important; height: auto !important; }
+  body.printing-pack .pack-tools { display: none !important; }
+  body.printing-pack { font-size: 10px; }
+  body.printing-pack .pack-title { font-size: 15px; }
+  body.printing-pack .pack-big { font-size: 14px; }
+  body.printing-pack .pack-tiles { grid-template-columns: repeat(6, 1fr); gap: 5px; margin-bottom: 6px; }
+  body.printing-pack .pack-tile { padding: 5px 7px; }
+  body.printing-pack .pack-tile .sub { font-size: 9px !important; }
+  body.printing-pack .pack-lead { padding: 5px 8px; margin-bottom: 6px; }
+  body.printing-pack .pack-table td, body.printing-pack .pack-table th { padding: 3px 5px; font-size: 9.5px; }
+  body.printing-pack .pack-desc { font-size: 8.5px; display: inline; margin-left: 6px; }
+  body.printing-pack .pack-table td { line-height: 1.25; }
+  body.printing-pack .pack-table .tag { line-height: 1.2; }
+  body.printing-pack .pack-table td .pack-desc { white-space: nowrap; }
+  body.printing-pack h1, body.printing-pack .pack-head { margin: 0 0 4px; }
+  body.printing-pack .pack-cols { grid-template-columns: 3fr 2fr; gap: 10px; margin-top: 6px; }
+  body.printing-pack .pack-cols h2 { font-size: 11px; }
+  body.printing-pack .pack-q { font-size: 9.5px; gap: 2px; }
+  body.printing-pack .pack-foot { font-size: 8.5px; margin-top: 6px; }
+  body.printing-pack .tag { padding: 1px 5px; font-size: 9px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.printing-pack .pack-tile, body.printing-pack .pack-lead { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
