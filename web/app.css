@@ -518,4 +518,10 @@ table.list td.remarks div + div { margin-top: 3px; }
   body.printing-pack .pack-foot { font-size: 8.5px; margin-top: 6px; }
   body.printing-pack .tag { padding: 1px 5px; font-size: 9px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.printing-pack .pack-tile, body.printing-pack .pack-lead { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+/* the list on paper: the tool's columns with the fabric code; the mill's own columns are left to the download */
+@media print {
+  table.list .stick { position: static !important; }
+  table.list .millcol, .list-tools, .card.upload, table.list th.s0, table.list td.s0 { display: none !important; }
+  .list-wrap { max-height: none !important; overflow: visible !important; }
+  table.list .linkish { display: inline !important; color: inherit; }
 }

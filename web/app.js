@@ -276,7 +276,7 @@ PAGES.dashboard = async () => {
     const top = Math.max(...p.categories.map(c => Math.max(c.paid, c.should)));
     const rows = p.categories.map(c => h("tr", {}, h("td", {}, h("b", {}, c.route), " · ", c.weave), h("td", { class: "cmp-cell" }, h("div", { class: "cmp-bars", "aria-hidden": "true" }, h("div", { class: "cmp-bar", style: `width:${c.paid / top * 100}%;background:var(--total)` }), h("div", { class: "cmp-bar", style: `width:${c.should / top * 100}%;background:var(--g1)` }))),
       h("td", { class: "n" }, fmt(c.paid, 0)), h("td", { class: "n" }, fmt(c.should, 0)), h("td", { class: "n" }, gapTag(c.gap, c.trust)), h("td", { class: "n" }, c.p25 === undefined ? "" : `${pctSigned(c.p25)} to ${pctSigned(c.p75)}`), h("td", { class: "n" }, pct(c.within10, 0)), h("td", { class: "n" }, fmt(c.fabrics, 0))));
-    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} 100% cotton fabrics bought Aug to Nov 2026, averaged over the metres bought. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Paid above should-cost is the average over the metres; the middle half is by fabric, half of them priced between the two figures. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
+    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} 100% cotton fabrics bought Aug to Nov 2026, averaged over the metres bought. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Paid above should-cost is the average over the metres; the middle half is by fabric, half of them priced between the two figures. The average can sit outside the middle half when a few large orders were priced far from should-cost. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
       h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Fabric type"), h("th", { class: "cmp-cell" }, ""), h("th", { class: "n" }, "Paid Rs/m"), h("th", { class: "n" }, "Should-cost Rs/m"), h("th", { class: "n" }, "Paid above should-cost"), h("th", { class: "n", title: "Half of these fabrics were priced between these two figures against should-cost; one in four above the higher, one in four below the lower. The negotiation brief treats this range (at least 5% and at most 10% either way) as in line" }, "Middle half of fabrics"), h("th", { class: "n", title: "Share of these fabrics where the should-cost is within 10% of the price paid" }, "Tool within 10%"), h("th", { class: "n" }, "Fabrics"))), h("tbody", {}, rows))),
       h("p", { class: "sub", style: "margin:10px 0 0" }, "Poly cotton and linen are not here: there are no costed purchases of them yet.")));
 
@@ -319,7 +319,7 @@ function askCard(ins) {
   const above = firm.map(s => `${s.supplier} ${pctSigned(s.gap)} on ${s.fabrics} fabrics`).join(", ");
   const qty = p ? p.quantity.filter(x => x.paid).map(x => `${x.band}: Rs ${fmt(x.paid, 0)}`).join("; ") : "";
   const items = [
-    ["What should this fabric cost, and how sure is the figure?", `Cost it on Cost a fabric, or load the mill's sheet under Bulk upload. ${p ? `Across ${fmt(p.fabrics, 0)} of your cotton purchases the should-cost lands within 10% of the price paid for ${pct(p.within10, 0)} of fabrics, with a median gap of ${pctSigned(p.median_gap)}.` : ""} Treat a gap under 5% as noise and a gap over 10% as worth a question.`],
+    ["What should this fabric cost, and how sure is the figure?", `Cost it on Cost a fabric, or load the mill's sheet under Bulk upload. ${p ? `Across ${fmt(p.fabrics, 0)} of your cotton purchases the should-cost lands within 10% of the price paid for ${pct(p.within10, 0)} of fabrics, with a median gap of ${pctSigned(p.median_gap)}.` : ""} What counts as in line depends on the fabric type: the negotiation brief uses the range where half your past purchases of that type were priced (panel 1, middle half), kept between 5% and 10% either way.`],
     ["The mill says yarn has gone up. How much should the fabric go up?", `Not by the same percentage. On the reference shirting 5% on yarn is about ${(share * 5).toFixed(1)}% on the fabric, and each Rs 10 a kilo is ${rs(ref.warp_per_10 + ref.weft_per_10)} a metre for warp and weft together. Ask which count went up, from what rate to what, and on what date; then move that yarn in “If yarn prices move”.`],
     ["What is the base price, for which construction, and what do I pay for each extra end and pick?", "Ask for the standard EPI and PPI behind the base price. On Arvind's rate card an extra end is Rs 0.60 and an extra pick Rs 0.90 (Rs 1.00 above 90 picks); on their sheet the base for 40s yarn dyed twill is Rs 164 at 122 \u00D7 76. Other mills will have their own figures: ask for them in the same form. The list under Bulk upload checks every row of a mill's sheet: base plus upcharges must equal the price."],
     ["Am I paying for a small order, or missing a volume discount?", `Arvind's rate card adds ${small || "a percentage"} for yarn dyed lots below 800 m, and takes off ${disc || "a few rupees"} a metre for volume. The card gives no volume discount on its basic 40s quality, split deliveries or end-of-season orders. ${qty ? `Your median price paid by order size: ${qty}.` : ""} Ask whether lots of the same fabric code can be clubbed to reach the next band.`],
@@ -525,9 +525,11 @@ function briefCard(b, sel, moved) {
   const band = `${rs(b.lower)} to ${rs(b.settle_up_to)}`;
   for (const c of b.caveats || []) lines.push(h("li", { class: "caveat" }, h("b", {}, "Before you use these figures: "), c));
   if (b.stance === "ask") {
-    lines.push(h("li", {}, h("b", {}, "Do not open with a number. "), "The should-cost is not firm here: " + b.weak.join("; ") + ". Ask for yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin, then cost it again."));
+    if (b.qty_only) lines.push(h("li", {}, h("b", {}, "Set the quantity first. "), b.weak[0].charAt(0).toUpperCase() + b.weak[0].slice(1) + ". Change it in step 6, and the brief will give a stance."));
+    else lines.push(h("li", {}, h("b", {}, "Do not open with a number. "), "The should-cost is not firm here: " + b.weak.join("; ") + ". Ask for yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin, then cost it again."));
     if (b.qty_fix && state.setChoice) lines.push(h("li", {}, h("button", { type: "button", class: "btn small", onclick: () => state.setChoice(b.qty_fix.field, b.qty_fix.value) }, `Set ${b.qty_fix.field === "Order size" ? "the order size" : "the quantity band"} to ${b.qty_fix.value}`), " to cost it on the quantity typed."));
-  } else if (b.stance === "push") lines.push(h("li", {}, h("b", {}, `Open at the should-cost, ${rs(b.open_at)} a metre. `), `The usual range for this fabric is ${band}: ${b.band.why}. The quote is ${rs(b.above_band)} above the top of that range; ask the mill to show where it comes from.`));
+  } else if (b.stance === "push" && b.near_edge) lines.push(h("li", {}, h("b", {}, `Just above the usual range. `), `The usual range for this fabric is ${band}: ${b.band.why}. The quote is only ${rs(b.above_band)} a metre above its top, so a realistic aim is ${rs(b.settle_up_to)}; opening at the should-cost of ${rs(b.open_at)} would not be taken seriously.`));
+  else if (b.stance === "push") lines.push(h("li", {}, h("b", {}, `Open at the should-cost, ${rs(b.open_at)} a metre. `), `The usual range for this fabric is ${band}: ${b.band.why}. The quote is ${rs(b.above_band)} above the top of that range; ask the mill to show where it comes from.`));
   else if (b.stance === "fair") lines.push(h("li", {}, h("b", {}, "The quote is in line. "), `It is ${gapText}, inside the usual range of ${band}: ${b.band.why}. Use the time on quantity terms, finish and delivery instead.`));
   else lines.push(h("li", {}, h("b", {}, "The quote is below the usual range: a saving, if the specification holds. "), `It is ${gapText}; the usual range is ${band}. Before taking it, confirm the yarn, the construction and the finish are the ones costed here: a low price sometimes means a lighter cloth or a different yarn.`));
   if (above && (b.stance === "push" || b.stance === "ask")) {
@@ -539,7 +541,7 @@ function briefCard(b, sel, moved) {
         : `warp yarn costs ${about("Rs " + fmt(w.yarn.warp, 0))} a kilo and weft yarn ${about("Rs " + fmt(w.yarn.weft, 0))}` + (w.yarn.placeholder ? phNote : `, not Rs ${fmt(w.yarn.warp_now, 0)} and Rs ${fmt(w.yarn.weft_now, 0)}`);
       parts.push(h("li", {}, `${t} (${pctSigned(w.yarn.pct, 1)})`));
     }
-    parts.push(h("li", {}, `or weaving is ${about("Rs " + w.weaving.rate.toFixed(3))} a pick` + (w.weaving.placeholder ? phNote : `, not Rs ${w.weaving.now.toFixed(3)}`)));
+    parts.push(h("li", {}, `or weaving is ${about("Rs " + w.weaving.rate.toFixed(3))} a pick` + (w.weaving.placeholder ? phNote : `, not Rs ${w.weaving.now.toFixed(3)}`) + ` (the gap less the losses, overhead and margin the mill adds on it is ${rs(w.weaving.per_m_before)} a metre, over ${fmt(w.weaving.picks, 0)} picks)`));
     parts.push(h("li", {}, `or the mill's margin is ${about(pct(w.margin.rate, 1))}` + (w.margin.placeholder ? phNote : `, not ${pct(w.margin.now, 1)}`)));
     lines.push(h("li", {}, h("b", {}, `For the quote to be right, one of these would have to be true; each alone explains the whole ${rs(b.gap)} a metre: `), h("ul", {}, parts), "Ask which it is. Each can be checked: the yarn against the yarn master and the market, the others against the mill's own sheet."));
   }
@@ -562,10 +564,12 @@ function yarnSim(res, sel) {
   const show = async () => {
     const mine = ++turn;
     const swapBrief = (b, label) => { const old = document.querySelector(".cost-out .brief"); if (old && b) old.replaceWith(briefCard(b, sel, label)); };
-    if (!sim.warp && !sim.weft) { swapBrief(res.brief, null); return out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, "Move a slider to see the price at a different yarn rate.")); }
+    const heroMoved = r => { const el = document.querySelector(".cost-out .hero-moved"); if (!el) return; el.hidden = !r; if (r) el.textContent = `With the yarn moved on the sliders below (warp Rs ${fmt(y.warp_rate * (1 + sim.warp / 100), 0)}/kg, weft Rs ${fmt(y.weft_rate * (1 + sim.weft / 100), 0)}/kg) the should-cost is ${rs(r.total_per_m)}` + (r.quote !== null ? `, and the quote is ${rs(Math.abs(r.gap))} (${pct(Math.abs(r.gap_pct))}) ${r.gap >= 0 ? "above" : "below"} it.` : "."); };
+    if (!sim.warp && !sim.weft) { heroMoved(null); swapBrief(res.brief, null); return out.replaceChildren(h("span", { class: "sub", style: "margin:0" }, "Move a slider to see the price at a different yarn rate.")); }
     try {
       const body = Object.assign(costBody(sel), { "Warp yarn price override": y.warp_rate * (1 + sim.warp / 100), "Weft yarn price override": y.weft_rate * (1 + sim.weft / 100) });
       const r = await (await postJSON("/api/cost", body)).json(); if (mine !== turn) return;
+      heroMoved(r);
       swapBrief(r.brief, sim.warp === sim.weft ? `with yarn ${pctSigned(sim.warp, 0)}` : `with warp ${pctSigned(sim.warp, 0)}, weft ${pctSigned(sim.weft, 0)}`);
       const d = r.total_per_m - res.total_per_m;
       out.replaceChildren(h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Warp at Rs ${fmt(y.warp_rate * (1 + sim.warp / 100), 0)}/kg, weft at Rs ${fmt(y.weft_rate * (1 + sim.weft / 100), 0)}/kg`), h("b", { class: "num" }, `${rs(res.total_per_m)} \u2192 ${rs(r.total_per_m)}`), h("span", { class: "tag " + (d > 0.005 ? "down" : d < -0.005 ? "up" : "flat") }, `${d >= 0 ? "+" : "\u2212"}${fmt(Math.abs(d))} /m (${pctSigned(d / res.total_per_m * 100)})`),
@@ -630,7 +634,7 @@ function costView(res, sel) {
         h("button", { class: "btn", onclick: printSheet }, "Print"))),
     h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} \u00D7 ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
     h("div", { class: "facts num" }, h("span", {}, `${rs(res.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(res.gsm, 0)} g/m²`), h("span", {}, `${fmt(res.finished_g_per_m, 0)} g per running metre`)),
-    quote);
+    quote, h("div", { class: "notice info hero-moved", hidden: true, style: "margin:10px 0 0" }));
 
   const box = h("div"), note = h("div", { class: "sub", style: "margin:2px 0 0" });
   const negative = res.buckets.some(b => b.lines.some(l => l.amount < -0.005));
@@ -675,6 +679,8 @@ function costView(res, sel) {
   return [hero, odd, res.brief ? briefCard(res.brief, sel) : null, yarnSim(res, sel), moved, warn, chart, tableView, choices, ratesView].filter(Boolean);
 }
 
+// printed from the browser's own menu: open the tables too, so nothing prints as an empty heading
+addEventListener("beforeprint", () => { if (document.body.classList.contains("printing")) return; const closed = [...document.querySelectorAll(".cost-out details:not([open])")]; closed.forEach(d => { d.open = true; }); addEventListener("afterprint", () => closed.forEach(d => { d.open = false; }), { once: true }); });
 /* Print the cost on paper or to PDF: the result pane only, in light colours, with every table opened. */
 function printSheet() {
   const root = document.documentElement, theme = root.dataset.theme;
@@ -982,7 +988,7 @@ PAGES.bulk = async (arg) => {
         h("td", { class: "stick s1" }, h("button", { type: "button", class: "linkish", title: "Open in Cost a fabric", onclick: () => openRow(r) }, r.mill["Fab Code"] || "(no code)")),
         h("td", { class: "n rp stick s2" }, sc), ...simCells, h("td", { class: "n rp" }, blank(price) ? "" : fmt(price)), h("td", { class: "n rp" }, gap), h("td", { class: "n rp" }, stake === null ? "" : (stake < 0 ? "\u2212" : "") + "Rs " + fmt(Math.abs(stake), 0)), h("td", { class: "rp" }, stanceCell(r)), h("td", { class: "rp" }, sums),
         h("td", { class: "rp remarks" }, rem.length ? rem.map(x => h("div", {}, x)) : ""),
-        cols.map(c => h("td", { class: typeof r.mill[c] === "number" ? "n" : null }, cell(c, r.mill[c]))));
+        cols.map(c => h("td", { class: "millcol" + (typeof r.mill[c] === "number" ? " n" : "") }, cell(c, r.mill[c]))));
     });
     const n = ui.picked.size, picked = data.rows.filter(r => ui.picked.has(r.id));
     const counts = { all: data.rows.length, notcosted: data.rows.filter(r => r.problems.length).length, sums: data.rows.filter(r => r.sums && r.sums.length).length, above: data.rows.filter(r => rowStance(r) === "push").length };
@@ -993,11 +999,20 @@ PAGES.bulk = async (arg) => {
     filter.addEventListener("input", () => { ui.filter = filter.value; const pos = filter.selectionStart; paint(); const f = $(".list-tools .filter"); if (f) { f.focus(); f.setSelectionRange(pos, pos); } });
     const yarnPick = h("select", { id: "ls-yarn", "aria-label": "Yarn to move" }, h("option", { value: "*" }, "All yarns"), data.yarns_in_use.map(y => h("option", { value: y }, y))); yarnPick.value = data.yarns_in_use.includes(ui.yarn) ? ui.yarn : "*";
     const pctBox = h("input", { id: "ls-pct", type: "number", step: "1", min: "-50", max: "50", value: ui.pct, placeholder: "0", "aria-label": "Yarn price change, per cent", style: "width:84px" });
-    const apply = () => { ui.yarn = yarnPick.value; ui.pct = pctBox.value; load(); };
+    const apply = () => { ui.yarn = yarnPick.value; const v = Number(pctBox.value); if (pctBox.value !== "" && Math.abs(v) > 50) { toast("A yarn move is limited to 50% either way"); pctBox.value = String(Math.sign(v) * 50); } ui.pct = pctBox.value; load(); };
     yarnPick.addEventListener("change", apply); pctBox.addEventListener("change", apply);
     const costedRows = data.rows.filter(r => r.should_cost !== null && gapOf(r).rs !== null && gapOf(r).rs !== undefined);
-    const sumGap = costedRows.reduce((a, r) => a + gapOf(r).rs, 0), staked = costedRows.filter(r => stakeOf(r) !== null), sumStake = staked.reduce((a, r) => a + stakeOf(r), 0);
-    const tot = costedRows.length ? h("p", { class: "sub", style: "margin:10px 0 0" }, `${costedRows.length} rows carry a mill price${moving() ? " (with the yarn move applied)" : ""}: on average it is ${rs(Math.abs(sumGap / costedRows.length))} a metre ${sumGap >= 0 ? "above" : "below"} should-cost.`, staked.length ? h("b", {}, ` On the ${fmt(staked.reduce((a, r) => a + r.quantity, 0), 0)} m ordered, that is Rs ${fmt(Math.abs(sumStake), 0)} ${sumStake >= 0 ? "above" : "below"} should-cost.`) : null, " Plus means the mill is above should-cost. Red: above the usual range for that fabric type (Push); grey: inside it.") : null;
+    // the money in the sheet, kept apart by what to do: savings never net off what to push for, and rows the
+    // tool is unsure of are counted on their own
+    const withQty = costedRows.filter(r => stakeOf(r) !== null), metres = withQty.reduce((a, r) => a + r.quantity, 0);
+    const part = st => withQty.filter(r => rowStance(r) === st), sumOf = rs_ => rs_.reduce((a, r) => a + stakeOf(r), 0);
+    const tot = costedRows.length ? h("p", { class: "sub", style: "margin:10px 0 0" }, `${costedRows.length} rows carry a mill price${moving() ? " (with the yarn move applied)" : ""}.`,
+      metres ? [` On the ${fmt(metres, 0)} m ordered: `,
+        h("b", {}, `Push ${part("push").length}, Rs ${fmt(sumOf(part("push")), 0)} above should-cost`), "; ",
+        `in line ${part("fair").length}, Rs ${fmt(sumOf(part("fair")), 0)} net; `,
+        `below ${part("below").length}, Rs ${fmt(Math.abs(sumOf(part("below"))), 0)} under should-cost; `,
+        `ask for the break-up ${part("ask").length}, not counted because the tool is unsure of them.`] : null,
+      " Red: above the usual range for that fabric type (Push); grey: inside it. ", h("a", { href: "#pack" }, "The negotiation pack"), " puts this on one printable page.") : null;
     box.replaceChildren(
       h("div", { class: "list-tools" },
         h("div", { class: "chips", role: "group", "aria-label": "Rows to show" }, chip("all", "All"), chip("above", "Push"), chip("notcosted", "Not costed"), chip("sums", "Mill's sums off")),
@@ -1016,7 +1031,7 @@ PAGES.bulk = async (arg) => {
           h("a", { class: "btn small", href: "#pack", title: "One printable page for the sheet: ticked rows, or the whole list" }, "Negotiation pack"),
           h("button", { class: "btn small", type: "button", onclick: async () => download(await postJSON("/api/list/download", ui.pct !== "" && Number(ui.pct) ? { yarn_pct: { [ui.yarn]: Number(ui.pct) } } : {}), "RightPrice_fabric_list.xlsx") }, "Download list"))),
       data.rows.length ? h("div", { class: "table-wrap list-wrap", tabindex: "0", role: "region", "aria-label": "Fabric list" }, h("table", { class: "list" },
-        h("thead", {}, h("tr", {}, h("th", { class: "stick s0" }, all), h("th", { class: "stick s1" }, "Fab Code"), h("th", { class: "n rp stick s2" }, "Should-cost"), sim ? [h("th", { class: "n rp" }, "With yarn moved"), h("th", { class: "n rp" }, "Change")] : null, h("th", { class: "n rp" }, "Mill price"), h("th", { class: "n rp", title: "Plus: the mill is above should-cost" }, sim ? "Mill above should-cost, yarn moved" : "Mill above should-cost"), h("th", { class: "n rp", title: "Gap per metre times the order quantity" }, "At stake"), h("th", { class: "rp" }, "What to do"), h("th", { class: "rp" }, "Mill's sums"), h("th", { class: "rp" }, "Remarks"), cols.map(c => h("th", {}, c)))),
+        h("thead", {}, h("tr", {}, h("th", { class: "stick s0" }, all), h("th", { class: "stick s1" }, "Fab Code"), h("th", { class: "n rp stick s2" }, "Should-cost"), sim ? [h("th", { class: "n rp" }, "With yarn moved"), h("th", { class: "n rp" }, "Change")] : null, h("th", { class: "n rp" }, "Mill price"), h("th", { class: "n rp", title: "Plus: the mill is above should-cost" }, sim ? "Mill above should-cost, yarn moved" : "Mill above should-cost"), h("th", { class: "n rp", title: "Gap per metre times the order quantity" }, "At stake"), h("th", { class: "rp" }, "What to do"), h("th", { class: "rp" }, "Mill's sums"), h("th", { class: "rp" }, "Remarks"), cols.map(c => h("th", { class: "millcol" }, c)))),
         h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(9 + cols.length + (sim ? 2 : 0)) }, "No row matches."))))) : h("p", { class: "empty" }, "The list is empty. Upload a file above, or cost a fabric and press Add to list."),
       tot);
   };
