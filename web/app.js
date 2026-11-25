@@ -1063,7 +1063,7 @@ PAGES.bulk = async (arg) => {
    stake, the mill's own sums that are off, and the questions to ask. Printable on one A4 landscape page
    for a sheet of up to about twenty rows. */
 const plural = (n, w) => `${fmt(n, 0)} ${w}${n === 1 ? "" : "s"}`;
-const STANCE_ORDER = { push: 0, ask: 1, below: 2, fair: 3 };
+const STANCE_ORDER = { push: 0, ask: 1, check: 2, below: 3, fair: 4 };
 PAGES.pack = async () => {
   const ui = state.packUI = state.packUI || { scope: null };
   const lu = state.listUI, picked = lu && lu.picked && lu.picked.size ? [...lu.picked] : null;
@@ -1101,12 +1101,12 @@ function packView(p, move) {
     tile("Ordered", `${fmt(t.metres, 0)} m`, `${t.costed} rows costed${t.not_costed ? `, ${t.not_costed} not costed` : ""}${t.no_quantity ? `; ${t.no_quantity} without a quantity` : ""}`),
     tile("Mill's price against should-cost", `${diff >= 0 ? "+" : "−"}${R(diff)}`, `${R(t.at_mill_price)} quoted, ${R(t.at_should_cost)} at should-cost, on the rows with a quantity`),
     tile(`Push: ${plural(t.count.push, "row")}`, R(t.push_stake), t.count.push ? `above should-cost; ${R(t.push_above_range)} of it above the usual range` : "no row is above its usual range", t.count.push ? "push" : ""),
-    tile("Ask for the break-up", plural(t.count.ask, "row"), t.count.ask ? "the tool is unsure of these; no target is named" : "", t.count.ask ? "ask" : ""),
+    tile("Ask for the break-up", plural(t.count.ask, "row"), (t.count.ask ? "the tool is unsure of these; no target is named" : "") + (t.count.check ? `${t.count.ask ? ". " : ""}${plural(t.count.check, "quote")} more than 30% below should-cost to confirm first` : ""), t.count.ask || t.count.check ? "ask" : ""),
     tile("Mill's sums off", t.sums_money ? R(t.sums_money) : plural(t.sums_off, "row"), t.sums_off ? (t.sums_money ? `charged above what the sheet's own sums give, on ${plural(t.sums_off, "row")}` : "check them; none charges more than its own sums give") : "every row's sums add up", t.sums_off ? "sums" : ""),
     tile(`In line: ${t.count.fair} · below: ${t.count.below}`, t.savings ? R(t.savings) : "—", t.savings ? "below should-cost on the rows marked Below: a saving, if the specification holds" : "no row is below its usual range"));
   const byCode = Object.fromEntries(p.rows.map(r => [r.code, r]));
   const lead = p.lead.length ? h("div", { class: "pack-lead" }, h("b", {}, "Lead with: "), p.lead.map((c, i) => { const r = byCode[c]; return h("span", {}, `${i ? "; " : ""}${c}, ${R(r.at_stake)} on ${fmt(r.quantity, 0)} m (quote ${rs(r.quote)}, should-cost ${rs(r.should)}, usual range up to ${rs(r.upper)})`); }), ".") : h("div", { class: "pack-lead" }, h("b", {}, "No row to push on. "), "Every costed row is inside its usual range, below it, or on a fabric type the tool is unsure of.");
-  const tag = st => h("span", { class: "tag " + STANCE[st][0] }, { push: "Push", fair: "Fair", below: "Below", ask: "Ask break-up" }[st]);
+  const tag = st => h("span", { class: "tag " + STANCE[st][0] }, { push: "Push", fair: "Fair", below: "Below", ask: "Ask break-up", check: "Check quote" }[st]);
   const table = h("div", { class: "table-wrap pack-table" }, h("table", {},
     h("thead", {}, h("tr", {}, h("th", {}, "Fabric"), h("th", { class: "n" }, "Metres"), h("th", { class: "n" }, "Mill price"), h("th", { class: "n" }, "Should-cost"), h("th", { class: "n" }, "Mill above should-cost"), h("th", { class: "n" }, "At stake"), h("th", {}, "What to do"), h("th", {}, "Mill's sums"))),
     h("tbody", {}, rows.map(r => h("tr", {},
@@ -1122,7 +1122,7 @@ function packView(p, move) {
     h("div", {}, h("h2", {}, "Questions to ask"), qs.length ? h("ol", { class: "pack-q" }, qs.map(x => h("li", {}, x.q))) : h("p", { class: "sub" }, "None: every row is in line and its sums add up. Use the time on quantity terms, finish and delivery.")),
     h("div", {}, h("h2", {}, "The mill's sums that are off"), sums.length ? h("ul", { class: "pack-q" }, sums.map(r => h("li", {}, h("b", {}, r.code + ": "), r.sums.join("; ") + ".", r.own_gap ? ` By its own sums the price is ${rs(r.own_price)}, ${rs(Math.abs(r.own_gap))} a metre ${r.own_gap > 0 ? "less than" : "more than"} quoted.` : ""))) : h("p", { class: "sub" }, "Every row's sums add up."),
       p.not_costed.length ? [h("h2", { style: "margin-top:12px" }, "Not costed"), h("ul", { class: "pack-q" }, p.not_costed.map(r => h("li", {}, h("b", {}, r.code + ": "), r.why)))] : null));
-  const foot = h("p", { class: "sub pack-foot" }, "Push: the mill's price is above the usual range for that fabric type, where half of your past purchases of the type were priced against should-cost (at least 5% and at most 10% above). Fair: inside it. Below: under it; a saving only if the yarn, construction and finish are as costed. Ask break-up: the tool is unsure here (a fabric type it fits poorly, placeholder rates, or a quantity outside the band it is costed on), so no target is named. At stake: the gap per metre as printed times the metres ordered. Each row's full brief opens from the list.");
+  const foot = h("p", { class: "sub pack-foot" }, "Push: the mill's price is above the usual range for that fabric type, where half of your past purchases of the type were priced against should-cost (at least 5% and at most 10% above). Fair: inside it. Below: under it; a saving only if the yarn, construction and finish are as costed. Check quote: more than 30% below should-cost, so no saving is counted until the quote is confirmed. Ask break-up: the tool is unsure here (a fabric type it fits poorly, placeholder rates, or a quantity outside the band it is costed on), so no target is named. At stake: the gap per metre as printed times the metres ordered. Each row's full brief opens from the list.");
   return [head, tiles, lead, table, questions, foot];
 }
 function printPack() {

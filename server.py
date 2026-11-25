@@ -655,6 +655,9 @@ def _questions(r, b, stance, own_gap):
     elif stance == "ask":
         q.append(f"Send the break-up for {code} (yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish, "
                  f"margin) before a price is named. Why: {b['weak'][0]}.")
+    elif stance == "check":
+        q.append(f"Confirm the quote for {code}: Rs {r['quote']:,.2f} is {abs(r['gap_pct']):.0%} below should-cost. "
+                 "Is it per metre, for this construction and finish?")
     elif stance == "below":
         q.append(f"{code} is below the usual range: confirm the yarn, the construction and the finish are as specified.")
     for n in r["notes"]:
@@ -689,7 +692,7 @@ def pack(options: dict = Body(default={})):
         should = round(r["simulated"], 2) if moved else b["should"]
         gap = round(b["quote"] - should, 2)
         gap_pct = gap / should if should else 0.0
-        stance = _stance_for(b, gap_pct) if moved else b["stance"]
+        stance = "check" if b.get("implausible") else (_stance_for(b, gap_pct) if moved else b["stance"])
         upper = round(should * (1 + b["band"]["hi"]), 2)
         qty = r["quantity"]
         row = {"id": r["id"], "code": code, "description": desc, "supplier": r["supplier"], "quantity": qty,
@@ -715,7 +718,7 @@ def pack(options: dict = Body(default={})):
         "savings": -sum(r["at_stake"] for r in by("below") if r["at_stake"] is not None),
         "sums_off": len(sums_rows),
         "sums_money": sum(r.get("own_at_stake") or 0 for r in rows if r["sums"] and (r.get("own_at_stake") or 0) > 0),
-        "count": {st: len(by(st)) for st in ("push", "ask", "fair", "below")},
+        "count": {st: len(by(st)) for st in ("push", "ask", "check", "fair", "below")},
         "no_quantity": sum(1 for r in rows if r["quantity"] is None),
     }
     lead = sorted([r for r in by("push") if r["at_stake"]], key=lambda r: -r["at_stake"])[:3]
