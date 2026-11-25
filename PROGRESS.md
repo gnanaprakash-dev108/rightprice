@@ -212,7 +212,7 @@ gave, so adding the card's terms on top would count quantity twice.
 2. Whether stripes and solids are woven with an undyed weft: 560 fabrics.
 3. Dobby shaft counts and top beam: not in PLM. The yarn-dyed dobby weaving rate (Rs 0.45 against
    0.32 for twill) may already hold part of the shaft charge.
-4. Which mill the card is from, and the reading of its per-end and per-pick figures.
+4. Settled 25 Nov: the card is Arvind's, and per-end and per-pick are the price change for one end or pick.
 5. Whether a combination finish is the sum of its parts (six placeholder rows).
 6. 66 finishes still not recognised: Others 17, ETI Clat 14, ETI + Baby Skin 9, Stain Repellent 8.
 7. "Not applicable for 40s quality" is read as warp and weft both 40s single.
@@ -356,6 +356,42 @@ pair when the same costing was chosen on both sides; a typed count showed nowher
 changing the count system re-read "40" as 40 tex; and Compare's number columns were off-screen on a
 phone. Compare now also warns when the two costings are different fabrics, and shows the two quotes
 on their own rows.
+
+**Dashboard, fabric list and yarn what-if (25 Nov 2026):**
+
+- **The mill rate card is Arvind's, and the reading of it is confirmed.** The price sheet sent on
+  25 Nov ("AS Sweetan": Allen Solly orders with an Arvind reference) prices 40s yarn-dyed twill at a
+  base of Rs 164 for 122 x 76, plus Rs 0.60 for each extra end and Rs 0.90 for each extra pick. That
+  is the card's section 1, read as the price change for one end or pick. The sheet also shows no
+  volume discount on 40s quality at 2,255 to 3,244 m, as the card says.
+- **Bulk upload takes a mill's price sheet as it comes** (41 headings, `mill_sheet.py`), as well as
+  the RightPrice template. Each row is turned into the tool's choices and costed. On the six rows
+  sent, the mill's price is 4.8% to 7.0% above should-cost.
+- **One fabric list** replaces saved costings. It sits under Bulk upload, in the mill sheet's
+  headings, with should-cost, the mill's price, the gap, and a check that the mill's own sums add up
+  (base plus upcharges equals price; upcharge equals difference times the rate; quantity terms;
+  C2FO). Rows are ticked to open, compare (two) or remove; the header box selects every row shown.
+  "Add to list" on Cost a fabric adds one fabric; opening a row and pressing "Update in list" changes
+  it in place. Compare and "what has moved" now work from the list.
+- **NYD rows are not guessed.** They are listed with the reason and costed once opened and given a
+  route.
+- **Yarn what-if.** On Cost a fabric, two sliders move the warp and weft yarn rate and show the new
+  price. On the list, a yarn and a percentage re-cost every row. On the dashboard, the same for the
+  reference fabric and the list average. Nothing is saved and no rate changes. The cost view also
+  states the rupees per metre for each Rs 10 a kilo on warp and weft.
+- **Dashboard rebuilt from own data**: (1) price paid and should-cost by fabric type, (2) share of
+  each cost group by route, (3) cotton price by year 2022 to 2026, (4) nine questions to ask before a
+  negotiation, answered with the buyer's own figures, (5) supplier cost ratios and each supplier's
+  gap to should-cost. Saved-costing cards are gone.
+- **Not used:** the figures on the web page sent as a reference (a software vendor's article, in
+  dollars, unsourced: 100% cotton at $5.40 a metre, more than double the prices paid here). Its three
+  panel ideas and its question list were the pattern; the numbers are the buyer's own.
+- **Panel 3 is cotton only.** Yarn rates in the tool are of one date, so a fabric cost per metre for
+  earlier years cannot be drawn. Dating the yarn rates (next steps) would allow it.
+- **Left panel:** the name at the top no longer scrolls out of view in a short window.
+
+`PER_END`, `PER_PICK` and the C2FO factor in `mill_sheet.py` are the card's figures, used only to
+check a mill's sheet. They are not costing rates and are not in the rate master.
 
 **Read but not built: `inputs/Fabric Costing_Final.xlsx`** (the earlier prototype, sent again on
 24 Nov). Its rates are placeholders (most cells are 1 or 10), so only its logic is of use. What it

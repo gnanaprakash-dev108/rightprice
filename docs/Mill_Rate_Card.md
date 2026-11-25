@@ -1,13 +1,14 @@
 # Mill rate card
 
-Received 23 November 2026, pasted as text. Mill not yet confirmed ("Arvisilk" suggests Arvind).
+Received 23 November 2026, pasted as text. The mill is Arvind (confirmed 25 November 2026).
 All figures are rupees; the "$" signs in the original were cell formatting.
 
 Built into the tool on 24 November 2026 as optional upcharges (sections 2 to 7); see the end of this
 page for how each section is used. Section 1 is not used in the calculation.
 
-Unconfirmed, and assumed throughout: which mill the card is from is not known, and the per-end and
-per-pick figures are read as the price change for one extra end or pick.
+Confirmed on 25 November 2026 by a price sheet for Allen Solly orders carrying an Arvind reference:
+the card is Arvind's, and the per-end and per-pick figures are the price change for one extra end or
+pick over a standard construction (there: base Rs 164 at 122 x 76 for 40s yarn-dyed twill).
 
 ## 1. End and pick
 
