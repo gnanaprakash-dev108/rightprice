@@ -48,21 +48,50 @@ prices, Cotton prices, Bring in prices, Rate tables, Mill rate card, Settings, P
 7. After building screens, run a cold review ("elephant and goldfish"): a fresh reviewer that has
    not seen the code uses the running app and reports what would trip up or mislead a buyer. Fix
    what it finds before, or straight after, merging. Six rounds so far; each found real problems.
+   The sixth round's findings are not yet fixed.
 8. The live server keeps its own rate master in `/home/rightprice-data`. New tables reach it only
    through `masters.load()` (`_add_missing_tables`), which saves a dated copy first.
 9. Report plainly: what was checked, what was not, and anything that did not improve.
 
-### In flight when this was written
+### Sixth cold review: the negotiation brief (findings in, NOT yet fixed)
 
-**A sixth cold review, of the negotiation brief, was started and its findings had not come back.**
-The brief was added after the fifth review and has been tested by script only. Its arithmetic was
-checked once (costing the example at the stated yarn rate, and at the stated weaving rate, each
-returned the quote). Run the review again from a fresh session: start the server locally with
-`RIGHTPRICE_DATA` pointing at a scratch folder, load a mill sheet into the list, and have the
-reviewer test, for several quotes, whether the yarn rate, weaving rate and margin in "For the quote
-to be right" each reproduce the quote; the boundaries at 5%; different warp and weft yarns; the
-"ask for the break-up" rule; agreement between the list and the brief; wording a mill could turn
-against the buyer; and the printed page.
+The review ran on the merged version on 25 Nov. Its findings are below, most serious first. None is
+fixed. The brief is live with these faults, so fix them before anything else.
+
+1. **"Within the tool's 5% margin of error" is not supported.** The dashboard shows the tool within
+   10% for 54% of fabrics, and for the example's own type (yarn-dyed dobby) purchases average 6.1%
+   above should-cost. A normal quote for that type gets "Push". The band and the "open at
+   should-cost" advice should come from the fit of that fabric type, not a fixed 5%.
+2. **A second yarn left out of the should-cost is not mentioned in the brief.** A row with warp
+   "40+2/80 (98/2)" is costed on 40s only; the list says so in Remarks, but the opened brief says
+   "Push, open at Rs 174.80" with no caveat. Carry the row's notes into the brief.
+3. **In "ask for the break-up", placeholder rates are still quoted as fact** ("weaving is Rs 0.32 a
+   pick, not Rs 0.18" where 0.18 is the placeholder). Leave out, or mark, any "not X" that is a placeholder.
+4. **Quotes below should-cost read badly.** Quote 0 or 60 gives "accept, or check the specification";
+   a needed margin can print as negative ("-4%, not 7%"); "At stake" shows no direction when the
+   quote is below. Say plainly it is a saving, never say "accept", and ignore a quote of zero.
+5. **One placeholder finish blocks the whole target.** Normal to F- Normal Soft moves the cost 0.7%
+   yet the brief says "Do not open with a number". Weigh a placeholder by its share of the price.
+6. **"At stake" is not gap times quantity as printed** (Rs 68,005 beside "Rs 13.60 a metre" on
+   5,000 m; "Rs 5 ... Rs 0.00 a metre"). Round the gap first, or show the exact gap. Refuse a
+   negative quantity.
+7. **At exactly 5% over** the brief says "Push" and "the extra Rs 0.00".
+8. **Order quantity ignores the quantity band chosen in step 6** (500 m typed with "3,000 m and
+   above" selected: Push; with "Below 1,000 m": Fair). Warn when the two disagree, or set the band
+   from the quantity.
+9. **Rounded figures miss the quote by up to Rs 0.60** (weaving shown to two decimals, margin to a
+   whole per cent). Show one more decimal, or say "about".
+10. **Fit figures in the brief differ from the dashboard** for the same type (the brief uses the
+    middle fabric, the dashboard an average over metres), and "middle gap" is unexplained.
+
+Wording to change: "the yarn costs Rs 400 a kilo" should say warp and weft both; "the extra Rs 4.53"
+sits beside figures that explain the whole gap; after a yarn move on the list, the opened brief
+still shows the stance before the move.
+
+What the review confirmed: the yarn figure reproduces the quote, including with different warp and
+weft yarns; the weaving figure reproduces it within rounding; "ask for the break-up" never names a
+target; the list and the brief agree on gap, stake and stance; the brief prints complete on page one
+and nothing is cut off on a phone.
 
 ### Waiting on the owner
 
@@ -78,7 +107,7 @@ against the buyer; and the printed page.
 
 ### Next to build, in the owner's order unless told otherwise
 
-1. Fix what the sixth cold review finds in the negotiation brief.
+1. Fix the ten findings of the sixth cold review of the negotiation brief (listed above), then have a fresh reviewer confirm them.
 2. A one-page negotiation pack for a whole mill sheet: every row with its stance, the money at
    stake, the sums that are off, and the questions to ask, printable.
 3. Mill sheet rows in materials other than 100% cotton; base price and per-end, per-pick figures
