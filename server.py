@@ -605,7 +605,8 @@ def list_view(options: dict = Body(default={})):
                 item["at_stake"] = None if item["brief"] is None else item["brief"]["at_stake"]
                 if sim is not None:
                     moved = masters.cost(inputs, sim)
-                    item.update(simulated=moved["total_per_m"], sim_gap=moved["gap"], sim_gap_pct=moved["gap_pct"])
+                    item.update(simulated=moved["total_per_m"], sim_gap=moved["gap"], sim_gap_pct=moved["gap_pct"],
+                                sim_brief=brief(moved, sim, qty, item["notes"], inputs))
             except Exception as e:
                 item["problems"] = [str(e)]
         out.append(item)
@@ -625,22 +626,27 @@ def list_remove(payload: dict = Body(...)):
 
 
 # ------------------------------------------------------------------ negotiation pack
-def _stance_for(b, gap_pct):
-    """The stance of a row once its gap has moved (a yarn move): the same range, the new gap."""
-    if b["stance"] == "ask":
-        return "ask"
-    return "push" if gap_pct > b["band"]["hi"] + 1e-9 else ("below" if gap_pct < b["band"]["lo"] - 1e-9 else "fair")
+def _volume_question(r, m):
+    """The card gives a volume discount from 2,000 m (not for 40s quality). Ask when the sheet gives none."""
+    qty, mill, inp = r["quantity"], r["mill"], r["inputs"]
+    if not qty or qty < 2000 or not r["from_mill"] or (mill_sheet._num(mill.get("Discoun>2000 mts")) or 0) > 0:
+        return None
+    counts = m["Yarn_Rates"].set_index("Yarn key")["Count"].astype(str).str.strip().str.lower()
+    if all(counts.get(str(inp.get(f"{s} yarn") or "").strip()) == "40s" for s in ("Warp", "Weft")):
+        return None             # the card: no volume discount on 40s quality
+    band = next((name for lo, hi, name in mill_sheet.QUANTITY_BANDS if lo <= qty < hi), None)
+    qt = m["Quantity_Terms"].set_index("Quantity band")
+    disc = float(qt.loc[band, "Volume discount Rs per metre"]) if band in qt.index else 0.0
+    if not disc:
+        return None
+    return (f"{r['code']}: {qty:,.0f} m and no volume discount on the sheet. Your own rate card gives Rs {disc:g} a metre "
+            f"at {band}; why not here?")
 
 
-def _questions(r, b, stance, own_gap):
-    """What to ask the mill about one row, most useful first."""
-    q = []
-    code = r["mill"].get("Fab Code") or "this fabric"
-    if own_gap is not None and abs(own_gap) >= 0.01:
-        q.append(f"Your own sums for {code} give Rs {r['own_price']:,.2f}, not Rs {r['quote']:,.2f}: "
-                 + ("which is right?" if own_gap > 0 else "confirm the lower figure stands."))
-    elif r["sums"] and own_gap is not None:
-        q.append(f"Correct the sheet for {code}: {'; '.join(r['sums'])}. The ex-mill price itself agrees with the sums.")
+def _questions(r, b, m):
+    """What to ask the mill about one row, most useful first. b is the brief the row's figures come from."""
+    q, code, own_gap = [], r["code"], r["own_gap"] if r["sums"] else None
+    stance = r["stance"]
     if stance == "push":
         w = b["would_need"]
         alts = []
@@ -650,8 +656,8 @@ def _questions(r, b, stance, own_gap):
             alts.append(f"weaving at about Rs {w['weaving']['rate']:.3f} a pick (master Rs {w['weaving']['now']:.3f})")
         if not w["margin"]["placeholder"]:
             alts.append(f"a margin of about {w['margin']['rate']:.1%} (master {w['margin']['now']:.1%})")
-        q.append(f"{code} is Rs {r['above_band']:,.2f} a metre above the top of the usual range (Rs {r['upper']:,.2f}). "
-                 "Show where it comes from" + (": " + "; or ".join(alts) + "?" if alts else "."))
+        q.append(f"{code} is Rs {r['gap']:,.2f} a metre above should-cost (Rs {r['should']:,.2f}), Rs {r['above_band']:,.2f} of it above "
+                 f"the usual range. Which explains the whole Rs {r['gap']:,.2f}" + (": " + "; or ".join(alts) + "?" if alts else "?"))
     elif stance == "ask":
         q.append(f"Send the break-up for {code} (yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish, "
                  f"margin) before a price is named. Why: {b['weak'][0]}.")
@@ -660,6 +666,16 @@ def _questions(r, b, stance, own_gap):
                  "Is it per metre, for this construction and finish?")
     elif stance == "below":
         q.append(f"{code} is below the usual range: confirm the yarn, the construction and the finish are as specified.")
+    if own_gap is not None and own_gap >= 0.01:
+        q.append(f"{code}: your own sums give Rs {r['own_price']:,.2f}, not Rs {r['quote']:,.2f}. Bring the price to Rs {r['own_price']:,.2f}.")
+    elif own_gap is not None and own_gap <= -0.01:
+        q.append(f"{code}: hold Rs {r['quote']:,.2f} as the ceiling (the sheet's own build-up comes to Rs {r['own_price']:,.2f}, "
+                 "more than the quote). Ask only for the sheet to be corrected so it shows how the quoted price is made up.")
+    elif r["sums"] and own_gap is not None:
+        q.append(f"Correct the sheet for {code}: {'; '.join(r['sums'])}. The ex-mill price itself agrees with the sums.")
+    vq = _volume_question(r, m)
+    if vq:
+        q.append(vq)
     for n in r["notes"]:
         if "second yarn" in n:
             q.append(f"{code}: name the second yarn in {n.split(chr(39))[1] if chr(39) in n else 'the warp or weft'} and its rate.")
@@ -668,11 +684,18 @@ def _questions(r, b, stance, own_gap):
     return q
 
 
+def _ordered(r):
+    q = mill_sheet._num(r["mill"].get("Total order qnty")) if r["mill"] else None
+    return q if q and q > 0 else (r["quantity"] or 0)
+
+
 @app.post("/api/pack")
 def pack(options: dict = Body(default={})):
     """The negotiation pack for a whole mill sheet (or the rows asked for): every row with its stance, the
     money at stake, the mill's sums that are off and the questions to ask, plus the sheet's totals.
-    options: ids (the rows; default every row), yarn_pct (a yarn move, as on the list)."""
+    options: ids (the rows; default every row), yarn_pct (a yarn move, as on the list).
+    With a yarn move, every figure of a row, its questions included, comes from the brief on the moved costs."""
+    m = get_masters()
     v = list_view({"yarn_pct": options.get("yarn_pct")} if options.get("yarn_pct") else {})
     ids = {str(i) for i in (options.get("ids") or [])}
     chosen = [r for r in v["rows"] if not ids or r["id"] in ids]
@@ -683,54 +706,55 @@ def pack(options: dict = Body(default={})):
         code = r["mill"].get("Fab Code") or (r["inputs"] or {}).get("Fabric code") or "(no code)"
         desc = r["description"] or " ".join(str(r["mill"].get(c)) for c in ("Weave", "Variety") if r["mill"].get(c))
         own_price, own_gap = mill_sheet.own_sums(r["mill"]) if r["from_mill"] else (None, None)
-        b = r["brief"]
+        b = r.get("sim_brief") or r["brief"]
         if r["problems"] or b is None:
             not_costed.append({"code": code, "description": desc, "why": "; ".join(r["problems"]) or "no mill price on this row",
-                               "sums": r["sums"] or [], "own_price": own_price, "own_gap": own_gap})
+                               "sums": r["sums"] or [], "own_price": own_price, "own_gap": own_gap, "ordered": _ordered(r)})
             continue
-        moved = r["simulated"] is not None
-        should = round(r["simulated"], 2) if moved else b["should"]
-        gap = round(b["quote"] - should, 2)
-        gap_pct = gap / should if should else 0.0
-        stance = "check" if b.get("implausible") else (_stance_for(b, gap_pct) if moved else b["stance"])
-        upper = round(should * (1 + b["band"]["hi"]), 2)
         qty = r["quantity"]
+        stance = "check" if b["implausible"] else b["stance"]
         row = {"id": r["id"], "code": code, "description": desc, "supplier": r["supplier"], "quantity": qty,
-               "quote": b["quote"], "should": should, "gap": gap, "gap_pct": gap_pct, "stance": stance,
-               "upper": upper, "above_band": round(b["quote"] - upper, 2),
-               "at_stake": None if qty is None else round(gap * qty), "weak": b["weak"], "caveats": b["caveats"],
+               "quote": b["quote"], "should": b["should"], "gap": b["gap"], "gap_pct": b["gap_pct"], "stance": stance,
+               "upper": b["settle_up_to"], "open_at": b["open_at"], "above_band": b["above_band"],
+               "at_stake": b["at_stake"], "weak": b["weak"], "caveats": b["caveats"],
                "sums": r["sums"] or [], "own_price": own_price, "own_gap": own_gap,
                "own_at_stake": None if own_gap is None or qty is None else round(own_gap * qty),
-               "notes": r["notes"], "mill": r["mill"]}
-        row["questions"] = _questions(row, b, stance, own_gap if row["sums"] else None)
+               "notes": r["notes"], "mill": r["mill"], "inputs": r["inputs"], "from_mill": r["from_mill"]}
+        row["above_range_money"] = round(row["above_band"] * qty) if stance == "push" and qty else 0
+        row["questions"] = _questions(row, b, m)
+        for k in ("mill", "inputs", "from_mill"):
+            row.pop(k)
         rows.append(row)
     staked = [r for r in rows if r["at_stake"] is not None]
     by = lambda st: [r for r in rows if r["stance"] == st]
+    stake = lambda rs: sum(r["at_stake"] for r in rs if r["at_stake"] is not None)
     sums_rows = [r for r in rows + not_costed if r["sums"]]
     totals = {
-        "rows": len(chosen), "costed": len(rows), "not_costed": len(not_costed),
+        "rows": len(chosen), "of": len(v["rows"]), "costed": len(rows), "not_costed": len(not_costed),
         "metres": sum(r["quantity"] or 0 for r in rows),
-        "at_mill_price": round(sum(r["quote"] * r["quantity"] for r in staked)),
-        "at_should_cost": round(sum(r["should"] * r["quantity"] for r in staked)),
-        "push_stake": sum(r["at_stake"] for r in by("push") if r["at_stake"] is not None),
-        "push_above_range": round(sum(r["above_band"] * r["quantity"] for r in by("push") if r["quantity"])),
-        "ask_stake": sum(r["at_stake"] for r in by("ask") if r["at_stake"] is not None and r["at_stake"] > 0),
-        "savings": -sum(r["at_stake"] for r in by("below") if r["at_stake"] is not None),
+        "ordered": sum(r["quantity"] or 0 for r in rows) + sum(r["ordered"] or 0 for r in not_costed),
+        "counted_stake": stake(by("push")) + stake(by("fair")),
+        "push_stake": stake(by("push")), "fair_stake": stake(by("fair")),
+        "push_above_range": sum(r["above_range_money"] for r in by("push")),
+        "flagged_stake": stake(by("ask")) + stake(by("check")),
+        "savings": -stake(by("below")),
         "sums_off": len(sums_rows),
         "sums_money": sum(r.get("own_at_stake") or 0 for r in rows if r["sums"] and (r.get("own_at_stake") or 0) > 0),
         "count": {st: len(by(st)) for st in ("push", "ask", "check", "fair", "below")},
         "no_quantity": sum(1 for r in rows if r["quantity"] is None),
     }
-    lead = sorted([r for r in by("push") if r["at_stake"]], key=lambda r: -r["at_stake"])[:3]
+    # lead with the money above the usual range: what the mill has to justify, not the gap to should-cost
+    lead = sorted([r for r in by("push") if r["above_range_money"] > 0], key=lambda r: -r["above_range_money"])[:3]
     suppliers = sorted({r["supplier"] for r in chosen if r["supplier"]})
-    sheets = {}         # the list's rows by supplier and the day they were added: one uploaded sheet each, as a rule
+    sheets = {}         # one upload each: rows of one upload share the second their ids were made in
     for r in v["rows"]:
-        key = f"{r['supplier'] or 'No supplier'} \u00b7 added {str(r['added'] or '')[:10]}"
-        sheets.setdefault(key, []).append(r["id"])
+        when = str(r["id"] or "")[:14]
+        label = f"{r['supplier'] or 'No supplier'} \u00b7 " + (f"uploaded {when[6:8]}/{when[4:6]} {when[8:10]}:{when[10:12]}:{when[12:14]}" if len(when) == 14 else "added")
+        sheets.setdefault((label, when), []).append(r["id"])
     return {"rows": rows, "not_costed": not_costed, "totals": totals, "lead": [r["code"] for r in lead],
-            "sheets": [{"label": k, "ids": i} for k, i in sheets.items()],
+            "sheets": [{"label": k[0], "ids": i} for k, i in sheets.items()],
             "suppliers": suppliers, "added": sorted({str(r["added"])[:10] for r in chosen if r["added"]}),
-            "moved": v["rows"] and any(r["simulated"] is not None for r in v["rows"]),
+            "moved": bool(v["rows"]) and any(r["simulated"] is not None for r in v["rows"]),
             "yarn_pct": options.get("yarn_pct") or None}
 
 
