@@ -42,6 +42,7 @@ full-screen view.
 |---|---|
 | Dashboard | Yarn price what-if; price paid against should-cost by fabric type; share of each cost group by route; cotton price by year; questions to ask before a negotiation; supplier cost ratios. All from the buyer's own data |
 | Cost a fabric | Numbered steps on the left (fabric content, route, yarn, dyeing, construction, finish), each deciding what the next asks; live cost on the right; chart switchable between bars, waterfall, pie, treemap and line, by cost group or every sub-cost |
+| Negotiation pack | One printable page for a whole mill sheet (or the rows ticked on the list): totals, the rows to lead with, every row with its stance and money at stake, the mill's sums that are off and what its own sums give, the questions to ask, and the rows not costed |
 | Compare | Two costings side by side on today's rates: every group and sub-cost, the difference, and the choices that differ |
 | Bulk upload and list | Upload a mill's price sheet as it comes, or the RightPrice template. One list of every fabric costed, in the mill sheet's headings, with should-cost, the gap and a check of the mill's sums; tick rows to open, compare or remove; move a yarn price across the whole list |
 | Yarn prices | Yarn master and market reference, both editable; master against market |

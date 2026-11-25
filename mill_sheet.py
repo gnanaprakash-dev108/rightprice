@@ -227,6 +227,29 @@ def check_sums(row):
     return off
 
 
+def own_sums(row):
+    """The ex-mill price the mill's own sheet gives when its sums are done again: base price, plus the
+    differences in ends and picks at the card's rates, plus the other upcharges, plus or minus the
+    quantity terms. (price by the sums, rupees per metre the stated ex-mill price is above it), or
+    (None, None) when the row has no base price or ex-mill price."""
+    n = lambda c: _num(row.get(c))
+    z = lambda c: n(c) or 0.0
+    stated = n("Ex mill price") if n("Ex mill price") is not None else n("Total price with qnty disc/upcharge")
+    if n("Base Price") is None or stated is None:
+        return None, None
+    d_epi = n("Diff EPI") if n("Diff EPI") is not None else (z("Actual EPI") - z("Std EPI") if n("Std EPI") is not None else None)
+    d_ppi = n("Diff PPI") if n("Diff PPI") is not None else (z("Actual PPI") - z("Std PPI") if n("Std PPI") is not None else None)
+    epi_u = z("EPI Upch") if d_epi is None else d_epi * PER_END
+    if d_ppi is None:
+        ppi_u = z("PPI Upch")
+    else:       # the card charges Rs 1.00 a pick above 90 picks; take whichever rate the sheet is nearer to
+        ppi_u = min((d_ppi * r for r in (PER_PICK, PER_PICK_ABOVE_90)), key=lambda v: abs(v - z("PPI Upch")))
+    price = z("Base Price") + epi_u + ppi_u + z("Finish Upch") + z("Dobby Upch") + z("Upcharge/Print/Mcount") + z("Double beam")
+    price += z("Upcharge for less qnty") - z("Discoun>2000 mts")
+    price = round(price, 2)
+    return price, round(stated - price, 2)
+
+
 def from_choices(sel):
     """A fabric costed on screen, shown under the mill's headings as far as the choices go."""
     route = sel.get("Route")

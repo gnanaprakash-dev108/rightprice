@@ -111,6 +111,29 @@ def main():
         t3 = next(r for r in lst["rows"] if r["id"] == fixed)
         check("Row updated in place keeps its mill columns", len(lst["rows"]) == 5 and t3["should_cost"] is not None and t3["mill"]["Base Price"] == 164)
         check("List downloads", c.post("/api/list/download", json={}).content[:2] == b"PK")
+        pk = c.post("/api/pack", json={}).json()
+        pr = {r["code"]: r for r in pk["rows"]}
+        check("Pack: every row, costed or not, with totals", pk["totals"]["rows"] == 5 and len(pk["rows"]) + len(pk["not_costed"]) == 5
+              and sum(pk["totals"]["count"].values()) == len(pk["rows"]))
+        # T-2: the Price cell is Rs 3 out, but the ex-mill price is what the sums give, so nothing is overcharged
+        check("Pack: a sum that is off but charges nothing extra", pr["T-2"]["sums"] and pr["T-2"]["own_price"] == 185.0
+              and pr["T-2"]["own_gap"] == 0.0 and pk["totals"]["sums_off"] == 1 and pk["totals"]["sums_money"] == 0)
+        over = dict(base_row, **{"Ex mill price": 188, "Total price with qnty disc/upcharge": 188, "C2FO @2.84%": round(188 * 1.0284, 3)})
+        check("Pack: an ex-mill price above the mill's own sums, and what it is worth",
+              mill_sheet.own_sums(over) == (185.0, 3.0))
+        check("Pack: at stake as in the list and the brief", all(r["at_stake"] == round(r["gap"] * r["quantity"]) for r in pk["rows"] if r["quantity"]))
+        check("Pack: different fabrics on one mill reference are not taken for duplicates", pk["totals"]["duplicates"] == 0)
+        check("Pack: rows can be chosen by the upload they came in", any("mill.xlsx" in x["label"] for x in pk["sheets"]))
+        check("Pack: the second yarn is a question", any("second yarn" in q for q in pr["T-4"]["questions"]))
+        one = c.post("/api/pack", json={"ids": [pr["T-1"]["id"]]}).json()
+        check("Pack: only the rows asked for", one["totals"]["rows"] == 1 and one["rows"][0]["code"] == "T-1")
+        mv = c.post("/api/pack", json={"yarn_pct": {"Cotton 40S": 5}}).json()
+        t1 = next(r for r in mv["rows"] if r["code"] == "T-1")
+        check("Pack: with a yarn move the row and its figures come from the moved brief", t1["should"] == round(t1["quote"] - t1["gap"], 2)
+              and all("405" not in q for q in t1["questions"]))
+        check("Pack: the headline counts Push and in-line rows only",
+              pk["totals"]["counted_stake"] == pk["totals"]["push_stake"] + pk["totals"]["fair_stake"])
+        check("Pack: a yarn move re-costs it", next(r for r in mv["rows"] if r["code"] == "T-1")["should"] > pr["T-1"]["should"] + 4)
         gone = c.post("/api/list/remove", json={"ids": [r["id"] for r in lst["rows"]]}).json()
         check("Select all and remove", gone["removed"] == 5 and c.post("/api/list", json={}).json()["rows"] == [])
         tpl2 = c.post("/api/list/upload", files={"file": ("t.xlsx", io.BytesIO(c.get("/api/template").content))}).json()
