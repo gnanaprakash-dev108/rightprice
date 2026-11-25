@@ -25,4 +25,4 @@ jobs:
       - name: Server gives the engine's numbers
         run: python check_server.py
       - name: Front end script parses
-        run: node --check web/app.js
+        run: node --check web/app.js && node --check web/rightcost.js

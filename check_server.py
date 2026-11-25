@@ -209,6 +209,19 @@ def main():
         nb = c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Quoted price (Rs/m)": 194, "_notes": ["the second yarn is not in the should-cost"]})).json()
         check("Brief: a list row's notes are carried into it", any("second yarn" in x for x in nb["brief"]["caveats"]) and abs(nb["total_per_m"] - 181.40) < 0.01)
 
+        # Right cost: every costing in one list
+        rc = c.get("/api/costs").json()
+        po = [r for r in rc["rows"] if r["source"] == "Purchase orders"]
+        check("Right cost: the purchase-order costings are listed with their choices", len(po) >= 1600 and all(r["choices"].get("Route") for r in po))
+        r0 = po[0]
+        check("Right cost: a listed costing reopens at the same should-cost", abs(c.post("/api/cost", json=r0["choices"]).json()["total_per_m"] - r0["should"]) < 0.02)
+        check("Right cost: the page and its files are served", c.get("/rightcost").status_code == 200 and "rightcost.js?v=" in c.get("/rightcost").text
+              and c.get("/rightcost.js").status_code == 200)
+        check("Right cost: downloads", c.post("/api/costs/download", json={"source": "Purchase orders"}).content[:2] == b"PK")
+        for css in ("web/app.css", "web/rightcost.css"):
+            txt = open(css, encoding="utf8").read()
+            check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
+
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
         t = c.post("/api/intake/file", files={"file": ("list.csv", io.BytesIO(csv))}).json()

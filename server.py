@@ -734,6 +734,145 @@ def pack(options: dict = Body(default={})):
             "yarn_pct": options.get("yarn_pct") or None}
 
 
+# ------------------------------------------------------------------ Right cost: every costing in one list
+def _pilot_choices(r, patterns, contents):
+    """The choices behind one purchase-order costing, so it can be opened in Cost a fabric."""
+    sel = {"Fabric code": r["Fabric code"], "Description": r["Description"], "Supplier": r["Supplier"], "Content": contents[0],
+           "Route": r["Route"], "Weave": r["Weave"], "Finish": r["Finish"], "Warp yarn": r["Warp yarn"], "Weft yarn": r["Weft yarn"],
+           "EPI": r["EPI"], "PPI": r["PPI"], "Finished width (in)": r["Finished width (in)"], "Order size": r["Order size"],
+           "Rate card quantity": r["Rate card quantity"], "Quoted price (Rs/m)": r["PO price Rs/m"], "Order quantity (m)": r["PO metres"],
+           "Pattern": r["PLM pattern"] if r["PLM pattern"] in patterns else "Solid"}
+    if r["Route"] == "Yarn Dyed":
+        sel.update({"Warp yarn dyeing": "Medium", "Weft yarn dyeing": "Medium", "Weft (yarn dyed)": r["Weft (yarn dyed)"] or "Dyed"})
+    if r["Route"] == "Piece Dyed":
+        sel["Piece shade"] = "Medium"
+    if r["Print method"]:
+        sel["Print method"] = r["Print method"]
+    return {k: v for k, v in sel.items() if v not in (None, "")}
+
+
+_briefs = {"key": None, "data": None, "running": False}
+
+
+def _pilot_briefs(rows, key):
+    """The negotiation brief's verdict for every purchase-order costing, on today's rates. About 12 ms a
+    fabric, so it runs once in the background and is kept until the rate master changes."""
+    import threading
+
+    def work():
+        try:
+            m, out = get_masters(), {}
+            for r in rows:
+                try:
+                    res = masters.cost(r["choices"], m)
+                    b = brief(res, m, r["metres"], (), r["choices"])
+                    out[r["code"]] = None if b is None else {"stance": b["stance"], "implausible": b["implausible"],
+                                                            "lo": b["band"]["lo"] * 100, "hi": b["band"]["hi"] * 100, "weak": b["weak"]}
+                except Exception as e:      # a costing that no longer works on today's rates
+                    out[r["code"]] = {"stance": "error", "weak": [str(e)]}
+            _briefs.update(key=key, data=out)
+        finally:
+            _briefs["running"] = False
+
+    if _briefs["key"] == key:
+        return _briefs["data"]
+    if not _briefs["running"]:
+        _briefs["running"] = True
+        threading.Thread(target=work, daemon=True).start()
+    return None
+
+
+STANCE_BAND = {"push": "Above range", "fair": "In range", "below": "Below range", "ask": "Tool unsure", "error": "Not costed"}
+
+
+@app.get("/api/costs")
+def costs():
+    """Right cost: every purchase-order fabric costed in the pilot (1,696), plus the rows of the fabric list,
+    each with what the list page shows and the choices to open it in Cost a fabric. Read-only."""
+    m = get_masters()
+    L = masters.lists(m)
+    _warm_pilot()
+    ins = _cache.get(PILOT + "#insights")
+    cats = {(c["route"], c["weave"]): c for c in (ins[1]["categories"] if ins and ins[1] else [])}
+    out = []
+    if os.path.exists(PILOT):
+        def load():
+            f = pd.read_excel(PILOT, sheet_name="Fabrics")
+            f = f.astype(object).where(pd.notna(f), None)
+            return f.to_dict("records")
+        for r in cached(PILOT + "#fabrics", load):
+            gap = r["PO above should-cost %"]
+            cat = cats.get((r["Route"], r["Weave group"]))
+            hi = BAND_MIN if cat is None else min(BAND_MAX, max(BAND_MIN, cat["p75"]))
+            lo = -BAND_MIN if cat is None else max(-BAND_MAX, min(-BAND_MIN, cat["p25"]))
+            band = None             # set below from the brief, once it has been worked out
+            out.append({
+                "source": "Purchase orders", "code": r["Fabric code"], "description": r["Description"],
+                "supplier": re.sub(r"^\d+\s+", "", str(r["Supplier"] or "")).title(), "route": r["Route"], "weave": r["Weave"],
+                "weave_group": r["Weave group"], "finish": r["Finish"], "pattern": r["PLM pattern"], "warp": r["Warp yarn"], "weft": r["Weft yarn"],
+                "epi": r["EPI"], "ppi": r["PPI"], "width": r["Finished width (in)"], "gsm": r["GSM"],
+                "should": r["Should-cost Rs/m"], "per_kg": r["Should-cost Rs/kg"], "price": r["PO price Rs/m"],
+                "gap": r["PO minus should-cost Rs/m"], "gap_pct": gap, "metres": r["PO metres"], "po_lines": r["PO lines"],
+                "excess": r["Excess Rs"], "order_size": r["Order size"], "qty_band": r["Rate card quantity"],
+                "placeholders": r["Placeholder rates used"], "held_back": bool(r["Held back"]), "band": band,
+                "range": [lo, hi], "buckets": {b: r.get(f"{b} Rs/m") for b in BUCKETS},
+                "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS))})
+    mtime = os.path.getmtime(masters.MASTER_PATH) if hasattr(masters, "MASTER_PATH") and os.path.exists(masters.MASTER_PATH) else None
+    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (mtime, len(out), bool(cats))) if out else {}
+    for r in out:
+        v = (verdicts or {}).get(r["code"])
+        if v:
+            r["band"] = "Check quote" if v.get("implausible") else STANCE_BAND[v["stance"]]
+            r["why_unsure"] = v["weak"]
+            if "lo" in v:
+                r["range"] = [v["lo"], v["hi"]]
+        elif verdicts is None:
+            r["band"] = "Working out"
+    for i in list_view({})["rows"]:
+        b, inp = i["brief"], i["inputs"] or {}
+        st = None if b is None else ("Check quote" if b["implausible"] else STANCE_BAND[b["stance"]])
+        out.append({
+            "source": "Fabric list", "id": i["id"], "code": i["mill"].get("Fab Code") or inp.get("Fabric code") or "(no code)",
+            "description": i["description"] or " ".join(str(i["mill"].get(c)) for c in ("Weave", "Variety") if i["mill"].get(c)),
+            "supplier": i["supplier"] or "", "route": inp.get("Route"), "weave": inp.get("Weave"),
+            "weave_group": m["Weaves"].set_index("Weave")["Weave group"].get(inp.get("Weave")) if inp.get("Weave") else None,
+            "finish": inp.get("Finish"), "pattern": inp.get("Pattern"), "warp": inp.get("Warp yarn"), "weft": inp.get("Weft yarn"),
+            "epi": inp.get("EPI"), "ppi": inp.get("PPI"), "width": inp.get("Finished width (in)"), "gsm": i.get("gsm"),
+            "should": i["should_cost"], "per_kg": i.get("per_kg"), "price": inp.get("Quoted price (Rs/m)"),
+            "gap": i["gap"], "gap_pct": None if i["gap_pct"] is None else i["gap_pct"] * 100, "metres": i["quantity"], "po_lines": None,
+            "excess": i["at_stake"], "order_size": inp.get("Order size"), "qty_band": inp.get("Rate card quantity"),
+            "placeholders": ", ".join(i["placeholders"]) or None, "held_back": None, "band": st or ("Not costed" if i["problems"] else "No price"),
+            "range": None if b is None else [b["band"]["lo"] * 100, b["band"]["hi"] * 100], "buckets": None,
+            "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"]})
+    return {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
+                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
+
+
+@app.post("/api/costs/download")
+def costs_download(payload: dict = Body(default={})):
+    """The Right cost rows asked for (codes), or all of one source, as Excel."""
+    rows = costs()["rows"]
+    src, keys = payload.get("source"), set(payload.get("keys") or [])
+    pick = [r for r in rows if (not src or r["source"] == src) and (not keys or f"{r['source']}|{r.get('id') or r['code']}" in keys)]
+    cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("route", "Route"),
+            ("weave", "Weave"), ("finish", "Finish"), ("warp", "Warp yarn"), ("weft", "Weft yarn"), ("epi", "EPI"), ("ppi", "PPI"),
+            ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid or quoted Rs/m"),
+            ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"), ("band", "Against the usual range"),
+            ("placeholders", "Placeholder rates used")]
+    df = pd.DataFrame([{h: r.get(k) for k, h in cols} for r in pick], columns=[h for _, h in cols])
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False)
+    return Response(buf.getvalue(), media_type=XLSX, headers={"Content-Disposition": 'attachment; filename="RightCost.xlsx"'})
+
+
+@app.get("/rightcost")
+def rightcost_page():
+    html = open(os.path.join(WEB, "rightcost.html"), encoding="utf8").read()
+    for name in ("rightcost.css", "rightcost.js"):
+        html = html.replace(f'"{name}"', f'"{name}?v={int(os.path.getmtime(os.path.join(WEB, name)))}"')
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
 @app.post("/api/list/download")
 def list_download(options: dict = Body(default={})):
     v = list_view(options)

@@ -518,6 +518,7 @@ table.list td.remarks div + div { margin-top: 3px; }
   body.printing-pack .pack-foot { font-size: 8.5px; margin-top: 6px; }
   body.printing-pack .tag { padding: 1px 5px; font-size: 9px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.printing-pack .pack-tile, body.printing-pack .pack-lead { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
 /* the list on paper: the tool's columns with the fabric code; the mill's own columns are left to the download */
 @media print {
   table.list .stick { position: static !important; }
@@ -526,3 +527,7 @@ table.list td.remarks div + div { margin-top: 3px; }
   table.list .linkish { display: inline !important; color: inherit; }
 }
 @media print { table { width: 100% !important; table-layout: auto; } td, th { overflow-wrap: anywhere; } }
+/* inside Right cost's popup: Cost a fabric alone */
+html.embed .side, html.embed .top, html.embed .skip { display: none !important; }
+html.embed .shell { display: block; }
+html.embed main { padding-top: 12px !important; }

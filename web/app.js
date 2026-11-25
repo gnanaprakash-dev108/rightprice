@@ -75,10 +75,11 @@ const ICON = {
   ratecard: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 12h7M9 16h7"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
   pilot: '<path d="M5 20V10M10 20V4M15 20v-8M20 20v-5"/>',
+  rightcost: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   pack: '<path d="M8 4h8l3 3v13H5V4z"/><path d="M8 10h8M8 14h8M8 18h5"/>',
 };
 const NAV = [
-  ["Costing", [["dashboard", "Dashboard"], ["cost", "Cost a fabric"], ["bulk", "Bulk upload and list"], ["compare", "Compare"], ["pack", "Negotiation pack"]]],
+  ["Costing", [["dashboard", "Dashboard"], ["rightcost", "Right cost"], ["cost", "Cost a fabric"], ["bulk", "Bulk upload and list"], ["compare", "Compare"], ["pack", "Negotiation pack"]]],
   ["Prices", [["yarn", "Yarn prices"], ["cotton", "Cotton prices"], ["intake", "Bring in prices"]]],
   ["Rates", [["rates", "Rate tables"], ["ratecard", "Mill rate card"], ["settings", "Settings"]]],
   ["Analysis", [["pilot", "Pilot results"]]],
@@ -91,7 +92,7 @@ function buildNav() {
   for (const [group, items] of NAV) {
     nav.append(h("div", { class: "nav-group" }, group));
     for (const [id, label] of items)
-      nav.append(h("a", { class: "nav-link", href: "#" + id, "data-page": id, title: label, html: svg(ICON[id]) + `<span>${label}</span>` }));
+      nav.append(h("a", { class: "nav-link", href: id === "rightcost" ? "/rightcost" : "#" + id, "data-page": id, title: label, html: svg(ICON[id]) + `<span>${label}</span>` }));
   }
 }
 function route() {
@@ -629,7 +630,7 @@ function costView(res, sel) {
     h("div", { class: "hero-row" },
       h("div", {}, h("div", { class: "lbl" }, title ? title + " · " : "", "ex-mill should-cost"), h("div", { class: "big num" }, `${rs(res.total_per_m)} / m`)),
       h("div", { class: "row-actions", style: "margin:0" },
-        h("button", { class: "btn primary", onclick: async e => { const b = e.currentTarget; b.disabled = true; try { const r = await (await postJSON("/api/list/add", Object.assign({}, payload(sel), state.listId ? { _id: state.listId } : {}))).json(); toast(state.listId ? "Row updated in the list" : "Added to the list under Bulk upload"); state.listId = r.id; state.list = null; b.textContent = "Update in list"; } catch (err) { toast("Not added: " + err.message); } b.disabled = false; } }, state.listId ? "Update in list" : "Add to list"),
+        h("button", { class: "btn primary", onclick: async e => { const b = e.currentTarget; b.disabled = true; try { const r = await (await postJSON("/api/list/add", Object.assign({}, payload(sel), state.listId ? { _id: state.listId } : {}))).json(); toast(state.listId ? "Row updated in the list" : "Added to the list under Bulk upload"); state.listId = r.id; tellParent(); state.list = null; b.textContent = "Update in list"; } catch (err) { toast("Not added: " + err.message); } b.disabled = false; } }, state.listId ? "Update in list" : "Add to list"),
         h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message); } } }, "Download cost sheet"),
         h("button", { class: "btn", onclick: printSheet }, "Print"))),
     h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} \u00D7 ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
@@ -1367,6 +1368,17 @@ function setupSearch() {
 }
 
 // ------------------------------------------------------------------ start
+// inside Right cost's popup (/?embed=1): Cost a fabric alone, with no page list or header
+const EMBED = new URLSearchParams(location.search).get("embed") === "1";
+if (EMBED) document.documentElement.classList.add("embed");
+// Right cost opens a costing here: its choices, and the list row it came from (if any)
+window.rpOpen = (choices, listId) => {
+  if (!state.meta) return setTimeout(() => window.rpOpen(choices, listId), 100);
+  state.sel = choices ? selFromRow(choices) : blankSel(); state.listId = listId || null; state.rowNotes = null; state.sim = null; state.reopened = null; state.openStep = null;
+  if (choices) STEPS.forEach(st => state.visited.add(st.id)); else state.visited.clear();
+  if (location.hash !== "#cost") location.hash = "#cost"; else route();
+};
+const tellParent = () => { if (EMBED && parent !== window) parent.postMessage({ rp: "listChanged" }, location.origin); };
 (async function start() {
   buildNav(); paintThemeButton(); loadPrefs();
   $("#pin").addEventListener("click", e => { setPref("pin", !PREFS.pin); e.currentTarget.blur(); });
