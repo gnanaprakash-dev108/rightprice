@@ -390,6 +390,27 @@ on their own rows.
   earlier years cannot be drawn. Dating the yarn rates (next steps) would allow it.
 - **Left panel:** the name at the top no longer scrolls out of view in a short window.
 
+**The aim of the tool is a better negotiation with the vendor** (stated 25 Nov 2026). Added for that:
+
+- **A negotiation brief** on Cost a fabric whenever a quote is entered, and one word per row in the
+  list (Push, Fair, Below, Ask break-up). It gives the price to open at (the should-cost), the level
+  up to which the difference is within the tool's 5% margin of error, and what would have to be true
+  for the quote to be right: the yarn rate, the weaving rate per pick, or the mill's margin that
+  alone would close the gap. With an order quantity it gives the money at stake.
+- **No target where the tool is weak.** If placeholder rates are used, or the tool fits fewer than
+  half of past purchases of that fabric type within 10% (or its middle gap is over 6%), the brief
+  says to ask for the break-up first and gives the reason. The same rule decides colour everywhere:
+  a gap on such a group is marked "tool unsure", never red or green.
+- **Money at stake in the list**: gap per metre times order quantity for each row, a total for the
+  sheet, and "most at stake first".
+
+A fifth cold review covered the dashboard and the list; fourteen findings, all acted on. The ones
+that could have misled a buyer: a yarn move changed the should-cost but left the old gap on screen;
+panel 1 showed a gap that did not follow from the two prices beside it (now all three are averages
+over the metres bought); green and red sat on fabric types where the tool is known to be weak; a
+should-cost carried a small-lot upcharge the mill's sheet did not charge; and the same sheet could
+be uploaded twice.
+
 `PER_END`, `PER_PICK` and the C2FO factor in `mill_sheet.py` are the card's figures, used only to
 check a mill's sheet. They are not costing rates and are not in the rate master.
 

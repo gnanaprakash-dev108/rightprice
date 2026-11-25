@@ -142,13 +142,61 @@ def yarn_sensitivity(res):
     """Rupees per metre that the price moves for each Rs 10 per kg on the warp yarn, and on the weft yarn."""
     i = res["inputs"]
     mult = (1 + i["process_wastage"] + i["overhead"]) * (1 + i["margin"]) / (1 - i["shrinkage"]) * (1 + i.get("small_lot_pct", 0.0))
+    # carry: the share of a yarn price move that reaches the fabric price. It is larger than yarn's own
+    # share of the cost, because losses, overhead and margin are charged on the yarn too.
     return {"warp_per_10": res["warp_kg"] * mult * 10, "weft_per_10": res["weft_kg"] * mult * 10,
             "warp_rate": i["warp_rate"], "weft_rate": i["weft_rate"],
             "yarn_share": (res["warp_kg"] * i["warp_rate"] + res["weft_kg"] * i["weft_rate"]) * mult / res["total_per_m"] if res["total_per_m"] else 0.0}
 
 
-def result_json(res):
+def brief(res, m, quantity=None):
+    """What a buyer takes into the meeting for one fabric with a quote on it.
+
+    The tool does not know the mill's break-up, so it cannot say where the quote differs. It can say
+    what would have to be true for the quote to be right: the yarn rate, the weaving rate or the
+    margin that, alone, would close the gap. Each is set beside the figure in the rate master.
+    """
+    if res["quote"] is None:
+        return None
+    i, total, quote = res["inputs"], res["total_per_m"], res["quote"]
+    gap, y = quote - total, yarn_sensitivity(res)
+    lot = 1 + i.get("small_lot_pct", 0.0)
+    before = (1 + i["process_wastage"] + i["overhead"]) / (1 - i["shrinkage"]) * lot        # mark-up before margin
+    mult = before * (1 + i["margin"])
+    yarn_cost = res["warp_kg"] * i["warp_rate"] + res["weft_kg"] * i["weft_rate"]
+    f = 1 + gap / (yarn_cost * mult) if yarn_cost else None
+    cost_before_margin = (total + i.get("volume_discount_per_m", 0.0)) / (1 + i["margin"])      # close enough: upcharges are small
+    grp = dict(zip(m["Weaves"]["Weave"], m["Weaves"]["Weave group"]))
+    route = next((u["Choice"].split(", ")[1] for u in res["rates_used"] if u["Item"] == "Weaving" and ", " in str(u["Choice"])), None)
+    weak, why = [], None
+    if res["placeholders"]:
+        weak.append("placeholder rates are used for " + ", ".join(res["placeholders"]))
+    ins = _cache.get(PILOT + "#insights")
+    if ins and ins[1]:
+        weave = next((u["Choice"].split(" (")[0] for u in res["rates_used"] if u["Item"] == "Weaving"), None)
+        cat = next((c for c in ins[1]["categories"] if c["route"] == route and c["weave"] == grp.get(weave)), None)
+        if cat is None:
+            weak.append("there are too few purchases of this fabric type to test the tool on")
+        elif cat["trust"] == "weak":
+            weak.append(f"on {route.lower()} {cat['weave'].lower()} the tool fits only {cat['within10']:.0%} of past purchases within 10% "
+                        f"(middle gap {cat['median_gap']:+.1f}%)")
     return {
+        "quote": quote, "should": total, "gap": gap, "gap_pct": gap / total,
+        "stance": "ask" if weak else ("fair" if abs(gap) / total <= 0.05 else ("push" if gap > 0 else "below")),
+        "weak": weak, "open_at": total, "settle_up_to": total * 1.05,
+        "quantity": quantity, "at_stake": None if quantity is None else gap * quantity,
+        "would_need": {
+            "yarn": None if f is None else {"warp": i["warp_rate"] * f, "weft": i["weft_rate"] * f, "warp_now": i["warp_rate"],
+                                             "weft_now": i["weft_rate"], "pct": (f - 1) * 100},
+            "weaving": {"rate": i["weaving_rate"] + gap / mult / i["ppi"], "now": i["weaving_rate"]},
+            "margin": {"rate": (quote + i.get("volume_discount_per_m", 0.0)) / cost_before_margin - 1, "now": i["margin"]},
+        },
+    }
+
+
+def result_json(res, quantity=None):
+    return {
+        "brief": brief(res, get_masters(), quantity),
         "warnings": sanity(res["inputs"], res),
         "yarn": yarn_sensitivity(res),
         "total_per_m": res["total_per_m"], "per_kg": res["per_kg"], "gsm": res["gsm"],
@@ -189,9 +237,18 @@ def meta():
     }
 
 
+def _warm_pilot():
+    if PILOT + "#insights" not in _cache and os.path.exists(PILOT):
+        try:
+            insights()
+        except Exception:
+            pass
+
+
 @app.post("/api/cost")
 def cost(sel: dict = Body(...)):
-    return result_json(cost_or_400(sel, get_masters()))
+    _warm_pilot()
+    return result_json(cost_or_400(sel, get_masters()), _num_or_none(sel.get("Order quantity (m)")))
 
 
 @app.post("/api/cost-sheet")
@@ -250,6 +307,13 @@ def _list_row(sel, m, mill=None, problems=(), notes=(), n=0):
             "Id": f"{now:%Y%m%d%H%M%S%f}{n:04d}", "Inputs": json.dumps(sel), "Result": None if res is None else _then(res),
             "Mill": json.dumps(mill) if mill else None, "Problems": json.dumps(problems) if problems else None,
             "Notes": json.dumps(list(notes)) if notes else None}
+
+
+def _num_or_none(v):
+    try:
+        return None if v is None or v == "" else float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def _write_list(df):
@@ -314,8 +378,15 @@ async def list_upload(file: UploadFile = File(...)):
                                  "EPI, PPI) or of a mill price sheet (Fab Code, Base Price, EPI, PPI)")
     if not rows:
         raise HTTPException(400, "The sheet has the right headings but no fabric rows")
-    _write_list(pd.concat([read_log(), pd.DataFrame(rows)], ignore_index=True))
-    return {"added": len(rows), "kind": kind, "not_costed": sum(1 for r in rows if r["Problems"])}
+    log = read_log()
+    have = set()
+    for col, key in (("Mill", None), ("Inputs", None)):
+        if col in log.columns:
+            have |= {v for v in log[col].dropna().astype(str)}
+    fresh = [r for r in rows if (r["Mill"] or r["Inputs"]) not in have]
+    if fresh:
+        _write_list(pd.concat([log, pd.DataFrame(fresh)], ignore_index=True))
+    return {"added": len(fresh), "already": len(rows) - len(fresh), "kind": kind, "not_costed": sum(1 for r in fresh if r["Problems"])}
 
 
 @app.post("/api/list")
@@ -323,6 +394,7 @@ def list_view(options: dict = Body(default={})):
     """The list, newest first, each row re-costed on today's rates. options.yarn_pct = {yarn key or '*': % change}
     also costs every row with those yarn rates moved, to show what a yarn price move would do."""
     m = get_masters()
+    _warm_pilot()
     moves = {k: float(v) for k, v in (options.get("yarn_pct") or {}).items() if v not in ("", None) and float(v) != 0}
     sim = None
     if moves:
@@ -339,7 +411,8 @@ def list_view(options: dict = Body(default={})):
                 "inputs": inputs, "then": _loads(r.get("Result"), None), "notes": _loads(r.get("Notes"), []),
                 "from_mill": mill is not None, "mill": mill or (mill_sheet.from_choices(inputs) if inputs else {}),
                 "sums": mill_sheet.check_sums(mill) if mill else None, "problems": problems,
-                "should_cost": None, "gap": None, "gap_pct": None, "placeholders": [], "simulated": None,
+                "should_cost": None, "gap": None, "gap_pct": None, "placeholders": [], "simulated": None, "sim_gap": None,
+                "sim_gap_pct": None, "quantity": None, "at_stake": None, "brief": None,
                 "supplier": clean(r.get("Supplier")), "description": clean(r.get("Description"))}
         if inputs is None:                   # a costing saved before choices were kept: shown, not re-costed
             item["should_cost"], item["mill"] = clean(r.get("Should-cost Rs/m")), {"Fab Code": clean(r.get("Fabric code")), "Ex mill price": clean(r.get("Quoted Rs/m"))}
@@ -349,8 +422,13 @@ def list_view(options: dict = Body(default={})):
                 res = masters.cost(inputs, m)
                 item.update(should_cost=res["total_per_m"], per_kg=res["per_kg"], gsm=res["gsm"], gap=res["gap"],
                             gap_pct=res["gap_pct"], placeholders=res["placeholders"], yarn=yarn_sensitivity(res))
+                qty = _num_or_none((mill or {}).get("Total order qnty"))
+                item["quantity"] = qty
+                item["at_stake"] = None if qty is None or res["gap"] is None else res["gap"] * qty
+                item["brief"] = brief(res, m, qty)
                 if sim is not None:
-                    item["simulated"] = masters.cost(inputs, sim)["total_per_m"]
+                    moved = masters.cost(inputs, sim)
+                    item.update(simulated=moved["total_per_m"], sim_gap=moved["gap"], sim_gap_pct=moved["gap_pct"])
             except Exception as e:
                 item["problems"] = [str(e)]
         out.append(item)
@@ -443,6 +521,13 @@ def dashboard():
 
 
 # ------------------------------------------------------------------ dashboard insights
+def trust(within10, median_gap):
+    """How far the should-cost can be leaned on for a group of fabrics, from how it fits the prices paid.
+    'firm': at least half land within 10% and the middle gap is small. Otherwise 'weak': the gap says
+    more about the tool than about the supplier, and no colour should call it a good or bad deal."""
+    return "firm" if within10 >= 0.5 and abs(median_gap) <= 6 else "weak"
+
+
 BUCKETS = ["Yarn", "Yarn dyeing", "Sizing and weaving", "Dyeing and finishing", "Losses", "Overhead", "Margin",
            "Upcharges and quantity terms"]
 
@@ -461,9 +546,13 @@ def insights():
         cats = []
         for (route, grp), d in f.groupby(["Route", "Weave group"]):
             if len(d) >= 20:
-                cats.append({"route": route, "weave": grp, "fabrics": len(d), "metres": float(d["PO metres"].sum()),
-                             "paid": float(d["PO price Rs/m"].median()), "should": float(d["Should-cost Rs/m"].median()),
-                             "gap": float(d[gap].median()), "within10": float((d[gap].abs() <= 10).mean())})
+                # averages over the metres bought, so paid, should-cost and the gap between them agree
+                metres = d["PO metres"].sum()
+                paid, should = (d["PO price Rs/m"] * d["PO metres"]).sum() / metres, (d["Should-cost Rs/m"] * d["PO metres"]).sum() / metres
+                within = float((d[gap].abs() <= 10).mean())
+                cats.append({"route": route, "weave": grp, "fabrics": len(d), "metres": float(metres), "paid": float(paid),
+                             "should": float(should), "gap": float((paid / should - 1) * 100), "within10": within,
+                             "median_gap": float(d[gap].median()), "trust": trust(within, float(d[gap].median()))})
         cats.sort(key=lambda c: -c["fabrics"])
         split = []
         for route, d in f.groupby("Route"):
@@ -475,8 +564,11 @@ def insights():
         sup = []
         for name, d in f.groupby("Supplier"):
             if len(d) >= 15:
+                within = float((d[gap].abs() <= 10).mean())
+                mix = d.groupby(["Route", "Weave group"]).size().sort_values(ascending=False)
                 sup.append({"supplier": re.sub(r"^\d+\s+", "", str(name)).title(), "fabrics": len(d), "gap": float(d[gap].median()),
-                            "within10": float((d[gap].abs() <= 10).mean())})
+                            "within10": within, "trust": trust(within, float(d[gap].median())),
+                            "mostly": f"{mix.index[0][0]} {mix.index[0][1].lower()}", "mostly_share": float(mix.iloc[0] / len(d))})
         sup.sort(key=lambda c: -c["fabrics"])
         qty = []
         for label, lo, hi in (("Below 1,000 m", 0, 1000), ("1,000 to 3,000 m", 1000, 3000), ("3,000 m and above", 3000, 1e12)):

@@ -70,7 +70,7 @@ def _yarn(text, yarns):
     t = str(text).strip().lower()
     main, note = re.split(r"\+", t)[0], ""
     if "+" in t:
-        note = f"'{text}' is costed on its main yarn only"
+        note = f"warp or weft '{text}' is costed on its main yarn only; the second yarn is not in the should-cost"
     main = re.sub(r"\(.*?\)", "", main).strip().replace(" ", "")
     main = re.sub(r"(s|ne|'s)$", "", re.sub(r"^(cm|cpt|cw|ne)", "", main))
     main = re.sub(r"^(\d+)/1$", r"\1", main)
@@ -183,6 +183,10 @@ def to_inputs(row, m):
         floor = 500 if sel.get("Route") == "Yarn Dyed" else 1000
         if qty >= floor:
             sel["Rate card quantity"] = next(name for lo, hi, name in QUANTITY_BANDS if lo <= qty < hi)
+            if qty < 800 and not (_num(row.get("Upcharge for less qnty")) or 0):
+                # the mill's sheet charges nothing for the small lot: the should-cost must not add it either
+                sel["Rate card quantity"] = "800 to 1,999 m"
+                notes.append(f"the mill charges no small-lot upcharge on {qty:g} m, so the should-cost leaves it out too")
         sel["Order size"] = "Below 1,000 m" if qty < 1000 else ("1,000 to 3,000 m" if qty < 3000 else "3,000 m and above")
 
     price = _num(row.get("Ex mill price")) or _num(row.get("Total price with qnty disc/upcharge")) or _num(row.get("Price"))
