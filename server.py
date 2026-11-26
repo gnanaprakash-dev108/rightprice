@@ -67,12 +67,73 @@ async def lifespan(_app):
              "--server.port", str(CLASSIC_PORT), "--server.address", "127.0.0.1", "--server.headless", "true",
              "--server.baseUrlPath", "classic", "--server.enableCORS", "false",
              "--server.enableXsrfProtection", "false", "--browser.gatherUsageStats", "false"], cwd=HERE)
-    yield
+    if _mcp_app is not None:
+        async with mcp_server.mcp.session_manager.run():       # the MCP endpoint's own machinery, for as long as the app runs
+            yield
+    else:
+        yield
     if _classic:
         _classic.terminate()
 
 
 app = FastAPI(title="RightPrice", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+# ------------------------------------------------------------------ MCP: an AI assistant's way in, behind a secret token
+try:
+    import mcp_server
+    from mcp.server.transport_security import TransportSecuritySettings
+    # one JSON answer per request and no sessions kept: nothing to lose on a restart. The token is the protection,
+    # so the host check meant for servers on a developer's own machine is off.
+    _mcp_app = mcp_server.mcp.streamable_http_app(streamable_http_path="/mcp", json_response=True, stateless_http=True,
+                                                  transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+except Exception as _e:        # the package missing or changed must never take the site down: MCP is simply off
+    mcp_server, _mcp_app = None, None
+    print(f"RightPrice: MCP is off ({type(_e).__name__}: {_e})", file=sys.stderr)
+
+
+class McpGate:
+    """Everything under /mcp. Switched off (404) unless the app setting RIGHTPRICE_MCP_TOKEN is set; with it, every
+    request must carry "Authorization: Bearer <token>" (401 otherwise). /mcp/health tells a caller holding the token
+    that the site is up and which code it runs. Nothing else on the site is touched by this."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not (path == "/mcp" or path.startswith("/mcp/")):
+            return await self.inner(scope, receive, send)
+
+        async def answer(status, body, extra=()):
+            data = json.dumps(body).encode()
+            await send({"type": "http.response.start", "status": status,
+                        "headers": [(b"content-type", b"application/json"), (b"cache-control", b"no-store"), (b"content-length", str(len(data)).encode()), *extra]})
+            await send({"type": "http.response.body", "body": data})
+
+        if mcp_server is None or mcp_server.token() is None:
+            return await answer(404, {"detail": "The MCP endpoint is switched off on this server."})
+        auth = dict(scope.get("headers") or []).get(b"authorization", b"").decode("latin1")
+        if not mcp_server.allowed(auth):
+            return await answer(401, {"detail": "A token is needed: send the header Authorization: Bearer <token>."}, [(b"www-authenticate", b"Bearer")])
+        if path != "/mcp/health" and scope.get("method") != "POST":
+            # one JSON answer per POST and no sessions: there is no stream to open and nothing to delete
+            return await answer(405, {"detail": "The MCP endpoint takes POST requests only."}, [(b"allow", b"POST")])
+        if path == "/mcp/health":
+            return await answer(200, {"ok": True, "app": "RightPrice", "code": _code_version(), "rate_master_changed": _mtime(masters.MASTER_PATH),
+                                      "tools": len(await mcp_server.mcp.list_tools())})
+        return await _mcp_app(dict(scope, path="/mcp", raw_path=b"/mcp"), receive, send)
+
+
+def _code_version():
+    """Which code is running: the newest change time among the app's own files (a deploy has no git folder)."""
+    try:
+        newest = max(os.path.getmtime(os.path.join(HERE, f)) for f in ("server.py", "engine.py", "masters.py", "mcp_server.py", "draft.py"))
+        return dt.datetime.fromtimestamp(newest, dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    except OSError:
+        return "unknown"
+
+
+app.add_middleware(McpGate)
 
 
 # ------------------------------------------------------------------ helpers
@@ -1275,7 +1336,7 @@ def _who(request):
 
 
 @app.post("/api/negotiations/event")
-def negotiation_event(payload: dict = Body(...), request: Request = None):
+def negotiation_event(payload: dict = Body(...), request: Request = None, by: str = None):
     """Record one step: the mill's quote, our counter, a revised quote, or the agreed price."""
     key, kind = str(payload.get("key") or ""), payload.get("kind")
     price = _num_or_none(payload.get("price"))
@@ -1312,7 +1373,7 @@ def negotiation_event(payload: dict = Body(...), request: Request = None):
             rec[f] = v
     rec["events"].append({"id": f"{dt.datetime.now():%Y%m%d%H%M%S%f}", "at": dt.datetime.now().isoformat(timespec="seconds"),
                           "date": day_.isoformat(), "kind": kind, "price": round(price, 2), "note": str(payload.get("note") or "")[:500],
-                          "by": _who(request)})
+                          "by": by if isinstance(by, str) and request is None else _who(request)})       # `by` only from the app's own code (the MCP tool), never from a web request
     _save_negos(d)
     return _nego_view(rec)
 

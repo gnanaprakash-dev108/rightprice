@@ -92,6 +92,8 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `app.py` | The earlier Streamlit screens, now at `/classic` |
 | `mill_sheet.py` | Reads a mill's price sheet (base price plus upcharges), turns each row into the tool's choices, and checks the mill's arithmetic |
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
+| `draft.py` | E-mail and WhatsApp drafts to a mill, written by Claude (app setting `ANTHROPIC_API_KEY`), with a fixed template when there is no key |
+| `mcp_server.py` | RightPrice as an MCP server for an AI assistant: at `/mcp` on the web app behind the token `RIGHTPRICE_MCP_TOKEN`, or `python mcp_server.py` on a laptop. See [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md) |
 | `check_server.py` | Checks the server gives the engine's numbers and refuses bad input. Must print `ALL OK` |
 | `grouping.py` | Folds blend spellings into 17 content groups and weave names into 7 weave groups |
 | `price_import.py` | Yarn price intake from Excel, PDF, image, link or API |

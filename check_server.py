@@ -3,6 +3,7 @@
 Run: python check_server.py     It must print ALL OK. It does not start the classic screens.
 """
 import io
+import json
 import os
 import tempfile
 
@@ -508,6 +509,73 @@ def main():
         check("Quantities as mills type them", server._qty("5000 mtr") == 5000 and server._qty("3,333") == 3333 and server._qty(4200) == 4200 and server._qty("about 5") is None)
         tot_q = c.get("/api/negotiations/summary").json()
         check("Tracker: a fabric agreed before a re-quote arrived keeps its gain", any(t for t in [tot_q] if t["duplicates"] == 0))
+        # MCP: an assistant's way in, behind a secret token
+        os.environ.pop("RIGHTPRICE_MCP_TOKEN", None)
+        check("MCP: switched off unless the token setting exists, and the site is untouched",
+              c.get("/mcp/health").status_code == 404 and c.post("/mcp", json={}).status_code == 404 and c.get("/api/meta").status_code == 200)
+        os.environ["RIGHTPRICE_MCP_TOKEN"] = "short"
+        check("MCP: a token too short to be a secret keeps it off", c.get("/mcp/health", headers={"Authorization": "Bearer short"}).status_code == 404)
+        tok = "k" * 40
+        os.environ["RIGHTPRICE_MCP_TOKEN"] = tok
+        hd = {"Authorization": "Bearer " + tok, "Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+        check("MCP: no token, a wrong token or a token in the address are refused",
+              c.get("/mcp/health").status_code == 401 and c.post("/mcp", json={}, headers={"Authorization": "Bearer " + "x" * 40}).status_code == 401
+              and c.get("/mcp/health?token=" + tok).status_code == 401 and c.get("/mcp/anything", headers={"Authorization": tok}).status_code == 401)
+        hl = c.get("/mcp/health", headers=hd).json()
+        check("MCP: the health check answers a caller holding the token", hl["ok"] is True and hl["tools"] == 10)
+        rpc = lambda method, params, i=1: c.post("/mcp", headers=hd, json={"jsonrpc": "2.0", "id": i, "method": method, "params": params}).json()
+        call = lambda name, **args: json.loads(rpc("tools/call", {"name": name, "arguments": args})["result"]["content"][0]["text"])
+        listed_t = rpc("tools/list", {})["result"]["tools"]
+        names = [t["name"] for t in listed_t]
+        writers = {t["name"] for t in listed_t if not (t.get("annotations") or {}).get("readOnlyHint")}
+        check("MCP: the ten tools are offered, and only the two that write are marked as writing",
+              set(names) == {"list_choices", "cost_fabric", "find_fabrics", "fabric_brief", "supplier_summary", "negotiation_pack", "tracker_steps",
+                             "record_tracker_step", "remove_my_tracker_step", "quote_alerts"} and writers == {"record_tracker_step", "remove_my_tracker_step"}, str(writers))
+        ex = call("list_choices")["example"]
+        check("MCP: a fabric costed through the assistant gives the engine's figure", call("cost_fabric", choices=ex)["should_cost_per_m"] == round(c.post("/api/cost", json=ex).json()["total_per_m"], 2))
+        check("MCP: a field the costing does not know, or a value not among the choices, is refused, not ignored",
+              "Unknown field" in call("cost_fabric", choices=dict(ex, **{"Yarn shade": "Dark"})).get("error", "") and "Not among the choices" in call("cost_fabric", choices=dict(ex, Route="Woven"))
+              .get("error", "") and "Warp yarn dyeing" in call("list_choices")["fields"])
+        found = call("find_fabrics", search="Q-4", source="Fabric list")
+        qk = found["fabrics"][0]["key"] if found["fabrics"] else None
+        check("MCP: a fabric is found with its key and the verdict the screens show", bool(qk) and found["fabrics"][0]["code"] == "Q-4" and found["fabrics"][0]["price_is"].startswith("quoted") and found["fabrics"][0]["tracker"] is None, str(found)[:300])
+        no_first = call("record_tracker_step", key=qk, kind="Mill's revised quote", price_per_m=180)
+        bad = call("record_tracker_step", key=qk, kind="Mill's quote", price_per_m=0.5)
+        wrong = call("record_tracker_step", key=qk, kind="Settled", price_per_m=185)
+        ok_ = call("record_tracker_step", key=qk, kind="Mill's quote", price_per_m=185, date="2026-11-20", note="by phone " + "x" * 600)
+        twice = call("record_tracker_step", key=qk, kind="Mill's quote", price_per_m=185, date="2026-11-20")
+        check("MCP: recording a step keeps the tracker's refusals, asks for the first quote first, refuses a repeat, and marks the step as the assistant's",
+              "error" in bad and "Mill's quote" in wrong.get("error", "") and "first quote" in no_first.get("error", "") and "185.00" in no_first["error"]
+              and "already recorded" in twice.get("error", "") and ok_.get("recorded") is True and ok_["now"]["steps"][0]["by"] == "AI assistant"
+              and ok_["now"]["steps"][0]["note"].endswith("(recorded through the AI assistant)") and ok_["warnings_on_this_step"] == [], str(ok_)[:300])
+        slip = call("record_tracker_step", key=qk, kind="Our counter", price_per_m=199, date="2026-11-21")
+        undo = call("remove_my_tracker_step", key=qk, kind="Our counter", price_per_m=199)
+        early = call("record_tracker_step", key=qk, kind="Mill's revised quote", price_per_m=150, date="2026-11-10")
+        above = call("record_tracker_step", key=qk, kind="Agreed", price_per_m=250, date="2026-11-22")
+        check("MCP: a step dated before the first quote, and an agreement above the mill's price, are refused",
+              "before the mill's first quote" in early.get("error", "") and "above the mill's latest price" in above.get("error", "")
+              and len(call("tracker_steps", key=qk)["steps"]) == 1, str(early)[:200] + str(above)[:200])
+        call("record_tracker_step", key=qk, kind="Our counter", price_per_m=172, date="2026-11-21")
+        keep_first = call("remove_my_tracker_step", key=qk, kind="Mill's quote", price_per_m=185)
+        call("remove_my_tracker_step", key=qk, kind="Our counter", price_per_m=172)
+        check("MCP: the first quote cannot be removed while later steps rest on it; a stream cannot be opened on the endpoint",
+              "first quote" in keep_first.get("error", "") and len(call("tracker_steps", key=qk)["steps"]) == 1
+              and c.get("/mcp", headers=hd).status_code == 405 and c.delete("/mcp", headers=hd).status_code == 405)
+        check("MCP: a typed number that is not a number is refused", "plain positive numbers" in call("cost_fabric", choices=dict(ex, **{"Order quantity (m)": "5,000"})).get("error", "")
+              and "plain positive numbers" in call("cost_fabric", choices=dict(ex, **{"Quoted price (Rs/m)": "inf"})).get("error", ""))
+        check("MCP: a warning on the step just recorded is passed back, and the assistant can undo its own step",
+              any("above the mill's price" in w for w in slip["warnings_on_this_step"]) and undo.get("removed") is True and len(undo["now"]["steps"]) == 1
+              and call("find_fabrics", search="Q-4", source="Fabric list")["fabrics"][0]["tracker"]["mill_latest_per_m"] == 185)
+        check("MCP: the brief and the tracker read back what the screens hold",
+              call("fabric_brief", key=qk)["negotiation"]["mill_latest"] == 185 and call("tracker_steps", key=qk)["status"] == "Open" and "error" in call("fabric_brief", key="nope") and "error" in call("tracker_steps", key="nope"))
+        ev({"key": qk, "code": "Q-4", "kind": "Our counter", "price": 170, "date": "2026-11-22", "metres": 3700})
+        check("MCP: with a counter recorded the brief says not to open above it; a person's step cannot be removed by the assistant",
+              (lambda b_: b_ is None or (b_.get("open_at_per_m") is None or b_["verdict"] != "Push"))(call("fabric_brief", key=qk).get("brief"))
+              and "error" in call("remove_my_tracker_step", key=qk, kind="Our counter", price_per_m=170))
+        web_by = c.post("/api/negotiations/event", json={"key": qk, "kind": "Our counter", "price": 180, "date": "2026-11-23", "by": "the owner"}).json()
+        check("MCP: a web request cannot name who recorded a step", web_by["events"][-1]["by"] == "")
+        os.environ.pop("RIGHTPRICE_MCP_TOKEN", None)
+
         q_ids = [r["id"] for r in c.get("/api/costs").json()["rows"] if r["source"] == "Fabric list" and str(r["code"]).startswith("Q-")]
         c.post("/api/list/remove", json={"ids": q_ids})
         check("Quote alerts: removing the rows removes their alerts", c.get("/api/alerts").json()["count"] == before)

@@ -90,6 +90,80 @@ Set "Restrict access" to **Require authentication**. Without this, anyone with t
 - To take a copy of the live rate master, download it from the same folder (Advanced Tools > Kudu >
   file browser), or use the downloads on the Rate tables screen.
 
+## Letting an AI assistant in (MCP), and e-mail drafts
+
+Two app settings, both optional. Web app > **Settings** > **Environment variables** > App settings:
+
+| Name | Value | Why |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | your Claude API key | "Draft a message to the mill" is written by Claude. Without it a fixed template is used and the dialog says so |
+| `RIGHTPRICE_MCP_TOKEN` | a long random secret, 24 characters or more | Switches on `/mcp`, the way in for an AI assistant. Without it `/mcp` answers 404 |
+
+Restart the app after adding either.
+
+### The MCP endpoint and Microsoft sign-in
+
+The site requires Microsoft sign-in for every address, and an AI assistant cannot sign in. So `/mcp` has to be let
+through the sign-in, and is then protected by the token alone: every request must carry
+`Authorization: Bearer <the token>`. Nothing else is let through.
+
+1. Make the token. In Cloud Shell (the `>_` icon at the top of the portal) run `openssl rand -hex 32` and keep the
+   result somewhere safe. Treat it like a password: anyone holding it can read the costings and record
+   negotiation steps.
+2. Add it as the app setting `RIGHTPRICE_MCP_TOKEN` (table above) and restart.
+3. Let `/mcp` through the sign-in. The portal's Authentication page has no box for this; Microsoft's setting is
+   `globalValidation.excludedPaths` in the app's authentication settings (documented under "authsettingsV2").
+   In Cloud Shell:
+
+   ```
+   az extension add --name authV2
+   az webapp auth show --resource-group rightprice-rg --name rightprice > auth-before.json
+   az webapp auth update --resource-group rightprice-rg --name rightprice --excluded-paths "[/mcp, /mcp/health]"
+   az webapp auth show --resource-group rightprice-rg --name rightprice --query "properties.globalValidation"
+   ```
+
+   The last command should show `excludedPaths` holding `/mcp` and `/mcp/health`, with `requireAuthentication`
+   still `true`. **Not tried by the build session** (it has no Azure access): Microsoft's page lists
+   `--excluded-paths` but gives no example of how the list is written. If the command complains about the value,
+   try `--excluded-paths "/mcp,/mcp/health"`, or set the two paths in Resource Explorer
+   (`resources.azure.com` > the web app > `config` > `authsettingsV2` > `globalValidation.excludedPaths`).
+   `auth-before.json` is the settings as they were, to put back if anything looks wrong.
+4. Check it from any computer (replace the token):
+
+   ```
+   curl -i https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/mcp/health
+   curl -s -H "Authorization: Bearer THE-TOKEN" https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/mcp/health
+   ```
+
+   The first must answer `401` with "A token is needed" (a redirect to login.microsoftonline.com means step 3 has
+   not taken; `404` "switched off" means step 2 has not). The second must answer `{"ok": true, ...}`.
+   Then open the site's home page in a private window: it must still ask for Microsoft sign-in.
+5. To switch it off again: delete the app setting `RIGHTPRICE_MCP_TOKEN` and restart. To change the token, change
+   the setting and restart; the old token stops working at once.
+
+### Connecting an assistant
+
+- **Claude Desktop, to the live site.** Claude Desktop's own "custom connector" screen does not send a fixed
+  token, so use the `mcp-remote` bridge (needs Node.js). In Claude Desktop > Settings > Developer > Edit Config:
+
+  ```
+  {"mcpServers": {"rightprice": {"command": "npx", "args": ["mcp-remote",
+     "https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/mcp",
+     "--header", "Authorization: Bearer THE-TOKEN"]}}}
+  ```
+
+  **Not tried by the build session**; the endpoint itself was tried with the MCP package's own client.
+- **On a laptop, on that laptop's own data** (no token, no Azure): `{"mcpServers": {"rightprice": {"command":
+  "python", "args": ["C:\\path\\to\\rightprice\\mcp_server.py"]}}}`.
+- **A build session checking a deploy**: with the token saved for the site's host through the secure form, it can
+  call `/mcp/health`, which reports which code is running.
+
+What the assistant can do: cost a fabric, find costings, read a fabric's brief, a supplier's page, a negotiation
+pack, the quote alerts and a fabric's negotiation steps, and **record a negotiation step** (marked "AI assistant"; the tracker's refusals apply, and it must record the
+mill's first quote before a revised quote or an agreement). It can undo a step it recorded itself, but not one a
+person recorded. It cannot change rates, upload or remove rows, or mark alerts seen. Every step it records carries
+the same name, "AI assistant": there is one token, so the tool cannot tell which person was behind it.
+
 ## If the page does not load
 
 - Web app > **Log stream** shows the start-up messages.
