@@ -74,6 +74,25 @@ price paid; misspelt or abbreviated mill names stay apart ("Jain Cord Industires
 verdict for a fabric is on its row price, the supplier page's on the tracker's price; the first load of a
 supplier page waits about 20 seconds for the purchase-order verdicts after a server start.
 
+### Quote alerts (26 Nov, pull request 19)
+
+A row of the fabric list that needs a look before its price is accepted is flagged: above its usual range (by
+at least half a per cent of should-cost, `ALERT_MIN_ABOVE`), the mill's own sums off, repeating an order already
+on the list, or quoted more than 30% below should-cost. Shown on the Bulk upload screen as soon as the sheet is
+read, first on the Dashboard (three uploads, three rows each, the rest folded), as a count on the Right cost
+rail item, as a column, filter and chip in Right cost, and on the fabric's Negotiation tab. `/api/alerts`,
+`/api/alerts/seen`; the seen list is `alerts_seen.json` beside the rate master. No e-mail or push.
+
+- An alert goes when marked seen (shared; one or all can be brought back), when its row is removed, or when its
+  price is agreed in the tracker. Recording the mill's quote alone does not clear it.
+- Alerts are worked out afresh from the list as it stands, on today's rates: a corrected sheet makes the older
+  row say "an older row ... a newer row is on the list at Rs ...".
+- A repeated row keeps its price flags; its rupees are not added to the totals. The two totals (above the ranges;
+  the mills' own sums) overlap and the heading says so.
+- **Speed**: `list_view` and `costs` keep their answer while the fabric list, the rate master and the purchase
+  history are unchanged (`_state_key`, `_list_memo`, `_costs_memo` in `server.py`). Anything that changes rows it
+  got from them must work on copies. Before this, pages polling every half minute cost 3 to 6 seconds each time.
+
 ### Rules (unchanged; all nine hold)
 
 1. Work on a branch (`claude/sleepy-dirac-dknzrp`) and open a pull request. Never push to `main`:
@@ -94,7 +113,7 @@ supplier page waits about 20 seconds for the purchase-order verdicts after a ser
    are his (use the select-an-option question form; GP prefers that). The build session cannot sign in
    to the live site: ask GP to confirm by eye.
 
-### What GP asked for on 26 Nov: five builds, one by one (1 and 2 are done)
+### What GP asked for on 26 Nov: five builds, one by one (1, 2 and 3 are done; 4 and 5 are next)
 
 1. **Negotiation tracker** (pull request 17, done). On each fabric's Negotiation tab in Right
    cost: record the mill's quote, our counter, revised quotes and the agreed price (date, note); what
@@ -106,7 +125,7 @@ supplier page waits about 20 seconds for the purchase-order verdicts after a ser
    tracker status and money won, and a combined question list for the next meeting with that mill
    (reuse the pack's question logic in `server.py` `_questions`). Reach it from Right cost's Suppliers
    tab and the Dashboard's supplier panel. Printable.
-3. **Quote alerts.** When a mill sheet is uploaded (Bulk upload), flag at once every row priced above
+3. **Quote alerts** (pull request 19, done). When a mill sheet is uploaded (Bulk upload), flag at once every row priced above
    its usual range, with sums off, a repeated order, or a quote far below should-cost; show them first
    on the Dashboard and as a count on the Right cost rail item. No e-mail or push yet.
 4. **E-mail drafting with the Claude API**, "humanised, a fresh draft every time". From a fabric's
@@ -119,15 +138,31 @@ supplier page waits about 20 seconds for the purchase-order verdicts after a ser
      or "medium"; stream or keep `max_tokens` around 4000; handle `stop_reason == "refusal"`; opt into
      server-side fallbacks (`betas=["server-side-fallback-2026-07-01"]`, `fallbacks="default"`) and
      tell GP. Load the `claude-api` skill before writing the code.
-   - The key: ask GP for it with the secure credential form (never in chat); on Azure it must be the
-     app setting `ANTHROPIC_API_KEY` (GP sets it in the portal: Web app > Settings > Environment
-     variables). Without a key the feature says so and offers a plain template instead.
+   - The key. **The secure credential form refuses Anthropic's own hosts** (tried 26 Nov), so it cannot hold
+     this key. For a build session to test real drafts, GP must add `ANTHROPIC_API_KEY` as an environment
+     variable of the cloud environment "rightprice" (environment menu in the session's title bar > Edit); anyone
+     using that environment and any command in its sessions can read it, and only a new session picks it up.
+     GP was told this on 26 Nov and had not yet said whether he will. Check `[ -n "$ANTHROPIC_API_KEY" ]` first
+     (never print it). Without it: build the feature and its no-key path, test only the request that is built,
+     and say plainly that no real draft was seen. On Azure the key is the app setting `ANTHROPIC_API_KEY` (GP
+     sets it in the portal: Web app > Settings > Environment variables). Without a key the feature says so
+     and offers a plain template instead.
+   - The `anthropic` package is not installed in the build container (the `mcp` package is, 2.3.0).
    - Send only the figures needed; no supplier price lists beyond the fabric in question.
 5. **MCP server**, so an AI assistant (for example Claude Desktop) can use RightPrice: tools to cost a
    fabric, read Right cost rows, read a brief, make a negotiation pack, read and record tracker steps.
    Python `mcp` package; streamable HTTP mounted on the app (for example `/mcp`) plus a stdio entry
-   for local use. The live site is behind Microsoft sign-in, so ask GP how the assistant should
-   authenticate (a separate token, or local only) before exposing it on Azure.
+   for local use. **GP's decision, 26 Nov: a secret token on the live site.** So: `/mcp` (and a small read-only
+   health check, so a build session can confirm a deploy) accepts a long token from the app setting
+   `RIGHTPRICE_MCP_TOKEN` and is switched off when that setting is absent; everything else still needs
+   Microsoft sign-in. Azure's sign-in sits in front of the app, so GP must let `/mcp` through: read Microsoft's
+   current documentation on App Service authentication before writing the steps (either "excluded paths" in the
+   authentication settings, or "allow unauthenticated requests" with the app itself refusing anyone not signed
+   in, which is riskier: if the app's check has a fault the site is open). Write the exact portal steps into
+   `docs/AZURE_DEPLOY.md`. GP also asked how to give a build session access to the live site: the same token,
+   entered in the secure credential form for the live site's host (that form works for non-Anthropic hosts),
+   lets a session call the health check. Recording tracker steps through MCP changes shared data: keep the
+   tracker's own refusals (they are on the server) and name the assistant as the one who recorded the step.
 
 ### Waiting on GP
 
