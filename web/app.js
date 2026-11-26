@@ -285,6 +285,30 @@ PAGES.dashboard = async () => {
   const [ins, list] = await Promise.all([getJSON("/api/insights"), (await postJSON("/api/list", {})).json()]);
   state.list = list;
   const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders costed on your rate master; panel 3 is the cotton price history; panel 5 is from published accounts.")];
+  // first: newly quoted fabrics that need a look before their price is accepted
+  try {
+    const box = h("div", { class: "card alerts", hidden: true });
+    const tellShell = msg => { if (parent !== window) parent.postMessage(msg, location.origin); };
+    const seen = async body => { try { const a = await (await postJSON("/api/alerts/seen", body)).json(); last = JSON.stringify(a); paint(a); tellShell({ rp: "alertsChanged" }); } catch (e) { toast(e.message, "err"); } };
+    const paint = a => {
+      box.hidden = !a.count && !a.seen;
+      if (!a.count) { box.replaceChildren(h("p", { class: "sub", style: "margin:0" }, `No quote alerts to look at. ${plural(a.seen, "alert")} marked seen. `, h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them back"))); return; }
+      const kinds = Object.entries(a.by_kind).filter(([, n]) => n).map(([k, n]) => `${n} ${a.kinds[k].toLowerCase()}`).join("; ");
+      box.replaceChildren(...[h("div", { class: "card-head" }, h("div", {}, h("h2", {}, `${plural(a.count, "new quote")} to look at`),
+          h("div", { class: "sub", style: "margin:2px 0 0" }, `Flagged when the sheet was uploaded, before any price is accepted: ${kinds}.` + (a.above_money ? ` Rs ${fmt(a.above_money, 0)} is quoted above the usual ranges` : "") + (a.sums_money ? `${a.above_money ? "; " : " "}Rs ${fmt(a.sums_money, 0)} is the mills' own sums gone wrong` : "") + (a.above_money || a.sums_money ? "." : ""))),
+          parent !== window ? h("button", { type: "button", class: "btn", onclick: () => tellShell({ rp: "showAlerts" }) }, "Show them in Right cost") : null),
+        ...a.groups.map(g => h("div", { class: "alert-group" }, h("div", { class: "alert-head" }, h("b", {}, millLink(g.supplier, g.mill)), h("span", { class: "sub", style: "margin:0" }, ` \u00B7 ${g.upload} \u00B7 ${plural(g.rows.length, "fabric")}`),
+            h("button", { type: "button", class: "btn small", onclick: () => seen({ ids: g.rows.map(r => r.id) }) }, g.rows.length === 1 ? "Mark seen" : `Mark all ${g.rows.length} seen`)),
+          h("ul", { class: "alert-list" }, ...g.rows.map(r => h("li", {}, parent !== window ? h("button", { type: "button", class: "linkish", title: "Open this fabric", onclick: () => tellShell({ rp: "go", hash: "item/" + encodeURIComponent(r.key) }) }, r.code) : h("b", {}, r.code),
+            ...r.flags.map(f => h("div", { class: "alert-flag" }, h("span", { class: "tag " + (f.kind === "low" || f.kind === "repeat" ? "warn" : "down") }, a.kinds[f.kind]), " " + f.text))))))),
+        h("p", { class: "sub", style: "margin:10px 0 0" }, "An alert goes when it is marked seen (for everyone), when its row is removed, or when a negotiation step is recorded on the fabric." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them back") : null)].filter(Boolean));
+    };
+    let last = JSON.stringify(await getJSON("/api/alerts")); paint(JSON.parse(last));
+    nodes.push(box);
+    const again = async () => { if (!box.isConnected) { clearInterval(timer); removeEventListener("focus", again); return; } if (document.hidden) return;
+      try { const now = JSON.stringify(await getJSON("/api/alerts")); if (now !== last) { last = now; paint(JSON.parse(now)); } } catch (e) { /* next time */ } };
+    const timer = setInterval(again, 30000); addEventListener("focus", again);
+  } catch (e) { /* no alerts on this server yet */ }
   nodes.push(yarnWhatIf(ins, list));
 
   if (p) {
@@ -1089,7 +1113,11 @@ PAGES.bulk = async (arg) => {
     if (!file.files[0]) return;
     const fd = new FormData(); fd.append("file", file.files[0]);
     status.replaceChildren(h("p", { class: "empty" }, "Reading and costing every row..."));
-    try { const r = await (await api("/api/list/upload", { method: "POST", body: fd })).json(); status.replaceChildren(h("div", { class: "notice info", style: "margin-top:12px" }, `${r.added} rows added from a ${r.kind}.` + (r.already ? ` ${r.already} were already in the list and were not added again.` : "") + (r.added ? (r.not_costed ? ` ${r.not_costed} could not be costed yet; the reason is in Remarks.` : " All were costed.") : ""))); file.value = ""; await load(); }
+    try { const r = await (await api("/api/list/upload", { method: "POST", body: fd })).json(); status.replaceChildren(h("div", { class: "notice info", style: "margin-top:12px" }, `${r.added} rows added from a ${r.kind}.` + (r.already ? ` ${r.already} were already in the list and were not added again.` : "") + (r.added ? (r.not_costed ? ` ${r.not_costed} could not be costed yet; the reason is in Remarks.` : " All were costed.") : "")),
+      r.alerts && r.alerts.length ? h("div", { class: "notice warn", style: "margin-top:12px" }, h("b", {}, `${plural(r.alerts.length, "row")} of this sheet ${r.alerts.length === 1 ? "needs" : "need"} a look before the price is accepted:`),
+        h("ul", { class: "alert-list" }, ...r.alerts.map(a => h("li", {}, h("b", {}, a.code), ...a.flags.map(f => h("div", { class: "alert-flag" }, f.text))))),
+        h("p", { class: "sub", style: "margin:6px 0 0" }, "They stay on the Dashboard and on the Right cost item of the left rail until marked seen.")) : r.added && r.alerts ? h("div", { class: "notice info", style: "margin-top:12px" }, "No quote alert on this sheet: no row is above its usual range, has sums that are off, repeats an order or is far below should-cost.") : null);
+      if (parent !== window) parent.postMessage({ rp: "alertsChanged" }, location.origin); file.value = ""; await load(); }
     catch (e) { status.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
   });
   await load();

@@ -564,7 +564,32 @@ async def list_upload(file: UploadFile = File(...)):
         r["Upload"] = upload            # which file a row came in with, for the pack's choice of rows
     if fresh:
         _write_list(pd.concat([log, pd.DataFrame(fresh)], ignore_index=True))
-    return {"added": len(fresh), "already": len(rows) - len(fresh), "kind": kind, "not_costed": sum(1 for r in fresh if r["Problems"])}
+    out = {"added": len(fresh), "already": len(rows) - len(fresh), "kind": kind, "not_costed": sum(1 for r in fresh if r["Problems"]), "alerts": []}
+    if fresh:
+        try:        # flagged at once: the rows of this upload that need a look before the price is accepted
+            ids = {str(r["Id"]) for r in fresh}
+            out["alerts"] = [a for a in _alerts_all() if a["id"] in ids]
+        except Exception:
+            pass
+    return out
+
+
+_list_memo = {"key": None, "val": None}
+_costs_memo = {"key": None, "val": None}
+
+
+def _mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
+
+
+def _state_key():
+    """What the list and Right cost are worked out from: the fabric list, the rate master, and the purchase history.
+    While none of them changes, the answer is kept (the pages ask every half minute)."""
+    ins = _cache.get(PILOT + "#insights")
+    return (_mtime(masters.LOG_PATH), _mtime(getattr(masters, "MASTER_PATH", "")), bool(ins and ins[1]), _mtime(PILOT))
 
 
 @app.post("/api/list")
@@ -574,6 +599,9 @@ def list_view(options: dict = Body(default={})):
     m = get_masters()
     _warm_pilot()
     moves = {k: float(v) for k, v in (options.get("yarn_pct") or {}).items() if v not in ("", None) and float(v) != 0}
+    memo = None if moves else _state_key()
+    if memo is not None and _list_memo["key"] == memo:
+        return _list_memo["val"]
     if any(abs(v) > 50 for v in moves.values()):
         raise HTTPException(400, "A yarn move is limited to 50% either way")
     sim = None
@@ -617,8 +645,11 @@ def list_view(options: dict = Body(default={})):
             except Exception as e:
                 item["problems"] = [str(e)]
         out.append(item)
-    return {"columns": mill_sheet.COLUMNS, "groups": mill_sheet.GROUPS, "rows": out,
-            "yarns_in_use": sorted({i["inputs"][k] for i in out if i["inputs"] for k in ("Warp yarn", "Weft yarn") if i["inputs"].get(k)})}
+    val = {"columns": mill_sheet.COLUMNS, "groups": mill_sheet.GROUPS, "rows": out,
+           "yarns_in_use": sorted({i["inputs"][k] for i in out if i["inputs"] for k in ("Warp yarn", "Weft yarn") if i["inputs"].get(k)})}
+    if memo is not None:
+        _list_memo.update(key=memo, val=val)
+    return val
 
 
 @app.post("/api/list/remove")
@@ -851,6 +882,9 @@ def costs():
     _warm_pilot()
     ins = _cache.get(PILOT + "#insights")
     cats = {(c["route"], c["weave"]): c for c in (ins[1]["categories"] if ins and ins[1] else [])}
+    memo = (_state_key(), _briefs["key"], _briefs["running"])
+    if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
+        return _costs_memo["val"]
     out = []
     if os.path.exists(PILOT):
         def load():
@@ -924,14 +958,16 @@ def costs():
     _learn_mill_names({r["supplier"] for r in out})
     for r in out:
         r["mill"] = mill_key(r["supplier"])
-    return {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
-                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
+    val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
+                                    "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
+    _costs_memo.update(key=(_state_key(), _briefs["key"], _briefs["running"]), val=val)
+    return val
 
 
 @app.post("/api/costs/download")
 def costs_download(payload: dict = Body(default={})):
     """The Right cost rows asked for (codes), or all of one source, as Excel."""
-    rows = costs()["rows"]
+    rows = [dict(r) for r in costs()["rows"]]
     src, order, extra = payload.get("source"), payload.get("keys") or [], payload.get("extra") or {}
     key = lambda r: f"{r['source']}|{r.get('id') or r['code']}"
     if order:           # the rows asked for, in the order the page shows them
@@ -1416,7 +1452,7 @@ def supplier(mill: str):
     the usual range, its sheets' sums that are off, where each negotiation stands, and the questions to take along."""
     key = mill_key(mill)
     d = costs()
-    rows = [r for r in d["rows"] if mill_key(r["supplier"]) == key]
+    rows = [dict(r) for r in d["rows"] if mill_key(r["supplier"]) == key]         # copies: the page changes its rows
     if not key or not rows:
         raise HTTPException(404, "No fabric bought from or quoted by that mill")
     m = get_masters()
@@ -1591,6 +1627,90 @@ def supplier(mill: str):
             "sums": sums, "hint": hint, "today": _day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},
             "questions": {"quoted": quoted_q, "bought": bought_q, "general": general}}
+
+
+# ------------------------------------------------------------------ quote alerts
+"""A mill sheet is uploaded: every row that needs a look before the price is accepted is flagged at once.
+Four kinds: priced above its usual range, the mill's own sums are off, the row repeats an order already on the
+list, or the quote is far below should-cost. An alert stays until someone marks it seen, the row is removed, or
+a negotiation step is recorded on the fabric (the buyer has taken it up). No e-mail or push: they show on the Dashboard, on the Right cost rail
+item and on the Bulk upload screen."""
+SEEN_PATH = os.path.join(os.path.dirname(masters.LOG_PATH), "alerts_seen.json")
+ALERT_KINDS = {"above": "Above its usual range", "sums": "Mill's sums off", "repeat": "Repeats an order", "low": "Far below should-cost"}
+
+
+def _seen():
+    try:
+        with open(SEEN_PATH, encoding="utf8") as f:
+            return set(json.load(f))
+    except (OSError, ValueError):
+        return set()
+
+
+def _alerts_all():
+    """Every flagged row of the fabric list, newest upload first; whether seen or agreed is marked, not filtered."""
+    try:
+        p = pack({})
+    except HTTPException:
+        return []
+    listed = {r["id"]: r for r in list_view({})["rows"]}
+    negos = {k: nego_summary(v) for k, v in _negos().items() if v.get("events")}
+    seen, out = _seen(), []
+    for r in p["rows"]:
+        flags = []
+        qty = r["quantity"]
+        on = lambda per_m: f" (Rs {_inr(abs(per_m) * qty, 0)} on {_inr(qty, 0)} m)" if qty else " (no quantity on the row, so no rupee total)"
+        if r["duplicate_of"]:
+            flags.append({"kind": "repeat", "text": f"Repeats the order of {r['duplicate_of']} (same cloth and quantity, or the same sheet row): check it is not ordered twice.", "money": 0})
+        else:
+            if r["stance"] == "push":
+                flags.append({"kind": "above", "money": r["above_range_money"],
+                              "text": f"Quoted Rs {_inr(r['quote'])}, Rs {_inr(r['above_band'])} a metre above the top of its usual range (Rs {_inr(r['upper'])}; should-cost Rs {_inr(r['should'])})" + on(r["above_band"]) + "."})
+            if r["stance"] == "check":
+                flags.append({"kind": "low", "money": 0,
+                              "text": f"Quoted Rs {_inr(r['quote'])}, {abs(r['gap_pct']):.0%} below the should-cost of Rs {_inr(r['should'])}: check it is per metre and for this cloth before treating it as a saving."})
+            if r["sums"] and r["own_gap"] is not None and r["own_gap"] >= 0.01:
+                flags.append({"kind": "sums", "money": r["own_at_stake"] or 0,
+                              "text": f"The mill's own build-up comes to Rs {_inr(r['own_price'])}, not the Rs {_inr(r['quote'])} it asks: Rs {_inr(r['own_gap'])} a metre too much" + on(r["own_gap"]) + "."})
+            elif r["sums"]:
+                flags.append({"kind": "sums", "money": 0, "text": "The sheet's sums do not agree: " + "; ".join(r["sums"]) + "."})
+        if not flags:
+            continue
+        src = listed.get(r["id"]) or {}
+        ng = negos.get(f"Fabric list|{r['id']}")
+        out.append({"id": r["id"], "key": f"Fabric list|{r['id']}", "code": r["code"], "description": r["description"], "supplier": r["supplier"] or "No supplier",
+                    "upload": src.get("upload") or "Added on screen", "added": src.get("added"), "flags": flags, "kinds": [f["kind"] for f in flags],
+                    "money": max(f["money"] for f in flags), "seen": r["id"] in seen, "tracked": bool(ng)})
+    return out
+
+
+@app.get("/api/alerts")
+def alerts():
+    """The alerts still to look at, grouped by the upload they came in with."""
+    every = _alerts_all()
+    live = [a for a in every if not a["seen"] and not a["tracked"]]
+    groups = {}
+    for a in live:
+        groups.setdefault((mill_key(a["supplier"]), a["upload"]), []).append(a)
+    count = {k: sum(1 for a in live if k in a["kinds"]) for k in ALERT_KINDS}
+    return {"count": len(live), "kinds": ALERT_KINDS, "by_kind": count,
+            "above_money": round(sum(f["money"] for a in live for f in a["flags"] if f["kind"] == "above")),
+            "sums_money": round(sum(f["money"] for a in live for f in a["flags"] if f["kind"] == "sums")),
+            "groups": [{"supplier": v[0]["supplier"], "mill": k[0], "upload": k[1], "rows": sorted(v, key=lambda a: -a["money"])} for k, v in groups.items()],
+            "ids": {a["id"]: a["kinds"] for a in live},
+            "seen": sum(1 for a in every if a["seen"] and not a["tracked"]), "tracked": sum(1 for a in every if a["tracked"])}
+
+
+@app.post("/api/alerts/seen")
+def alerts_seen(payload: dict = Body(...)):
+    """Mark alerts seen (ids), or bring every seen alert back (restore: true). Shared: seen by one is seen by all."""
+    seen = set() if payload.get("restore") else _seen() | {str(i) for i in payload.get("ids") or []}
+    os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
+    tmp = SEEN_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf8") as f:
+        json.dump(sorted(seen), f)
+    os.replace(tmp, SEEN_PATH)
+    return alerts()
 
 
 @app.post("/api/list/download")
