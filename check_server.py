@@ -246,7 +246,7 @@ def main():
         tpl = c.get("/api/costsheet/template")
         check("Cost sheet template downloads", tpl.status_code == 200 and tpl.content[:2] == b"PK")
         cs = pd.read_excel(io.BytesIO(tpl.content), sheet_name="Cost sheet")
-        cs.loc[0, "Overhead %"] = 6
+        cs.loc[0, "Overhead %"] = 6; cs.loc[0, "Mill"] = "Mill A"
         cs2 = cs.copy(); cs2["Mill"] = "Mill B"; cs2.loc[0, "Overhead %"] = 8
         cs3 = cs.copy(); cs3["Mill"] = "Mill C"; cs3.loc[0, "Route"] = "Piece Dyed"; cs3.loc[0, "Weave"] = "Satin"; cs3.loc[0, "Yarn dyeing Rs/kg"] = None
         cs3.loc[0, "Piece dyeing Rs/kg greige"] = 175
@@ -267,7 +267,21 @@ def main():
         check("Cost sheet: an applied draft changes that rate only, with its basis and a dated backup",
               ap.get("backup", "").startswith("Rate_Master before mill cost sheet") and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
               and row[cd["columns"].index("Basis")].startswith("Mill cost sheet"))
-        c.post("/api/costsheet/remove", json={"ids": [r["id"] for r in v["rows"]]})
+        frac = cs.copy().astype(object); frac.loc[0, "Mill"] = "Mill D"; frac.loc[0, "Fabric code"] = "D-1"; frac.loc[0, "Margin %"] = 0.08; frac.loc[0, "Weaving Rs/pick"] = 45
+        rd = costsheet.analyse(costsheet.read(frac))["rows"][0]
+        check("Cost sheet: 0.08 read as 8%, a weaving rate in paise is not used", any("read as 8%" in x for x in rd["notes"]) and any("paise" in x for x in rd["notes"]))
+        again = c.post("/api/costsheet/upload", files={"file": ("cs.xlsx", io.BytesIO(buf.getvalue()))}).json()
+        check("Cost sheet: a mill's sheet sent again takes the place of its rows", again.get("replaced") == 3 and len(c.get("/api/costsheet").json()["rows"]) == 3)
+        newrow = next((x for x in c.get("/api/costsheet").json()["drafts"] if x["table"] == "Class_Defaults" and "new row" in x["label"]), None)
+        if newrow:
+            c.post("/api/costsheet/apply", json={"ids": [newrow["id"]]})
+            cd2 = c.get("/api/table/Class_Defaults").json()
+            nr = next(r for r in cd2["rows"] if r[0] == newrow["match"]["Weave group"] and r[1] == newrow["match"]["Route"])
+        check("Cost sheet: a new row of wastage, overhead and margin stays marked Placeholder, naming what came from a mill",
+              newrow is not None and str(nr[cd2["columns"].index("Basis")]).startswith("Placeholder") and "Mill C" in str(nr[cd2["columns"].index("Basis")]))
+        after = c.get("/api/costsheet").json()
+        check("Cost sheet: once applied, the same sheets draft nothing for that rate", not any(x["id"] == d["id"] for x in after["drafts"]))
+        c.post("/api/costsheet/remove", json={"ids": [r["id"] for r in after["rows"]]})
 
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"

@@ -13,6 +13,7 @@ weaving, dyeing and finishing rates, its wastage, overhead and margin, and its p
 Nothing here changes a rate. apply() does, only for the drafts GP ticks, after a dated backup.
 """
 import datetime as dt
+import re
 import statistics
 
 import pandas as pd
@@ -22,25 +23,25 @@ import masters
 
 # column, the engine input it replaces, unit, what it is
 COLUMNS = [
-    ("Mill", None, "", "Name of the mill"),
+    ("Mill", None, "", "Name of the mill (the same name on every sheet from that mill)"),
     ("Fabric code", None, "", "The mill's or your code"),
-    ("Route", None, "", "Yarn Dyed, Piece Dyed, RFD / Bleached or Printed"),
-    ("Weave", None, "", "As on the weave list (Plain, Twill-2/1, Dobby, ...)"),
-    ("Warp yarn", None, "", "As in the yarn master (Cotton 40S, ...)"),
-    ("Weft yarn", None, "", "As in the yarn master"),
+    ("Route", None, "", "Yarn Dyed, Piece Dyed, RFD / Bleached or Printed (sheet Lists)"),
+    ("Weave", None, "", "One of the weaves on sheet Lists"),
+    ("Warp yarn", None, "", "One of the yarns on sheet Lists"),
+    ("Weft yarn", None, "", "One of the yarns on sheet Lists; blank = the warp yarn"),
     ("EPI", None, "", "Ends per inch"),
     ("PPI", None, "", "Picks per inch"),
     ("Finished width (in)", None, "", "Inches"),
-    ("Finish", None, "", "As on the finish list; blank = Normal"),
+    ("Finish", None, "", "One of the finishes on sheet Lists; blank = Normal"),
     ("Shade", None, "", "Light, Medium or Dark; blank = Medium"),
     ("Warp yarn Rs/kg", "warp_rate", "Rs/kg", "The mill's price of the warp yarn"),
     ("Weft yarn Rs/kg", "weft_rate", "Rs/kg", "The mill's price of the weft yarn"),
     ("Sizing Rs/kg warp", "sizing_rate", "Rs/kg", ""),
-    ("Weaving Rs/pick", "weaving_rate", "Rs/pick", "Per pick per metre"),
+    ("Weaving Rs/pick", "weaving_rate", "Rs/pick", "Rupees (not paise) per pick per inch of cloth, per metre: 0.32, not 32"),
     ("Yarn dyeing Rs/kg", "yarn_dye", "Rs/kg", "Yarn dyed only"),
     ("Piece dyeing Rs/kg greige", "piece_dye_rate", "Rs/kg", "Piece dyed, printed or bleached only"),
     ("Finishing Rs/kg greige", "finishing_rate", "Rs/kg", ""),
-    ("Process wastage %", "process_wastage", "%", "Losses in dyeing and finishing"),
+    ("Process wastage %", "process_wastage", "%", "Losses in dyeing and finishing; 3 for 3% (a cell formatted as % also works)"),
     ("Overhead %", "overhead", "%", "Mill overhead"),
     ("Margin %", "margin", "%", "Mill margin"),
     ("Mill's price Rs/m", None, "Rs/m", "The ex-mill price the sheet arrives at"),
@@ -58,11 +59,17 @@ def template():
           "Weft yarn": "Cotton 40S", "EPI": 132, "PPI": 84, "Finished width (in)": 58, "Finish": "Normal", "Shade": "Medium",
           "Warp yarn Rs/kg": i["warp_rate"], "Weft yarn Rs/kg": i["weft_rate"], "Sizing Rs/kg warp": i["sizing_rate"],
           "Weaving Rs/pick": i["weaving_rate"], "Yarn dyeing Rs/kg": i["warp_dye"], "Piece dyeing Rs/kg greige": None,
-          "Finishing Rs/kg greige": i["finishing_rate"], "Process wastage %": i["process_wastage"] * 100,
-          "Overhead %": i["overhead"] * 100, "Margin %": i["margin"] * 100, "Mill's price Rs/m": None}
+          "Finishing Rs/kg greige": i["finishing_rate"], "Process wastage %": round(i["process_wastage"] * 100, 2),
+          "Overhead %": round(i["overhead"] * 100, 2), "Margin %": round(i["margin"] * 100, 2), "Mill's price Rs/m": None}
     # the example's price is what its own figures give, on the choices the template carries
     ex["Mill's price Rs/m"] = round(masters.cost(_choices(ex), m)["total_per_m"], 2)
-    return pd.DataFrame([ex], columns=[c for c, *_ in COLUMNS]), pd.DataFrame([(c, u, d) for c, _, u, d in COLUMNS], columns=["Column", "Unit", "What it is"])
+    L = masters.lists(m)
+    names = {"Route": masters.ROUTES, "Weave": L["Weave"], "Yarn (warp or weft)": list(m["Yarn_Rates"]["Yarn key"]),
+             "Finish": L["Finish"], "Shade": ["Light", "Medium", "Dark"]}
+    width = max(len(v) for v in names.values())
+    lists = pd.DataFrame({k: list(v) + [None] * (width - len(v)) for k, v in names.items()})
+    return (pd.DataFrame([ex], columns=[c for c, *_ in COLUMNS]),
+            pd.DataFrame([(c, u, d) for c, _, u, d in COLUMNS], columns=["Column", "Unit", "What it is"]), lists)
 
 
 def _num(v):
@@ -70,6 +77,30 @@ def _num(v):
         return None if v is None or v == "" or (isinstance(v, float) and v != v) else float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _figure(v):
+    """A figure as typed on a sheet: 345, '345', 'Rs 345', '1,200', '7%'. (number, problem)."""
+    if v is None or (isinstance(v, float) and v != v) or (isinstance(v, str) and not v.strip()):
+        return None, None
+    if isinstance(v, (int, float)):
+        return float(v), None
+    t = re.sub(r"(?i)rs\.?|inr|/kg|/m|,|\s", "", str(v)).rstrip("%")
+    try:
+        return float(t), None
+    except ValueError:
+        return None, f"'{v}' is not a number"
+
+
+# what a mill's figure can plausibly be (in the units of the template); outside, it is shown but not drafted
+RANGE = {"warp_rate": (40, 4000), "weft_rate": (40, 4000), "sizing_rate": (0, 300), "weaving_rate": (0.02, 5),
+         "yarn_dye": (0, 1000), "piece_dye_rate": (0, 1000), "finishing_rate": (0, 600),
+         "process_wastage": (0, 0.4), "overhead": (0, 0.4), "margin": (0, 0.4)}
+# who a rate master figure is used for, in words
+SCOPE = {"Yarn_Rates": "every fabric with this yarn, and the yarn master", "Weaving_Rates": "every fabric of this weave group and route",
+         "Sizing_Rates": "every fabric of this route type and warp count band", "Yarn_Dyeing": "every yarn-dyed fabric of this shade",
+         "Piece_Dyeing": "every fabric of this route and shade", "Finishing_Rates": "every fabric with this finish on these routes",
+         "Class_Defaults": "every fabric of this weave group and route"}
 
 
 def is_cost_sheet(df):
@@ -87,6 +118,14 @@ def read(df):
     return rows
 
 
+def _match(v, options):
+    """The list's own spelling of v, ignoring case and spaces; None when it is not on the list."""
+    if v is None or str(v).strip() == "":
+        return None
+    norm = lambda x: re.sub(r"\s+", " ", str(x)).strip().lower()
+    return next((o for o in options if norm(o) == norm(v)), None)
+
+
 def _choices(r):
     sel = {"Fabric code": r.get("Fabric code"), "Route": r.get("Route"), "Weave": r.get("Weave"), "Warp yarn": r.get("Warp yarn"),
            "Weft yarn": r.get("Weft yarn") or r.get("Warp yarn"), "EPI": _num(r.get("EPI")), "PPI": _num(r.get("PPI")),
@@ -99,14 +138,46 @@ def _choices(r):
     return {k: v for k, v in sel.items() if v not in (None, "")}
 
 
+def _check_names(r, m):
+    """Every name on a row that is not on the tool's lists (all of them, not only the first)."""
+    L, problems, fixed = masters.lists(m), [], dict(r)
+    for col, options in (("Route", masters.ROUTES), ("Weave", L["Weave"]), ("Warp yarn", list(m["Yarn_Rates"]["Yarn key"])),
+                         ("Weft yarn", list(m["Yarn_Rates"]["Yarn key"])), ("Finish", L["Finish"]), ("Shade", ["Light", "Medium", "Dark"])):
+        v = r.get(col)
+        if v is None or str(v).strip() == "":
+            if col in ("Route", "Weave", "Warp yarn"):
+                problems.append(f"{col} is blank")
+            continue
+        hit = _match(v, options)
+        if hit:
+            fixed[col] = hit
+        else:
+            problems.append(f"{col.lower()} '{v}' is not on the tool's list")
+    for col in ("EPI", "PPI", "Finished width (in)"):
+        if not (_num(r.get(col)) or 0) > 0:
+            problems.append(f"{col} is blank or not a number")
+    return fixed, problems
+
+
 def analyse(rows, m=None):
-    """Each row set beside the rate master, and the drafts that follow from all of them."""
+    """Each row set beside the rate master, and the drafts that follow from all of them.
+
+    A draft is the median of every row that gives a figure for that rate, those that agree with the
+    rate master included, so a draft does not lean away from the master and does not reverse once
+    applied. A rate counts each row once (a yarn used as warp and weft is one figure)."""
     m = m or masters.load()
     group = dict(zip(m["Weaves"]["Weave"], m["Weaves"]["Weave group"]))
     out, drafts = [], {}
     for n, r in enumerate(rows):
+        r, problems = _check_names(r, m)
+        mill = (str(r.get("Mill")).strip() if r.get("Mill") else "") or "unnamed mill"
+        item = {"n": n, "mill": mill, "code": r.get("Fabric code"), "row": r, "problems": problems, "figures": [], "notes": []}
+        if not r.get("Mill"):
+            item["notes"].append("no mill is named on this row")
+        if problems:
+            out.append(item)
+            continue
         sel = _choices(r)
-        item = {"n": n, "mill": r.get("Mill"), "code": r.get("Fabric code"), "row": r, "problems": [], "figures": []}
         try:
             inp, used = masters.resolve(sel, m)
         except Exception as e:
@@ -120,39 +191,53 @@ def analyse(rows, m=None):
         hit = cd[(cd["Weave group"] == key_cd[0]) & (cd["Route"] == key_cd[1])]
         cd_row = hit.iloc[0] if len(hit) else cd[cd["Weave group"] == "Default"].iloc[0]
         adds = {"overhead": inp["overhead"] - float(cd_row["Overhead"]), "margin": inp["margin"] - float(cd_row["Margin"])}
-        mine = dict(inp)
+        mine, seen = dict(inp), set()
         for col, key, unit in FIGURES:
-            v = _num(r.get(col))
+            v, bad = _figure(r.get(col))
+            if bad:
+                item["notes"].append(f"{col}: {bad}, so it is left out")
             if v is None:
                 continue
-            v = v / 100 if key in PCT else v
-            if key == "yarn_dye":
-                now, keys = inp["warp_dye"], [("warp_dye", v), ("weft_dye", v)]
-            else:
-                now, keys = inp[key], [(key, v)]
             if (key == "piece_dye_rate" and sel["Route"] == "Yarn Dyed") or (key == "yarn_dye" and sel["Route"] != "Yarn Dyed"):
-                continue                                 # a figure the route does not use
-            for k, val in keys:
-                mine[k] = val + (adds.get(k, 0.0))      # the mill's overhead and margin are totals: slab and tier adds are in them
+                item["notes"].append(f"{col} is not used for {sel['Route'].lower()} fabrics, so it is left out")
+                continue
+            if key in PCT:
+                if 0 < v < 1:                            # 0.08, or 8% typed in Excel: a fraction
+                    item["notes"].append(f"{col} {v:g} read as {v * 100:g}%")
+                else:
+                    v = v / 100
+            lo, hi = RANGE[key]
+            if not lo <= v <= hi:
+                hint = " (it looks like paise: enter rupees per pick, e.g. 0.32)" if key == "weaving_rate" and 5 < v <= 500 else ""
+                item["notes"].append(f"{col} {v * 100 if key in PCT else v:g} is outside what a mill charges{hint}; it is shown but not used")
+                item["figures"].append({"column": col, "unit": unit, "mill": v, "now": None, "basis": "", "target": None, "ignored": True})
+                continue
+            now = inp["warp_dye"] if key == "yarn_dye" else inp[key]
+            for k in (("warp_dye", "weft_dye") if key == "yarn_dye" else (key,)):
+                mine[k] = v + adds.get(k, 0.0)            # the mill's overhead and margin are totals: slab and tier adds are in them
             target = _target(key, sel, inp, m, group, used, basis, key_cd, cd_row)
             fig = {"column": col, "unit": unit, "mill": v, "now": now if key not in adds else now - adds[key],
                    "basis": target["basis"] if target else "", "target": target["label"] if target else None}
             item["figures"].append(fig)
-            if target and abs(fig["mill"] - fig["now"]) > (0.0005 if key in PCT else 0.005):
-                d = drafts.setdefault(target["id"], dict(target, values=[], rows=[]))
+            if target and (target["id"], n) not in seen:
+                seen.add((target["id"], n))
+                d = drafts.setdefault(target["id"], dict(target, values=[], rows=[], mills=[]))
                 d["values"].append(v)
-                d["rows"].append(f"{r.get('Mill') or ''} {r.get('Fabric code') or ''}".strip())
-        for k in adds:                                   # keep the adds when the sheet gives no figure
-            mine.setdefault(k, inp[k])
+                d["rows"].append(f"{mill} {r.get('Fabric code') or ''}".strip())
+                d["mills"].append(mill)
         own = engine.compute(mine)
-        price = _num(r.get("Mill's price Rs/m"))
+        price, _ = _figure(r.get("Mill's price Rs/m"))
         item.update(should=res["total_per_m"], own=own["total_per_m"], price=price,
                     own_gap=None if price is None else price - own["total_per_m"], placeholders=[u["Item"] for u in used if str(u["Basis"]).startswith("Placeholder")])
         out.append(item)
+    kept = []
     for d in drafts.values():
         d["proposed"] = round(statistics.median(d["values"]), 4)
         d["sheets"] = len(d["values"])
-    return {"rows": out, "drafts": sorted(drafts.values(), key=lambda d: (d["table"], d["label"]))}
+        d["scope"] = SCOPE.get(d["table"], "")
+        if abs(d["proposed"] - d["now"]) > (0.00005 if d["pct"] else 0.0005):   # a draft that changes nothing is not shown
+            kept.append(d)
+    return {"rows": out, "drafts": sorted(kept, key=lambda d: (d["table"], d["label"]))}
 
 
 def _target(key, sel, inp, m, group, used, basis, key_cd, cd_row):
@@ -212,13 +297,17 @@ def _target(key, sel, inp, m, group, used, basis, key_cd, cd_row):
     return None
 
 
-def apply(m, drafts, chosen, mills):
-    """Write the chosen drafts into the rate master held in memory. Returns what changed."""
-    basis = f"Mill cost sheet, {', '.join(sorted(mills))}, {dt.date.today():%d %b %Y}"
+def apply(m, drafts, chosen, mills=None):
+    """Write the chosen drafts into the rate master held in memory. Returns what changed.
+    Each rate's Basis names the mills behind that draft. A row of wastage, overhead and margin that was
+    a placeholder (or is new, copied from the placeholder Default row) stays marked Placeholder, with
+    the columns that now come from mills named, so the tool keeps warning about the rest."""
+    today = f"{dt.date.today():%d %b %Y}"
     log = []
     for d in drafts:
         if d["id"] not in chosen:
             continue
+        src = f"mill cost sheet ({', '.join(sorted(set(d.get('mills') or ['unnamed mill'])))}), {today}"
         t = m[d["table"]].copy()
         mask = pd.Series(True, index=t.index)
         for c, v in d["match"].items():
@@ -228,12 +317,21 @@ def apply(m, drafts, chosen, mills):
                 continue
             base = t[t["Weave group"] == "Default"].iloc[0].to_dict()
             base.update(d["match"])
+            base["Basis"] = "Placeholder: copied from the Default row"
             t = pd.concat([t, pd.DataFrame([base])], ignore_index=True)
             mask = pd.Series(False, index=t.index)
             mask.iloc[-1] = True
         t.loc[mask, d["col"]] = d["proposed"]
         if "Basis" in t.columns:
-            t.loc[mask, "Basis"] = basis
+            old = str(t.loc[mask, "Basis"].iloc[0])
+            if d["table"] == "Class_Defaults" and old.startswith("Placeholder"):
+                t.loc[mask, "Basis"] = re.sub(r"; from .*$", "", old) + "; from " + "; ".join(
+                    [x for x in re.findall(r"; from (.*)$", old)[:1]] + [f"{d['col']} {src}"])
+            else:
+                t.loc[mask, "Basis"] = f"Mill cost sheet: {src}"
+        if d["table"] == "Yarn_Rates" and "Rate date" in t.columns:
+            t.loc[mask, "Rate date"] = dt.date.today().isoformat()
         m[d["table"]] = t
-        log.append(f"{d['label']}: {d['now']:g} -> {d['proposed']:g}")
+        show = (lambda v: f"{v * 100:.1f}%") if d["pct"] else (lambda v: f"{v:g}")
+        log.append(f"{d['label']}: {show(d['now'])} to {show(d['proposed'])}")
     return log

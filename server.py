@@ -980,11 +980,12 @@ def _save_sheets(rows):
 
 @app.get("/api/costsheet/template")
 def costsheet_template():
-    rows, about = costsheet.template()
+    rows, about, lists = costsheet.template()
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         rows.to_excel(xw, sheet_name="Cost sheet", index=False)
         about.to_excel(xw, sheet_name="Columns", index=False)
+        lists.to_excel(xw, sheet_name="Lists", index=False)
     return Response(buf.getvalue(), media_type=XLSX, headers={"Content-Disposition": 'attachment; filename="RightPrice mill cost sheet.xlsx"'})
 
 
@@ -994,7 +995,7 @@ def costsheet_view():
     rows = _sheets()
     a = costsheet.analyse(rows, get_masters()) if rows else {"rows": [], "drafts": []}
     for item, r in zip(a["rows"], rows):
-        item["id"], item["added"] = r.get("_id"), r.get("_added")
+        item["id"], item["added"], item["upload"] = r.get("_id"), r.get("_added"), r.get("_upload")
     # numbers read from the rate master arrive as numpy types: plain ones for JSON
     return Response(json.dumps(a, default=lambda o: o.item() if hasattr(o, "item") else str(o)), media_type="application/json")
 
@@ -1003,28 +1004,33 @@ def costsheet_view():
 async def costsheet_upload(file: UploadFile = File(...)):
     try:
         book = pd.read_excel(io.BytesIO(await file.read()), sheet_name=None)
-    except Exception as e:
-        raise HTTPException(400, f"Could not read this file as an Excel workbook: {e}")
+    except Exception:
+        raise HTTPException(400, "This file is not an Excel workbook (.xlsx). Save the mill's sheet as Excel and upload it again")
     sheet = next((df for df in book.values() if costsheet.is_cost_sheet(df)), None)
     if sheet is None:
         raise HTTPException(400, "No sheet in this file has the cost sheet headings (Mill, Route, Weave, EPI, PPI, Overhead %, Margin %). "
                                  "Download the template and fill it in")
-    new = costsheet.read(sheet)
+    new = [r for r in costsheet.read(sheet) if str(r.get("Mill") or "").strip() != "Example mill"]   # the template's example is not a mill
     if not new:
-        raise HTTPException(400, "The sheet has the right headings but no rows")
+        raise HTTPException(400, "The sheet has the right headings but no rows (the template's example row is not counted)")
     now = dt.datetime.now()
+    upload = f"{file.filename or 'sheet'}, {now:%d %b %H:%M}"
+    key = lambda r: (str(r.get("Mill") or "").strip().lower(), str(r.get("Fabric code") or "").strip().lower())
+    fresh = {key(r) for r in new if str(r.get("Fabric code") or "").strip()}
     rows = _sheets()
+    keep = [r for r in rows if key(r) not in fresh]      # a mill's sheet sent again takes the place of its earlier rows
     for n, r in enumerate(new):
-        r["_id"], r["_added"] = f"{now:%Y%m%d%H%M%S%f}{n:04d}", now.date().isoformat()
-    _save_sheets(rows + new)
-    return {"added": len(new)}
+        r["_id"], r["_added"], r["_upload"] = f"{now:%Y%m%d%H%M%S%f}{n:04d}", now.date().isoformat(), upload
+    _save_sheets(keep + new)
+    a = costsheet.analyse(new, get_masters())
+    return {"added": len(new), "replaced": len(rows) - len(keep), "not_read": sum(1 for x in a["rows"] if x["problems"])}
 
 
 @app.post("/api/costsheet/remove")
 def costsheet_remove(payload: dict = Body(...)):
-    ids = {str(i) for i in payload.get("ids") or []}
+    ids, upload = {str(i) for i in payload.get("ids") or []}, payload.get("upload")
     rows = _sheets()
-    keep = [r for r in rows if str(r.get("_id")) not in ids]
+    keep = [r for r in rows if str(r.get("_id")) not in ids and not (upload and r.get("_upload") == upload)]
     _save_sheets(keep)
     return {"removed": len(rows) - len(keep)}
 
@@ -1045,15 +1051,14 @@ def costsheet_apply(payload: dict = Body(...)):
     backup = masters.MASTER_PATH.replace(".xlsx", f" before mill cost sheet {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
     shutil.copyfile(masters.MASTER_PATH, backup)
     m2 = {k: v.copy() for k, v in m.items()}
-    mills = {str(r.get("Mill") or "mill") for r in rows}
-    log = costsheet.apply(m2, picked, chosen, mills)
+    log = costsheet.apply(m2, picked, chosen)
     try:
         masters.cost(dict(masters.EXAMPLE_ROW), m2)        # the rate master must still cost a fabric
     except Exception as e:
         raise HTTPException(400, f"Not applied: the rate master would no longer cost the example fabric ({e})")
     save_masters(m2)
     _briefs.update(key=None)
-    return {"applied": log, "backup": os.path.basename(backup)}
+    return {"applied": log, "backup": os.path.basename(backup), "folder": os.path.dirname(masters.MASTER_PATH)}
 
 
 @app.post("/api/list/download")
