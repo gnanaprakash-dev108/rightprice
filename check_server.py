@@ -550,6 +550,19 @@ def main():
               and ok_["now"]["steps"][0]["note"].endswith("(recorded through the AI assistant)") and ok_["warnings_on_this_step"] == [], str(ok_)[:300])
         slip = call("record_tracker_step", key=qk, kind="Our counter", price_per_m=199, date="2026-11-21")
         undo = call("remove_my_tracker_step", key=qk, kind="Our counter", price_per_m=199)
+        early = call("record_tracker_step", key=qk, kind="Mill's revised quote", price_per_m=150, date="2026-11-10")
+        above = call("record_tracker_step", key=qk, kind="Agreed", price_per_m=250, date="2026-11-22")
+        check("MCP: a step dated before the first quote, and an agreement above the mill's price, are refused",
+              "before the mill's first quote" in early.get("error", "") and "above the mill's latest price" in above.get("error", "")
+              and len(call("tracker_steps", key=qk)["steps"]) == 1, str(early)[:200] + str(above)[:200])
+        call("record_tracker_step", key=qk, kind="Our counter", price_per_m=172, date="2026-11-21")
+        keep_first = call("remove_my_tracker_step", key=qk, kind="Mill's quote", price_per_m=185)
+        call("remove_my_tracker_step", key=qk, kind="Our counter", price_per_m=172)
+        check("MCP: the first quote cannot be removed while later steps rest on it; a stream cannot be opened on the endpoint",
+              "first quote" in keep_first.get("error", "") and len(call("tracker_steps", key=qk)["steps"]) == 1
+              and c.get("/mcp", headers=hd).status_code == 405 and c.delete("/mcp", headers=hd).status_code == 405)
+        check("MCP: a typed number that is not a number is refused", "plain positive numbers" in call("cost_fabric", choices=dict(ex, **{"Order quantity (m)": "5,000"})).get("error", "")
+              and "plain positive numbers" in call("cost_fabric", choices=dict(ex, **{"Quoted price (Rs/m)": "inf"})).get("error", ""))
         check("MCP: a warning on the step just recorded is passed back, and the assistant can undo its own step",
               any("above the mill's price" in w for w in slip["warnings_on_this_step"]) and undo.get("removed") is True and len(undo["now"]["steps"]) == 1
               and call("find_fabrics", search="Q-4", source="Fabric list")["fabrics"][0]["tracker"]["mill_latest_per_m"] == 185)

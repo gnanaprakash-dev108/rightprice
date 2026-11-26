@@ -115,6 +115,9 @@ class McpGate:
         auth = dict(scope.get("headers") or []).get(b"authorization", b"").decode("latin1")
         if not mcp_server.allowed(auth):
             return await answer(401, {"detail": "A token is needed: send the header Authorization: Bearer <token>."}, [(b"www-authenticate", b"Bearer")])
+        if path != "/mcp/health" and scope.get("method") != "POST":
+            # one JSON answer per POST and no sessions: there is no stream to open and nothing to delete
+            return await answer(405, {"detail": "The MCP endpoint takes POST requests only."}, [(b"allow", b"POST")])
         if path == "/mcp/health":
             return await answer(200, {"ok": True, "app": "RightPrice", "code": _code_version(), "rate_master_changed": _mtime(masters.MASTER_PATH),
                                       "tools": len(await mcp_server.mcp.list_tools())})
