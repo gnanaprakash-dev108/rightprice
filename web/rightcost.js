@@ -816,15 +816,16 @@ function draftDialog(scope, title, millKey) {
       const d = await res.json(); if (!res.ok) throw new Error(d.detail || res.statusText);
       const subj = h("input", { type: "text", value: d.subject, "aria-label": "Subject" }), mail = h("textarea", { rows: "12", "aria-label": "E-mail" }), wa = h("textarea", { rows: "4", "aria-label": "WhatsApp message" });
       mail.value = d.email; wa.value = d.whatsapp;
-      [subj, mail, wa].forEach(el => el.addEventListener("input", () => { dirty = true; }));
+      [subj, mail, wa].forEach(el => el.addEventListener("input", () => { dirty = true; if (armed) { armed = false; go.textContent = "Write another"; } }));
       fill(out, h("p", { class: "draftnote" + (d.source === "claude" ? "" : " warn") }, d.note),
         h("p", { class: "muted" }, `To ${d.mill}, about ${d.fabrics.join(", ")}.`,
-          d.left_out.length ? ` Left for a second message (one stays readable with at most 12 fabrics): ${d.left_out.join(", ")}.` : "",
+          d.left_out.length ? ` Left for a second message (one stays readable with at most 12 fabrics): ${d.left_out.length > 12 ? d.left_out.length + " more fabrics; tick the ones you want in Right cost and draft on those" : d.left_out.join(", ")}.` : "",
           d.skipped.length ? " Not in this message: " + d.skipped.map(x => `${x.code} (${x.why})`).join("; ") + "." : ""),
+        d.adjusted.length ? h("p", { class: "muted" }, "What is asked differs by fabric: " + d.adjusted.join("; ") + ".") : null,
         h("label", {}, "Subject", subj), h("label", {}, "E-mail, for the mill (edit it here before copying)", mail), h("div", { class: "acts2" }, copy(mail, "E-mail"), copy(subj, "Subject")),
         h("label", {}, "WhatsApp, for the mill", wa), h("div", { class: "acts2" }, copy(wa, "WhatsApp")),
         h("div", { class: "mynotes" }, h("b", {}, "Your notes, not for the mill"), h("p", { class: "muted", style: "margin:2px 0 6px" }, "The working behind this message. It is never copied. It may name figures you would not show a mill (the top of your range, your counter)."),
-          h("ul", {}, d.notes.flatMap(n => n.points.map(pt => h("li", {}, pt))))));
+          h("ul", {}, d.notes.map(pt => h("li", {}, pt)))));
       go.textContent = d.source === "claude" ? "Write another (a fresh draft)" : "Fill the template again";
     } catch (e) { fill(out, h("p", { class: "draftnote warn" }, e.message)); go.textContent = "Write the draft"; }
     go.disabled = false;

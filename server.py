@@ -1529,7 +1529,9 @@ def supplier(mill: str):
                     q_row = {"code": r["code"], "stance": "check" if b["implausible"] else b["stance"], "quote": b["quote"], "should": b["should"],
                              "gap": b["gap"], "gap_pct": b["gap_pct"], "upper": b["settle_up_to"], "above_band": b["above_band"], "sums": [],
                              "own_gap": None, "own_price": None, "quantity": row["metres"], "mill": {}, "from_mill": False, "inputs": row["choices"], "notes": []}
-                    qs_ = _questions(q_row, b, m) if b["stance"] != "fair" else [f"{r['code']} is now inside its usual range (up to Rs {_inr(b['settle_up_to'])}): close it" + (f" at or near our counter of Rs {_inr(ng['counter'])}." if ng["counter"] is not None else ".")]
+                    qs_ = _questions(q_row, b, m) if b["stance"] != "fair" else [f"{r['code']} is now inside its usual range (up to Rs {_inr(b['settle_up_to'])}): close it" + (
+                        f" at the mill's Rs {_inr(b['quote'])}, which is at or below our counter of Rs {_inr(ng['counter'])}." if ng["counter"] is not None and b["quote"] <= ng["counter"] + 0.005
+                        else f" at or near our counter of Rs {_inr(ng['counter'])}." if ng["counter"] is not None else ".")]
                     quoted_q += [{"code": r["code"], "text": (lead if n == 0 else "") + q} for n, q in enumerate(x.replace(f"{r['code']}: hold our", "Hold our") for x in _hold_counter(qs_, ng, b, r["code"]))]
                     if r["own_price"] is not None and b["quote"] - r["own_price"] >= 0.01:      # its own build-up is below what it now asks
                         gap_ = round(b["quote"] - r["own_price"], 2)
@@ -1793,13 +1795,14 @@ def _draft_facts(payload):
             raise HTTPException(400, "A ticked fabric has no supplier on it (" + ", ".join(r["code"] for r in picked if not r["mill"]) + "), so there is no mill to write to. Untick it, or add its supplier.")
         mills = {r["mill"] for r in picked}
         if len(mills) > 1:
-            raise HTTPException(400, "The ticked fabrics are from more than one mill (" + "; ".join(sorted({r["supplier"] for r in picked})) + "). A message goes to one mill: tick fabrics of one mill.")
+            raise HTTPException(400, "The ticked fabrics are from more than one mill (" + "; ".join(f"{_mill_names([r for r in picked if r['mill'] == k])[0]}: {', '.join(r['code'] for r in picked if r['mill'] == k)}" for k in sorted(mills))
+                            + "). A message goes to one mill: tick fabrics of one mill.")
         mill, want = mills.pop(), {key_of(r) for r in picked}
     sp = supplier(mill)
     m = get_masters()
     full = {key_of(r): r for r in all_rows if r["mill"] == sp["key"]}
     own = {x["code"]: x for x in sp["sums"] if x.get("own_gap") is not None and x["own_gap"] >= 0.01}
-    items, skipped = [], []
+    items, skipped, adjusted = [], [], []
     for side, src in (("quoted", "Fabric list"), ("bought", "Purchase orders")):
         for r in sp[side]["rows"]:
             k = f"{src}|{r.get('id') or r['code']}"
@@ -1816,46 +1819,57 @@ def _draft_facts(payload):
                                     if r.get("tracked") == "Agreed" else "it is inside or below its usual range" if band in ("Fair", "Below") else "it is not costed" if band in ("Not costed", "No price")
                                     else "there is no point to raise on it"})
                 continue
-            purpose = "confirm_price" if band == "Check quote" else "breakup_only" if str(band).startswith("Ask break-up") else "next_order" if src == "Purchase orders" else "revise"
+            upper = round(round(r["should"], 2) * (1 + r["range"][1] / 100), 2) if r.get("should") is not None and r.get("range") else None
+            skip = None
+            if band == "Fair" and r["code"] not in {x["code"] for x in sp["sums"]}:
+                skip = "it is inside its usual range: close it on its Negotiation tab"
+            elif band == "Push" and upper is not None and r["price"] - upper < ALERT_MIN_ABOVE * r["should"]:
+                skip = "it is only paise above its usual range: not worth a message"
+            if skip:
+                if want is not None:
+                    skipped.append({"code": r["code"], "why": skip})
+                continue
+            purpose = ("confirm_price" if band == "Check quote" else "breakup_only" if str(band).startswith("Ask break-up") else "correct_sheet" if band == "Fair"
+                       else "confirm_spec" if band == "Below" else "next_order" if src == "Purchase orders" else "revise")
             counter = next((t["counter"] for t in sp["tracker"]["items"] if t["key"] == k and t["status"] != "Agreed"), None)
-            name = None         # the price to put to the mill
-            if purpose in ("revise", "next_order") and band == "Push":
-                cands = [counter] if counter is not None else []
-                if not cands:
-                    try:
-                        src_row = full.get(k) or {}
-                        res = masters.cost(dict(src_row["choices"], **{"Quoted price (Rs/m)": r["price"]}), m)
-                        bb = brief(res, m, r.get("metres"), (), src_row["choices"])
-                        if bb and bb["stance"] == "push":
-                            cands.append(bb["open_at"])
-                    except Exception:
-                        pass
-                    if r["code"] in own:
-                        cands.append(own[r["code"]]["own_price"])
+            built = own[r["code"]]["own_price"] if r["code"] in own and purpose == "revise" else None
+            # the only prices of ours a message names: a counter already made, or the mill's own build-up when that is lower.
+            # Never the top of our range, and never an opening figure dressed as "what our costing supports".
+            name, counter_named = None, False
+            if purpose == "revise":
+                cands = [c for c in (counter, built) if c is not None and c < r["price"] - 0.005]
                 name = round(min(cands), 2) if cands else None
+                counter_named = name is not None and counter is not None and abs(name - counter) < 0.005
+            said = {"breakup_only": "only the break-up is asked: the tool is unsure of this fabric, so no price is put to the mill",
+                    "confirm_price": "the mill is asked to confirm the price, not to revise it: it is far below our costing",
+                    "correct_sheet": "only a corrected sheet is asked: the price is inside its usual range",
+                    "confirm_spec": "the mill is asked to confirm the specification, not the price: the price is below its usual range",
+                    "next_order": "already bought: raised for the next order"}.get(purpose)
+            if said:
+                adjusted.append(f"{r['code']}: {said}")
             items.append({"code": r["code"], "description": r.get("description") or "", "quantity": _inr(r["metres"], 0) if r.get("metres") else None,
                           "price": None if r.get("price") is None else round(r["price"], 2), "purpose": purpose, "already_bought": src == "Purchase orders",
-                          "price_to_name": name, "our_counter": counter,
-                          "mills_own_build_up": own[r["code"]]["own_price"] if r["code"] in own and purpose == "revise" else None, "points": pts})
+                          "price_to_name": name, "our_counter": counter if counter_named else None, "mills_own_build_up": built, "points": pts})
     if want is None:        # a whole mill: the quotes in hand first, then at most three past purchases
         items = [i for i in items if i["purpose"] != "next_order"] + [i for i in items if i["purpose"] == "next_order"][:3]
     if not items:
         why = "; ".join(f"{x['code']}: {x['why']}" for x in skipped[:8])
-        raise HTTPException(400, "There is nothing to ask this mill about " + ("these fabrics" if want else "right now") + (f" ({why})." if why else
+        raise HTTPException(400, "There is nothing to ask this mill about " + (("this fabric" if len(want) == 1 else "these fabrics") if want else "right now") + (f" ({why})." if why else
                             ": every fabric is inside its usual range, already agreed, or has no point to raise."))
     ask = payload.get("ask") if payload.get("ask") in draft.ASKS else "both"
     clip = lambda v, d: (str(v or "").strip()[:60] or d)
     return {"writer": clip(payload.get("writer"), "[Your name]"), "contact": clip(payload.get("contact"), "[Name]"), "mill": sp["name"],
-            "ask": ask, "wants": draft.ASKS[ask], "items": items[:12], "left_out": [i["code"] for i in items[12:]], "skipped": skipped}
+            "ask": ask, "wants": draft.ASKS[ask], "items": items[:12], "left_out": [i["code"] for i in items[12:]], "skipped": skipped,
+            "adjusted": [a_ for a_ in adjusted if a_.split(":")[0] in {i["code"] for i in items[:12]}]}
 
 
 @app.post("/api/draft")
 def draft_message(payload: dict = Body(...)):
     """A fresh e-mail and WhatsApp draft to one mill, on the fabrics asked about. Editable, copied by the buyer, never sent."""
     facts = _draft_facts(payload)
-    out = draft.write({k: v for k, v in facts.items() if k not in ("skipped", "left_out")})
+    out = draft.write({k: v for k, v in facts.items() if k not in ("skipped", "left_out", "adjusted")})
     return dict(out, mill=facts["mill"], mill_key=mill_key(facts["mill"]), fabrics=[i["code"] for i in facts["items"]], left_out=facts["left_out"], skipped=facts["skipped"],
-                notes=[{"code": i["code"], "points": i["points"]} for i in facts["items"]], key_set=draft.available())
+                adjusted=facts["adjusted"], notes=list(dict.fromkeys(pt for i in facts["items"] for pt in i["points"])), key_set=draft.available())
 
 
 @app.post("/api/list/download")

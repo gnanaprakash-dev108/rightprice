@@ -112,6 +112,36 @@ rail item, as a column, filter and chip in Right cost, and on the fabric's Negot
   history are unchanged (`_state_key`, `_list_memo`, `_costs_memo` in `server.py`). Anything that changes rows it
   got from them must work on copies. Before this, pages polling every half minute cost 3 to 6 seconds each time.
 
+### E-mail drafting (26 Nov, pull request 20)
+
+"Draft a message to the mill" on a fabric's Negotiation tab, on a supplier page, and for the rows ticked in Right
+cost (one mill at a time): a subject, an e-mail and a WhatsApp-length message, edited and copied in the dialog.
+Nothing is sent by the tool. `draft.py` (the Claude call, the reply's layout, the fixed template) and
+`_draft_facts`, `/api/draft` in `server.py`.
+
+- Claude Opus 5.5 through the `anthropic` SDK (2.x), effort low, thinking left adaptive, the default server-side
+  fallback on (`betas=["server-side-fallback-2026-07-01"]`, `fallbacks="default"`): if the model declines, the API
+  re-runs the request on its fallback model. Only the fabrics asked about are sent, with their figures and points.
+- **No real draft from Claude has been seen.** The build session had no API key. The request is checked against
+  a stand-in for the SDK client; the first real call is on the live site once GP sets the app setting
+  `ANTHROPIC_API_KEY`. Without a key, on a refusal, a reply out of layout or any failure, a fixed template is
+  filled from the same figures and a note says why. **When a key exists, read several real drafts before trusting
+  them**: the rules below are enforced in the template and only *instructed* in the prompt.
+- What a message may tell the mill (`purpose` on each fabric): "revise" (too high: ask; name only a counter already
+  made, or the mill's own build-up when lower; with neither, name no price of ours), "breakup_only" (tool unsure:
+  only the break-up, no claim), "confirm_price" (far below should-cost), "correct_sheet" (in range, sums off),
+  "confirm_spec" (below range), "next_order" (already bought). Never the top of our range, never the should-cost,
+  never an opening figure.
+- The buyer's working ("Your notes, not for the mill") is shown beside the draft and is never copied. A ticked
+  fabric left out is named with the reason; a message carries at most 12 fabrics.
+- Two cold reviews (template drafts only). The second confirmed 8 of 11 fixes and found more, four on money; they
+  were fixed after it and checked by `check_server.py` and through the API by the build session, not by a third
+  reviewer.
+
+Left as they are: the Negotiation pack screen has no draft button (use the ticked rows in Right cost); two rows
+with one code share their notes; closing the dialog discards the draft; the dialog's title uses the row's spelling
+of the mill; agreed fabrics show no draft button and do not say why.
+
 ### Rules (unchanged; all nine hold)
 
 1. Work on a branch (`claude/sleepy-dirac-dknzrp`) and open a pull request. Never push to `main`:
@@ -132,7 +162,7 @@ rail item, as a column, filter and chip in Right cost, and on the fabric's Negot
    are his (use the select-an-option question form; GP prefers that). The build session cannot sign in
    to the live site: ask GP to confirm by eye.
 
-### What GP asked for on 26 Nov: five builds, one by one (1, 2 and 3 are done; 4 and 5 are next)
+### What GP asked for on 26 Nov: five builds, one by one (1 to 4 are done; 5 is next)
 
 1. **Negotiation tracker** (pull request 17, done). On each fabric's Negotiation tab in Right
    cost: record the mill's quote, our counter, revised quotes and the agreed price (date, note); what
@@ -147,7 +177,7 @@ rail item, as a column, filter and chip in Right cost, and on the fabric's Negot
 3. **Quote alerts** (pull request 19, done). When a mill sheet is uploaded (Bulk upload), flag at once every row priced above
    its usual range, with sums off, a repeated order, or a quote far below should-cost; show them first
    on the Dashboard and as a count on the Right cost rail item. No e-mail or push yet.
-4. **E-mail drafting with the Claude API**, "humanised, a fresh draft every time". From a fabric's
+4. **E-mail drafting with the Claude API** (pull request 20, done; no real draft seen yet), "humanised, a fresh draft every time". From a fabric's
    brief, a negotiation pack, or a supplier page: a short, polite e-mail (and a WhatsApp-length text)
    to the mill asking for the break-up or a revised price, with the figures from the tool, in GP's
    voice (plain, courteous, firm; Indian business English; no jargon). Editable before copying; never

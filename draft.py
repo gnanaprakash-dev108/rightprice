@@ -18,7 +18,9 @@ Write the way a seasoned buyer writes to a mill they will keep buying from: plai
 What you are given is a JSON object: who is writing, the mill, what the buyer wants from this message, and for each fabric its code, quantity, the mill's price, its "purpose", sometimes "price_to_name", and "points". The points are the buyer's private working, written for the buyer: use them to understand the case, and put to the mill only what a buyer would say aloud.
 
 What each purpose means:
-- "revise": a live quote that is too high. Ask for what the buyer wants. If price_to_name is given, that is the price to put to the mill (it is the buyer's own counter when our_counter is given: say "our counter of Rs ..."; otherwise say it is what our costing supports). If mills_own_build_up is given, the mill's own sheet adds up to that figure, less than it asks: say so plainly.
+- "revise": a live quote that is too high. Ask for what the buyer wants. If mills_own_build_up is given, the mill's own sheet adds up to that figure, less than it asks: say so plainly. If our_counter is given, the buyer has already countered at that price: say "our counter of Rs ..." stands. If neither is given, name no price of the buyer's at all: say the price is well above what our costing supports and ask the mill to revise it.
+- "correct_sheet": the price is acceptable but the mill's sheet does not add up. Ask only for a corrected sheet; say the price itself is not in question.
+- "confirm_spec": the price is on the low side. Ask the mill to confirm the yarn, the construction and the finish are as specified. Do not mention price.
 - "breakup_only": the buyer cannot judge this price yet. Ask only for the cost break-up (yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish, margin). Do not call the price high and do not name any price.
 - "confirm_price": the price looks too low to be right. Ask the mill to confirm it is per metre, for this construction and finish. Do not ask for a revised price on it.
 - Any fabric with already_bought true was bought at that price: speak of "the last order" and ask for the next order of the same cloth, never as a claim on the order already paid.
@@ -26,7 +28,7 @@ What each purpose means:
 
 Rules that matter more than style:
 - Use only the figures given. Do not add, round, average or infer any figure, date, name or fact. If a name is missing, write the bracketed placeholder exactly as given.
-- Never reveal a ceiling, a fallback, a range, or the highest price the buyer would accept. The only price of the buyer's you may name for a fabric is its price_to_name. If a point says "do not go above Rs ..." or "aim for Rs ...", that figure stays out of the message.
+- Never reveal a ceiling, a fallback, a range, or the highest price the buyer would accept. The only prices you may name for a fabric, besides the mill's own, are our_counter and mills_own_build_up when given. If a point says "do not go above Rs ..." or "aim for Rs ...", that figure stays out of the message.
 - Write rupees as "Rs 185.00" and metres as given.
 - Say "our costing" or "our working" for the buyer's figures. Never mention software, a tool, a model, AI, "should-cost" or "usual range".
 - Ask for a reply by a reasonable time without naming a date.
@@ -64,38 +66,45 @@ def template(facts):
     ask = "confirmation of the price" if confirm_only else ASKS["breakup"] if only_breakup else ASKS[facts["ask"]]
     qty = lambda i: f" ({i['quantity']} m)" if i.get("quantity") else ""
     rs = lambda v: f"Rs {v:,.2f}"
+    purposes = {i["purpose"] for i in items}
+    no_price = purposes <= {"confirm_price", "correct_sheet", "confirm_spec"}
+    only_breakup = only_breakup or purposes <= {"breakup_only", "confirm_price", "correct_sheet", "confirm_spec"}
+    ask = ("confirmation of the price" if confirm_only else "a corrected sheet" if purposes == {"correct_sheet"} else "confirmation of the specification" if purposes == {"confirm_spec"}
+           else "a few confirmations" if no_price else ASKS["breakup"] if only_breakup else ASKS[facts["ask"]])
     lines = [f"Dear {to},", ""]
-    if confirm_only:
-        lines.append(f"Before we take {codes} further, we need you to confirm the price.")
+    if len(purposes) > 1 or no_price:
+        lines.append(f"We have gone through {codes} and need the following from you.")
     elif all(i.get("already_bought") for i in items):
         lines.append(f"Before the next order of {codes}, we need {ask}.")
     else:
         lines.append(f"We have gone through your price for {codes} and need {ask} before we can take it further.")
     lines.append("")
+    breakup = "Please send the cost break-up: yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin."
     for i in items:
         p = i["purpose"]
         if p == "confirm_price":
             lines.append(f"{i['code']}{qty(i)}: please confirm that {rs(i['price'])} is the price per metre for this construction and finish.")
-        elif p == "breakup_only" and i.get("already_bought"):
-            lines.append(f"{i['code']}{qty(i)}: the last order was at {rs(i['price'])} a metre. Before the next order of this cloth, please send the cost break-up: yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin.")
-        elif p == "breakup_only" or (only_breakup and p == "revise"):
-            lines.append(f"{i['code']}{qty(i)}: your price is {rs(i['price'])} a metre. Please send the cost break-up: yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish and margin.")
-        elif p == "next_order":
-            lines.append(f"{i['code']}{qty(i)}: the last order was at {rs(i['price'])} a metre." + (f" For the next order our costing supports {rs(i['price_to_name'])}." if i.get("price_to_name") and not only_breakup else "")
-                         + " Please send the cost break-up for this cloth.")
+        elif p == "correct_sheet":
+            lines.append(f"{i['code']}{qty(i)}: the figures on your sheet for this do not agree with each other. Please send a corrected sheet. The price of {rs(i['price'])} itself is not in question.")
+        elif p == "confirm_spec":
+            lines.append(f"{i['code']}{qty(i)}: please confirm that the yarn, the construction and the finish are as specified.")
+        elif i.get("already_bought"):
+            lines.append(f"{i['code']}{qty(i)}: the last order was at {rs(i['price'])} a metre." + (" That is well above what our costing supports." if p == "next_order" else "") + f" Before the next order of this cloth: {breakup[0].lower()}{breakup[1:]}")
+        elif p == "breakup_only" or only_breakup:
+            lines.append(f"{i['code']}{qty(i)}: your price is {rs(i['price'])} a metre. {breakup}")
         else:
-            said = (f" Our counter is {rs(i['price_to_name'])}." if i.get("our_counter") is not None else f" Our costing supports {rs(i['price_to_name'])}.") if i.get("price_to_name") else ""
-            own = f" Your own sheet adds up to {rs(i['mills_own_build_up'])} for it." if i.get("mills_own_build_up") else ""
-            lines.append(f"{i['code']}{qty(i)}: your price is {rs(i['price'])} a metre.{own}{said}")
-    lines += ["", "Please reply at the earliest." if confirm_only or only_breakup else "Please reply at the earliest so that we can close the price.", "", "Regards,", who]
+            own = f" Your own sheet adds up to {rs(i['mills_own_build_up'])} for it." if i.get("mills_own_build_up") and i["mills_own_build_up"] < i["price"] else ""
+            said = f" Our counter of {rs(i['our_counter'])} stands." if i.get("our_counter") is not None else "" if own else " That is well above what our costing supports."
+            lines.append(f"{i['code']}{qty(i)}: your price is {rs(i['price'])} a metre.{own}{said}" + (" Please revise it." if facts["ask"] != "breakup" else ""))
+    lines += ["", "Please reply at the earliest." if only_breakup or no_price else "Please reply at the earliest so that we can close the price.", "", "Regards,", who]
     first = items[0]
     if confirm_only:
         wa = f"{to}, please confirm that {rs(first['price'])} for {first['code']} is per metre for this construction and finish" + (f" (and the same for {len(items) - 1} more, details by mail)" if len(items) > 1 else "") + f". Thank you. {who}"
     else:
-        named = first.get("price_to_name") if first["purpose"] == "revise" and not only_breakup else None
-        wa = (f"{to}, on {codes}: we need {ask} before {'the next order' if all(i.get('already_bought') for i in items) else 'we can go ahead'}."
-              + (f" For {first['code']} {'our counter is' if first.get('our_counter') is not None else 'our costing supports'} {rs(named)} against your {rs(first['price'])}." if named else "")
-              + f" Please reply when you can. Thank you. {who}")
+        c = first.get("our_counter") if first["purpose"] == "revise" and not only_breakup else None
+        wa = (f"{to}, on {codes}: we need {ask}" + ("" if no_price else f" before {'the next order' if all(i.get('already_bought') for i in items) else 'we can go ahead'}") + "."
+              + (f" For {first['code']} our counter of {rs(c)} stands against your {rs(first['price'])}." if c is not None else "")
+              + (" Details by mail." if len(items) > 1 else "") + f" Please reply when you can. Thank you. {who}")
     return {"subject": f"{codes}: request for {ask}", "email": "\n".join(lines), "whatsapp": wa}
 
 
@@ -113,8 +122,7 @@ def write(facts, client=None):
     import json
     if client is None and not available():
         return dict(template(facts), source="template", note="Written from a fixed template, not by Claude: the Claude key has not been set up on this server "
-                    "(whoever looks after RightPrice's Azure settings adds it as ANTHROPIC_API_KEY). The figures are right and the draft is safe to use; "
-                    "the wording is the same every time.")
+                    "(whoever looks after RightPrice's Azure settings adds it as ANTHROPIC_API_KEY). The figures are RightPrice's own; the wording is the same every time. Read it before you send it.")
     try:
         import anthropic
         client = client or anthropic.Anthropic(timeout=60.0, max_retries=1)
