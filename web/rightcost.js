@@ -74,7 +74,7 @@ const CONFIG = {
   flyouts: {
     prices: { title: "Prices and rates", icon: "chart", groups: [
       ["Market prices", [["Yarn prices", "#yarn"], ["Cotton prices", "#cotton"], ["Bring in prices", "#intake"]]],
-      ["Rate master", [["Rate tables", "#rates"], ["Mill rate card", "#ratecard"], ["Calculation settings", "#settings"]]],
+      ["Rate master", [["Rate tables", "#rates"], ["Mill rate card", "#ratecard"], ["Mill cost sheets", "#costsheets"], ["Calculation settings", "#settings"]]],
       ["Costing setup", ["Rating scale types", "Rating scales", "Cost sheet types", "Material cost configuration", "Seasonal exchange rates"].map(n => [n, "#lib/" + n])],
       ["Sourcing setup", ["Payment terms", "Delivery terms", "Sample type"].map(n => [n, "#lib/" + n])]] },
   },
@@ -82,9 +82,9 @@ const CONFIG = {
   frames: {
     dashboard: ["Home", "Dashboard"], pilot: ["Home", "Pilot results"],
     yarn: ["Prices", "Yarn prices"], cotton: ["Prices", "Cotton prices"], intake: ["Prices", "Bring in prices"],
-    rates: ["Prices", "Rate tables"], ratecard: ["Prices", "Mill rate card"], settings: ["Prices", "Calculation settings"],
+    rates: ["Prices", "Rate tables"], ratecard: ["Prices", "Mill rate card"], costsheets: ["Prices", "Mill cost sheets"], settings: ["Prices", "Calculation settings"],
   },
-  sections: { Home: ["dashboard", "pilot"], Prices: ["yarn", "cotton", "intake", "rates", "ratecard", "settings"] },
+  sections: { Home: ["dashboard", "pilot"], Prices: ["yarn", "cotton", "intake", "rates", "ratecard", "costsheets", "settings"] },
   popupTabs: [["cost", "Create cost"], ["bulk", "Bulk upload"], ["compare", "Compare"], ["pack", "Negotiation pack"]],
 };
 const ICONS = {
