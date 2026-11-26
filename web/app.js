@@ -235,6 +235,11 @@ function tableCard(sheet, title, opts = {}) {
 /* Everything on this page is the buyer's own data: purchase orders costed by the tool, the rate
    master, and the cotton price history. Nothing here is an outside benchmark. */
 // a gap is coloured only where the tool can be leaned on; elsewhere it is shown plainly with a caution
+// a mill's name, opening its supplier page in the shell (the Dashboard is shown inside the shell's frame)
+function millLink(name, key) {
+  if (!key || parent === window) return name;
+  return h("button", { type: "button", class: "linkish", title: "Open this mill's page: fabrics, money above the range, questions for the meeting", onclick: () => parent.postMessage({ rp: "go", hash: "supplier/" + encodeURIComponent(key) }, location.origin) }, name);
+}
 function gapTag(gap, trust) {
   if (trust === "weak") return h("span", { class: "tag warn", title: "The tool fits past prices of this group poorly, so this gap says more about the tool than about the price" }, `${pctSigned(gap)} \u00B7 tool unsure`);
   return h("span", { class: "tag " + (Math.abs(gap) <= 5 ? "flat" : gap > 0 ? "down" : "up"), title: Math.abs(gap) <= 5 ? "Within 5%: treat as noise" : gap > 0 ? "You paid above should-cost" : "You paid below should-cost" }, pctSigned(gap));
@@ -321,7 +326,7 @@ PAGES.dashboard = async () => {
         w.to_check.length ? h("div", { class: "notice warn", style: "margin:8px 0" }, h("b", {}, `${plural(w.to_check.length, "fabric")} with a step to check (an agreed one is left out of the total until it is put right): `),
           h("ul", { style: "margin:4px 0 0;padding-left:18px" }, ...w.to_check.slice(0, 6).map(c => h("li", {}, h("b", {}, c.code), ": " + c.why)), w.to_check.length > 6 ? h("li", {}, `and ${w.to_check.length - 6} more: filter Right cost by Negotiation and look for "check a step"`) : null)) : null,
         h("div", { class: "table-wrap" }, h("table", { class: "wontable" }, h("thead", {}, h("tr", {}, h("th", {}, "Mill"), h("th", { class: "n" }, "Agreed / open"), h("th", { class: "n" }, "Won, Rs"))),
-          h("tbody", {}, ...w.suppliers.map(b => h("tr", {}, h("td", {}, b.supplier), h("td", { class: "n" }, `${b.agreed} / ${b.open}`),
+          h("tbody", {}, ...w.suppliers.map(b => h("tr", {}, h("td", {}, millLink(b.supplier, b.key)), h("td", { class: "n" }, `${b.agreed} / ${b.open}`),
             h("td", { class: "n" + (b.won < 0 ? " loss" : "") }, !b.agreed ? "nothing agreed yet" : (b.won < 0 ? `${fmt(Math.abs(b.won), 0)} lost` : fmt(b.won, 0)) + (b.lost && b.won >= 0 ? `, after ${fmt(b.lost, 0)} lost on ${plural(b.lost_fabrics, "fabric")}` : "") + (b.not_counted ? ` (${b.not_counted} not counted)` : "")))))))]
         : [h("p", { class: "empty" }, "Nothing tracked yet. Open a fabric in Right cost, go to its Negotiation tab and record the mill's quote, your counter and the agreed price.")])].filter(Boolean));
     let last = JSON.stringify(await getJSON("/api/negotiations/summary")); paint(JSON.parse(last));
@@ -334,7 +339,7 @@ PAGES.dashboard = async () => {
 
   // 5. supplier cost ratios, and suppliers against should-cost
   const sup = p ? h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Supplier"), h("th", { class: "n" }, "Fabrics costed"), h("th", { class: "n" }, "Paid above should-cost, middle fabric"), h("th", { class: "n" }, "Tool within 10%"), h("th", {}, "Mostly buys"))),
-    h("tbody", {}, p.suppliers.map(s => h("tr", {}, h("td", {}, s.supplier), h("td", { class: "n" }, String(s.fabrics)), h("td", { class: "n" }, gapTag(s.gap, s.trust)), h("td", { class: "n" }, pct(s.within10, 0)), h("td", {}, `${s.mostly} (${pct(s.mostly_share, 0)})`)))))) : null;
+    h("tbody", {}, p.suppliers.map(s => h("tr", {}, h("td", {}, millLink(s.supplier, s.key)), h("td", { class: "n" }, String(s.fabrics)), h("td", { class: "n" }, gapTag(s.gap, s.trust)), h("td", { class: "n" }, pct(s.within10, 0)), h("td", {}, `${s.mostly} (${pct(s.mostly_share, 0)})`)))))) : null;
   nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "5. Supplier cost ratios, % of sales")),
     h("p", { class: "sub" }, "Whole-company figures from published accounts; they include yarn, garments and other businesses. Operating profit shows how much room a supplier has."),
     dataTable(ins.benchmarks, { label: "Supplier cost ratios" }),

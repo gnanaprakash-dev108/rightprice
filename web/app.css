@@ -568,3 +568,5 @@ html.embed main { padding-top: 12px !important; }
 /* won in negotiation: a loss is said in words and in red */
 .loss { color: var(--red); }
 .wontable { width: 100%; } .wontable td, .wontable th { white-space: normal; padding: 9px 8px; }
+.linkish { all: unset; cursor: pointer; color: var(--accent, #0b7d57); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.linkish:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }

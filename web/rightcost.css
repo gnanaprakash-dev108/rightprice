@@ -321,3 +321,50 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
   .tracker .btn.line, .brief .btn { height: auto; min-height: 36px; white-space: normal; padding: 8px 14px; text-align: left; line-height: 1.3; }
   .stepform input[type=number], .stepform input[type=date] { flex: 1 1 130px; width: auto; min-width: 0; }
 }
+
+/* ---------- supplier page */
+.stiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0 6px; }
+.stile { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; }
+.stile .sl { font-size: 11.5px; color: var(--text2); font-weight: 700; }
+.stile .sb { font-size: 20px; font-weight: 800; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.stile .ss { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.stile.red .sb { color: #C0362C; }
+:root[data-theme="dark"] .stile.red .sb { color: #F28B82; }
+.sec { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 14px 18px 16px; margin-top: 12px; }
+.sec h2 { margin: 0 0 6px; font-size: 16px; } .sec h3 { margin: 12px 0 4px; font-size: 13px; color: var(--text2); }
+.sec .qs { margin: 4px 0 0; padding-left: 22px; font-size: 13.5px; line-height: 1.5; } .sec .qs li { margin-bottom: 6px; }
+.sec .mon { margin: 4px 0 10px; padding-left: 20px; font-size: 13px; line-height: 1.5; }
+.muted { color: var(--text2); font-size: 12.5px; }
+.gridscroll.sup { max-height: none; overflow-x: auto; }
+.gridscroll.sup td.w { white-space: normal; min-width: 180px; }
+.gridscroll.sup td.loss { color: #C0362C; }
+:root[data-theme="dark"] .gridscroll.sup td.loss { color: #F28B82; }
+.gridscroll.sup .pill { max-width: none; overflow: visible; } .gridscroll.sup .pill .pt { white-space: normal; overflow: visible; }
+.gridscroll.sup td .muted { font-size: 11px; white-space: nowrap; }
+.gridscroll.sup table.grid { table-layout: auto; } .gridscroll.sup table.grid th { white-space: normal; overflow: visible; text-overflow: clip; } .gridscroll.sup table.grid td { overflow: visible; text-overflow: clip; }
+.stile.amber .sb { color: #9A6B00; } :root[data-theme="dark"] .stile.amber .sb { color: #F5C542; }
+.swipe { display: none; margin: 0 0 4px; }
+.printonly { display: none; }
+@media (max-width: 900px) {
+  /* a phone: the tables keep a readable width and scroll sideways inside their own box, the fabric code staying put */
+  .gridscroll.sup table.grid { min-width: 600px; }
+  .gridscroll.sup td:first-child, .gridscroll.sup th:first-child { position: sticky; left: 0; background: var(--panel); z-index: 1; }
+  .gridscroll.sup .desc { display: none; }
+  .swipe { display: block; }
+  .stile .sb { font-size: 17px; overflow-wrap: anywhere; }
+  .sec { padding: 12px 12px 14px; } .stiles { grid-template-columns: 1fr 1fr; }
+}
+@media print {
+  .rail, .fab, .noprint, #selbar, #toast, #tip, .flyout { display: none !important; }
+  .printonly { display: block; }
+  .main { margin-left: 0 !important; padding: 0 !important; height: auto !important; overflow: visible !important; display: block !important; }
+  body, .main, .sec, .stile { background: #fff !important; color: #000 !important; }
+  .sec, .stile { border-color: #999; break-inside: auto; } .sec .qs li, .stile, tr { break-inside: avoid; }
+  .gridscroll, .gridscroll.sup { max-height: none !important; overflow: visible !important; }
+  table.grid { width: 100% !important; font-size: 10.5px; } table.grid td, table.grid th { white-space: normal !important; position: static !important; }
+  .code { color: #000 !important; max-width: none !important; overflow: visible !important; white-space: nowrap !important; }
+  .gridscroll.sup .desc { display: table-cell !important; }
+  .gridscroll.sup td:first-child, .gridscroll.sup th:first-child { position: static !important; }
+  .gridscroll.sup table.grid { min-width: 0 !important; table-layout: auto; }
+  .muted, .sec h3, .stile .sl, .stile .ss { color: #333 !important; } .stile.red .sb, .gridscroll.sup td.loss { color: #a00 !important; }
+}
