@@ -338,12 +338,18 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
 .gridscroll.sup { max-height: none; overflow-x: auto; }
 .gridscroll.sup td.w { white-space: normal; min-width: 180px; }
 .gridscroll.sup td.loss { color: #C0362C; }
+:root[data-theme="dark"] .gridscroll.sup td.loss { color: #F28B82; }
+.gridscroll.sup .pill { max-width: none; overflow: visible; } .gridscroll.sup .pill .pt { white-space: normal; overflow: visible; }
+.gridscroll.sup td .muted { font-size: 11px; }
+.swipe { display: none; margin: 0 0 4px; }
 .printonly { display: none; }
 @media (max-width: 900px) {
   /* a phone: the tables keep a readable width and scroll sideways inside their own box, the fabric code staying put */
   .gridscroll.sup table.grid { min-width: 600px; }
   .gridscroll.sup td:first-child, .gridscroll.sup th:first-child { position: sticky; left: 0; background: var(--panel); z-index: 1; }
   .gridscroll.sup .desc { display: none; }
+  .swipe { display: block; }
+  .stile .sb { font-size: 17px; overflow-wrap: anywhere; }
   .sec { padding: 12px 12px 14px; } .stiles { grid-template-columns: 1fr 1fr; }
 }
 @media print {
@@ -354,5 +360,9 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
   .sec, .stile { border-color: #999; break-inside: auto; } .sec .qs li, .stile, tr { break-inside: avoid; }
   .gridscroll, .gridscroll.sup { max-height: none !important; overflow: visible !important; }
   table.grid { width: 100% !important; font-size: 10.5px; } table.grid td, table.grid th { white-space: normal !important; position: static !important; }
-  .code { color: #000 !important; }
+  .code { color: #000 !important; max-width: none !important; overflow: visible !important; white-space: nowrap !important; }
+  .gridscroll.sup .desc { display: table-cell !important; }
+  .gridscroll.sup td:first-child, .gridscroll.sup th:first-child { position: static !important; }
+  .gridscroll.sup table.grid { min-width: 0 !important; table-layout: auto; }
+  .muted, .sec h3, .stile .sl, .stile .ss { color: #333 !important; } .stile.red .sb, .gridscroll.sup td.loss { color: #a00 !important; }
 }

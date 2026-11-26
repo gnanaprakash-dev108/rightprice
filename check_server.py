@@ -377,7 +377,7 @@ def main():
         mill = s_rows[0]["mill"]
         sp = c.get("/api/supplier", params={"mill": s_rows[0]["supplier"] + " Limited"}).json()
         s1 = next(r for r in sp["quoted"]["rows"] if r["code"] == "S-1")
-        upper = round(s1["should"] * (1 + s1["range"][1] / 100), 2)
+        upper = round(round(s1["should"], 2) * (1 + s1["range"][1] / 100), 2)
         check("Supplier page: found under any spelling; money above the range is price less the top of the range, times metres",
               sp["key"] == mill and s1["band"] == "Push" and s1["above_range"] == round((240 - upper) * 5000), str(s1))
         check("Supplier page: questions on the quotes in hand, and the sheet's sums that are off",
@@ -388,6 +388,14 @@ def main():
         sp2 = c.get("/api/supplier", params={"mill": mill}).json()
         check("Supplier page: an agreed fabric has no question left, and its gain is in the mill's tracker figures",
               not any(q["code"] == "S-1" for q in sp2["questions"]["quoted"]) and any(t["code"] == "S-1" and t["won"] == 50000 for t in sp2["tracker"]["items"]))
+        check("Supplier page: an agreed fabric is closed, not money to push on",
+              sp2["quoted"]["agreed"] == 1 and sp2["quoted"]["above_range"] == 0 and sp2["quoted"]["agreed_above_range"] == round((230 - upper) * 5000), str({k: v for k, v in sp2["quoted"].items() if k != "rows"}))
+        check("Mill names: a name cut short is the fuller name; Textiles and Mills of one name stay apart",
+              server._mill_base("Nahar Industrial Enterpr") != "" and server._mill_base("Sri Shyam Fashions India Pvt Ltd") == server._mill_base("Sri Shyam Fashion India")
+              and server._mill_base("Ruby Textiles Pvt Ltd") != server._mill_base("The Ruby Mills Limited") and server._mill_base("\u0905\u0930\u0935\u093f\u0902\u0926") != "")
+        server._learn_mill_names({"Nahar Industrial Enterpr", "Nahar Industrial Enterprises Ltd", "Arvind Ltd", "Arvind Ltd (Denim Division)"})
+        check("Mill names: only a cut-off name joins the fuller one", server.mill_key("Nahar Industrial Enterpr") == server.mill_key("Nahar Industrial Enterprises Ltd")
+              and server.mill_key("Arvind Ltd") != server.mill_key("Arvind Ltd (Denim Division)"))
         check("Supplier page: an unknown mill is refused", c.get("/api/supplier", params={"mill": "No Such Mill"}).status_code == 404)
         check("Suppliers: one line a mill", any(x["key"] == mill for x in c.get("/api/suppliers").json()["suppliers"]))
         c.post("/api/list/remove", json={"ids": [r["id"] for r in s_rows]})
