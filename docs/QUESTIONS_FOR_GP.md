@@ -15,7 +15,13 @@
 Doubts recorded while building, newest first. Each says what was done meanwhile, so nothing waits on
 the answer. Answer beside a question (or just tell the build session) and it will be acted on.
 
-## Open, 26 Nov 2026, early morning (nothing waits on these; the items are paused)
+## Answered 26 Nov 2026, morning
+
+- Dating the yarn rates: wait for yarn prices for July to November 2026. Paused until they come.
+- The 265 uncosted purchase-order fabrics: leave them out. The pilot is not re-run.
+- Next: the mill cost sheet intake (built, pull request 16).
+
+## Asked 26 Nov 2026, early morning (now answered above)
 
 A. **Dating the yarn rates (Next to build, item 4).** The yarn price history in hand
    (`inputs/Yarn_Inteliigence_Master.xlsx`, sheet Yarn_Master: 5,275 prices by count, 2022 to June

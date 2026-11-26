@@ -242,6 +242,33 @@ def main():
             txt = open(css, encoding="utf8").read()
             check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
 
+        # mill cost sheets (on the temporary copy of the rate master)
+        tpl = c.get("/api/costsheet/template")
+        check("Cost sheet template downloads", tpl.status_code == 200 and tpl.content[:2] == b"PK")
+        cs = pd.read_excel(io.BytesIO(tpl.content), sheet_name="Cost sheet")
+        cs.loc[0, "Overhead %"] = 6
+        cs2 = cs.copy(); cs2["Mill"] = "Mill B"; cs2.loc[0, "Overhead %"] = 8
+        cs3 = cs.copy(); cs3["Mill"] = "Mill C"; cs3.loc[0, "Route"] = "Piece Dyed"; cs3.loc[0, "Weave"] = "Satin"; cs3.loc[0, "Yarn dyeing Rs/kg"] = None
+        cs3.loc[0, "Piece dyeing Rs/kg greige"] = 175
+        buf = io.BytesIO(); pd.concat([cs, cs2, cs3]).to_excel(buf, index=False)
+        up = c.post("/api/costsheet/upload", files={"file": ("cs.xlsx", io.BytesIO(buf.getvalue()))}).json()
+        v = c.get("/api/costsheet").json()
+        d = next((x for x in v["drafts"] if x["table"] == "Class_Defaults" and x["col"] == "Overhead"), None)
+        import costsheet
+        plain = costsheet.analyse(costsheet.read(pd.read_excel(io.BytesIO(tpl.content), sheet_name="Cost sheet")))["rows"][0]
+        check("Cost sheet: the template's own figures give its price", abs(plain["own"] - plain["price"]) < 0.01 and abs(plain["should"] - plain["price"]) < 0.01)
+        check("Cost sheet: rows read, a disagreement becomes a draft", up.get("added") == 3
+              and d is not None and abs(d["proposed"] - 0.07) < 1e-9 and d["sheets"] == 2)
+        check("Cost sheet: nothing applied without a tick", c.post("/api/costsheet/apply", json={"ids": []}).status_code == 400
+              and abs(c.post("/api/cost", json=masters.EXAMPLE_ROW).json()["total_per_m"] - 181.40) < 0.01)
+        ap = c.post("/api/costsheet/apply", json={"ids": [d["id"]]}).json()
+        cd = c.get("/api/table/Class_Defaults").json()
+        row = next(r for r in cd["rows"] if r[0] == "Dobby/Matt" and r[1] == "Yarn Dyed")
+        check("Cost sheet: an applied draft changes that rate only, with its basis and a dated backup",
+              ap.get("backup", "").startswith("Rate_Master before mill cost sheet") and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
+              and row[cd["columns"].index("Basis")].startswith("Mill cost sheet"))
+        c.post("/api/costsheet/remove", json={"ids": [r["id"] for r in v["rows"]]})
+
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
         t = c.post("/api/intake/file", files={"file": ("list.csv", io.BytesIO(csv))}).json()

@@ -115,6 +115,17 @@ has Download Excel and those four. Light or dark and settings sit under the user
 screens are shown inside the shell in an embedded frame with the shell's palette; a page there that
 asks for a costing screen opens the popup instead. `/rightcost` now leads to `/#rightcost`.
 
+### Mill cost sheets (26 Nov, pull request 16)
+
+Prices > Mill cost sheets. A mill fills one row per fabric in the template (its yarn, sizing, weaving,
+dyeing and finishing rates, wastage, overhead, margin and price). Each row is set beside the rate
+master with each rate's basis, and the should-cost is worked again on the mill's own figures against
+its price. Where the figures differ from the rate master, a draft change is made (the median of the
+mills' figures for that rate, with the sheets behind it). Nothing changes until GP ticks drafts and
+presses Apply (asked twice); the rate master is copied with the date first, and the new rate's Basis
+names the mills. A wastage, overhead or margin for a route and weave the rate master has no row for
+adds that row (today such fabrics fall back to the placeholder Default row). `costsheet.py`.
+
 ### Waiting on the owner
 
 1. Real yarn rates for poly cotton and linen (six placeholders are in the yarn master).
