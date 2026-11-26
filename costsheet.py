@@ -40,7 +40,7 @@ COLUMNS = [
     ("Weaving Rs/pick", "weaving_rate", "Rs/pick", "Rupees (not paise) per pick per inch of cloth, per metre: 0.32, not 32"),
     ("Yarn dyeing Rs/kg", "yarn_dye", "Rs/kg", "Yarn dyed only"),
     ("Piece dyeing Rs/kg greige", "piece_dye_rate", "Rs/kg", "Piece dyed, printed or bleached only"),
-    ("Finishing Rs/kg greige", "finishing_rate", "Rs/kg", ""),
+    ("Finishing Rs/kg greige", "finishing_rate", "Rs/kg", "Per kg of greige, leaving out any per-metre finish upcharge (ETI, LA and the like)"),
     ("Process wastage %", "process_wastage", "%", "Losses in dyeing and finishing; 3 for 3% (a cell formatted as % also works)"),
     ("Overhead %", "overhead", "%", "Mill overhead"),
     ("Margin %", "margin", "%", "Mill margin"),
@@ -167,10 +167,11 @@ def analyse(rows, m=None):
     applied. A rate counts each row once (a yarn used as warp and weft is one figure)."""
     m = m or masters.load()
     group = dict(zip(m["Weaves"]["Weave"], m["Weaves"]["Weave group"]))
-    out, drafts = [], {}
+    out, drafts, spelling = [], {}, {}
     for n, r in enumerate(rows):
         r, problems = _check_names(r, m)
-        mill = (str(r.get("Mill")).strip() if r.get("Mill") else "") or "unnamed mill"
+        raw = re.sub(r"\s+", " ", str(r.get("Mill") or "")).strip()
+        mill = spelling.setdefault(raw.lower(), raw) if raw else "unnamed mill"   # "Delta Mills" and "DELTA MILLS" are one mill
         item = {"n": n, "mill": mill, "code": r.get("Fabric code"), "row": r, "problems": problems, "figures": [], "notes": []}
         if not r.get("Mill"):
             item["notes"].append("no mill is named on this row")
@@ -225,6 +226,8 @@ def analyse(rows, m=None):
                 d["values"].append(v)
                 d["rows"].append(f"{mill} {r.get('Fabric code') or ''}".strip())
                 d["mills"].append(mill)
+        if any(f.get("ignored") for f in item["figures"]) or any("left out" in x for x in item["notes"]):
+            item["partial"] = True                         # some of the mill's figures were not used: the rate master's stand in
         own = engine.compute(mine)
         price, _ = _figure(r.get("Mill's price Rs/m"))
         item.update(should=res["total_per_m"], own=own["total_per_m"], price=price,
@@ -232,9 +235,18 @@ def analyse(rows, m=None):
         out.append(item)
     kept = []
     for d in drafts.values():
-        d["proposed"] = round(statistics.median(d["values"]), 4)
-        d["sheets"] = len(d["values"])
+        # each mill's own middle first, then the middle of the mills: a mill that sends many sheets counts once
+        per_mill = {}
+        for v, ml in zip(d["values"], d["mills"]):
+            per_mill.setdefault(ml, []).append(v)
+        d["proposed"] = round(statistics.median([statistics.median(v) for v in per_mill.values()]), 4 if d["pct"] or d["table"] == "Weaving_Rates" else 2)
+        d["sheets"], d["mill_count"] = len(d["values"]), len(per_mill)
         d["scope"] = SCOPE.get(d["table"], "")
+        if d["table"] == "Finishing_Rates":
+            up = m["Finishing_Rates"].set_index("Finish").get("Upcharge Rs per metre")
+            extra = float(up.get(d["match"]["Finish"], 0) or 0) if up is not None else 0
+            if extra:
+                d["scope"] += f"; the finish's Rs {extra:g} a metre upcharge stays on top, so the mill's figure must leave it out"
         if abs(d["proposed"] - d["now"]) > (0.00005 if d["pct"] else 0.0005):   # a draft that changes nothing is not shown
             kept.append(d)
     return {"rows": out, "drafts": sorted(kept, key=lambda d: (d["table"], d["label"]))}
@@ -299,15 +311,17 @@ def _target(key, sel, inp, m, group, used, basis, key_cd, cd_row):
 
 def apply(m, drafts, chosen, mills=None):
     """Write the chosen drafts into the rate master held in memory. Returns what changed.
-    Each rate's Basis names the mills behind that draft. A row of wastage, overhead and margin that was
-    a placeholder (or is new, copied from the placeholder Default row) stays marked Placeholder, with
-    the columns that now come from mills named, so the tool keeps warning about the rest."""
+
+    Where a row holds one rate (a yarn, a weaving or sizing rate, a dyeing shade) its Basis becomes the
+    mill cost sheet. Where a row holds several (wastage, overhead and margin; a finish's two routes) the
+    Basis keeps what it said and adds which column now comes from which mills, so the others are not
+    relabelled and a placeholder row keeps its warning."""
     today = f"{dt.date.today():%d %b %Y}"
     log = []
     for d in drafts:
         if d["id"] not in chosen:
             continue
-        src = f"mill cost sheet ({', '.join(sorted(set(d.get('mills') or ['unnamed mill'])))}), {today}"
+        who = ", ".join(sorted(set(d.get("mills") or ["unnamed mill"])))
         t = m[d["table"]].copy()
         mask = pd.Series(True, index=t.index)
         for c, v in d["match"].items():
@@ -321,17 +335,18 @@ def apply(m, drafts, chosen, mills=None):
             t = pd.concat([t, pd.DataFrame([base])], ignore_index=True)
             mask = pd.Series(False, index=t.index)
             mask.iloc[-1] = True
-        t.loc[mask, d["col"]] = d["proposed"]
+        t[d["col"]] = t[d["col"]].astype(float)          # a whole-rupee column takes 16.5 as well
+        t.loc[mask, d["col"]] = float(d["proposed"])
         if "Basis" in t.columns:
             old = str(t.loc[mask, "Basis"].iloc[0])
-            if d["table"] == "Class_Defaults" and old.startswith("Placeholder"):
-                t.loc[mask, "Basis"] = re.sub(r"; from .*$", "", old) + "; from " + "; ".join(
-                    [x for x in re.findall(r"; from (.*)$", old)[:1]] + [f"{d['col']} {src}"])
+            if d["table"] in ("Class_Defaults", "Finishing_Rates"):
+                kept = re.sub(r"; " + re.escape(d["col"]) + r" from mill cost sheet \([^)]*\), [^;]*", "", old)
+                t.loc[mask, "Basis"] = f"{kept}; {d['col']} from mill cost sheet ({who}), {today}"
             else:
-                t.loc[mask, "Basis"] = f"Mill cost sheet: {src}"
+                t.loc[mask, "Basis"] = f"Mill cost sheet ({who}), {today}"
         if d["table"] == "Yarn_Rates" and "Rate date" in t.columns:
             t.loc[mask, "Rate date"] = dt.date.today().isoformat()
         m[d["table"]] = t
-        show = (lambda v: f"{v * 100:.1f}%") if d["pct"] else (lambda v: f"{v:g}")
+        show = (lambda v: f"{v * 100:.1f}%") if d["pct"] else (lambda v: f"Rs {v:g}")
         log.append(f"{d['label']}: {show(d['now'])} to {show(d['proposed'])}")
     return log

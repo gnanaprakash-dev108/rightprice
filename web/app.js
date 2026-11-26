@@ -1179,24 +1179,24 @@ PAGES.costsheets = async () => {
     const drafts = d.drafts.map(x => {
       const cb = h("input", { type: "checkbox", "aria-label": "Apply " + x.label }); cb.checked = picked.has(x.id);
       cb.addEventListener("change", () => { cb.checked ? picked.add(x.id) : picked.delete(x.id); applyBtn.disabled = !picked.size; applyBtn.textContent = picked.size ? `Apply ${plural(picked.size, "draft")}` : "Apply"; });
-      const show = v => x.pct ? pct(v, 1) : x.table === "Weaving_Rates" ? "Rs " + Number(v).toFixed(3) : "Rs " + fmt(v, 0);
+      const show = v => x.pct ? pct(v, 1) : x.table === "Weaving_Rates" ? "Rs " + Number(v).toFixed(3) : "Rs " + fmt(v, Number.isInteger(Number(v)) ? 0 : 2);
       // a percentage moves in points; a rupee rate in per cent; from nothing it is new
       const move = x.pct ? `${x.proposed >= x.now ? "+" : "\u2212"}${(Math.abs(x.proposed - x.now) * 100).toFixed(1)} points` : x.now ? pctSigned((x.proposed / x.now - 1) * 100) : "new";
-      return h("tr", {}, h("td", {}, cb), h("td", { class: "wrap" }, x.label, h("div", { class: "sub", style: "margin:2px 0 0;font-size:12px" }, "Changes " + x.scope)), h("td", { class: "n" }, show(x.now)), h("td", { class: "wrap" }, x.basis),
-        h("td", { class: "n" }, h("b", {}, show(x.proposed))), h("td", { class: "n" }, move),
-        h("td", { class: "n" }, String(x.sheets)), h("td", { class: "wrap" }, x.values.map(show).join(", ") + " · " + x.rows.join(", ")));
+      return h("tr", {}, h("td", {}, cb), h("td", { class: "wrap" }, x.label, h("div", { class: "sub", style: "margin:2px 0 0;font-size:12px" }, "Changes " + x.scope), x.mill_count === 1 ? h("div", { class: "sub", style: "margin:2px 0 0;font-size:12px;color:var(--amber)" }, "From one mill only") : null),
+        h("td", { class: "n" }, show(x.now)), h("td", { class: "n" }, h("b", {}, show(x.proposed))), h("td", { class: "n" }, move), h("td", { class: "wrap" }, x.basis),
+        h("td", { class: "n" }, `${plural(x.mill_count, "mill")}, ${plural(x.sheets, "sheet")}`), h("td", { class: "wrap" }, x.values.map(show).join(", ") + " · " + x.rows.join(", ")));
     });
     const applyBtn = h("button", { class: "btn primary", type: "button", disabled: true, onclick: async e => {
       const b = e.currentTarget;
       if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Change ${plural(picked.size, "rate")} in the rate master: sure?`; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = `Apply ${plural(picked.size, "draft")}`; } }, 5000); return; }
       try { const r = await (await postJSON("/api/costsheet/apply", { ids: [...picked] })).json(); picked.clear(); state.meta = await getJSON("/api/meta");
-        status.replaceChildren(h("div", { class: "notice info" }, h("b", {}, "Applied. "), r.applied.join("; ") + `. The rate master as it was is kept as "${r.backup}" beside the rate master on the server (${r.folder}); to go back, replace the rate master with it.`)); load(); }
+        status.replaceChildren(h("div", { class: "notice info" }, h("b", {}, "Applied. "), r.applied.join("; ") + `. The rate master as it was is kept on the server, beside the rate master, as "${r.backup}".`)); load(); }
       catch (err) { status.replaceChildren(h("div", { class: "notice err", role: "alert" }, err.message)); }
     } }, "Apply");
     const rows = d.rows.map(r => h("details", { class: "card cs-row" },
       h("summary", {}, h("b", {}, [r.mill, r.code].filter(Boolean).join(" · ") || "Row"), " ",
-        r.problems.length ? h("span", { class: "tag warn" }, "not read: " + r.problems[0]) :
-        h("span", { class: "sub", style: "margin:0" }, `should-cost ${rs(r.should)} on the rate master · ${rs(r.own)} on the mill's own figures` + (r.price !== null ? ` · the mill's price ${rs(r.price)}` : "")),
+        r.problems.length ? h("span", { class: "tag warn", style: "white-space:normal" }, "not read: " + r.problems[0]) :
+        h("span", { class: "sub", style: "margin:0" }, `should-cost ${rs(r.should)} on the rate master · ${rs(r.own)} on the mill's own figures` + (r.partial ? " (some of its figures not used: see the notes)" : "") + (r.price !== null ? ` · the mill's price ${rs(r.price)}` : "")),
         r.own_gap !== null && r.own_gap !== undefined && Math.abs(r.own_gap) >= 0.5 ? h("span", { class: "tag down", style: "margin-left:8px;white-space:normal" }, `its own figures come to ${rs(Math.abs(r.own_gap))} ${r.own_gap > 0 ? "less" : "more"} than its price`) : null),
       (r.notes || []).length ? h("ul", { class: "sub", style: "margin:0 0 8px;padding-left:18px" }, r.notes.map(n => h("li", {}, n))) : null,
       r.problems.length ? h("p", { class: "sub" }, "Not read: " + r.problems.join("; ") + ".") : h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Figure"), h("th", { class: "n" }, "The mill's"), h("th", { class: "n" }, "Rate master"), h("th", {}, "Basis of the rate master's"), h("th", {}, "Where it lives"))),
@@ -1206,7 +1206,7 @@ PAGES.costsheets = async () => {
         r.upload ? sureButton(`Remove every row of ${r.upload}`, `Remove every row of ${r.upload}: sure?`, async () => { const x = await (await postJSON("/api/costsheet/remove", { upload: r.upload })).json(); status.replaceChildren(h("div", { class: "notice info" }, `${plural(x.removed, "row")} removed.`)); load(); }) : null)));
     box.replaceChildren(
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Draft rate changes"), h("div", { class: "sub", style: "margin:2px 0 0" }, "Each is the middle of the mills' figures for that rate, where they differ from the rate master. Nothing changes until you tick drafts and press Apply; the rate master before the change is kept with the date.")), applyBtn),
-        drafts.length ? h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, ""), h("th", {}, "Rate"), h("th", { class: "n" }, "Now"), h("th", {}, "Basis now"), h("th", { class: "n" }, "Draft"), h("th", { class: "n" }, "Change"), h("th", { class: "n" }, "Sheets"), h("th", {}, "The mills' figures"))), h("tbody", {}, drafts)))
+        drafts.length ? h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, ""), h("th", {}, "Rate"), h("th", { class: "n" }, "Now"), h("th", { class: "n" }, "Draft"), h("th", { class: "n" }, "Change"), h("th", {}, "Basis now"), h("th", { class: "n" }, "Behind it"), h("th", {}, "The mills' figures"))), h("tbody", {}, drafts)))
           : h("p", { class: "empty" }, "Every figure on the sheets matches the rate master.")),
       h("h2", { style: "margin:18px 0 8px" }, `${plural(d.rows.length, "row")} from the mills`), ...rows);
   };

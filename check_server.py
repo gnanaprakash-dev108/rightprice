@@ -266,7 +266,13 @@ def main():
         row = next(r for r in cd["rows"] if r[0] == "Dobby/Matt" and r[1] == "Yarn Dyed")
         check("Cost sheet: an applied draft changes that rate only, with its basis and a dated backup",
               ap.get("backup", "").startswith("Rate_Master before mill cost sheet") and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
-              and row[cd["columns"].index("Basis")].startswith("Mill cost sheet"))
+              and row[cd["columns"].index("Basis")].startswith("V1 workbook; Overhead from mill cost sheet"))
+        mm = masters.load()
+        half = {"id": "Sizing_Rates|Yarn Dyed|40", "table": "Sizing_Rates", "match": {"Route type": "Yarn Dyed", "Warp count up to (Ne)": 40},
+                "col": "Rs per kg warp", "label": "Sizing", "now": 30.0, "proposed": 16.5, "pct": False, "mills": ["X"]}
+        costsheet.apply(mm, [half], {half["id"]})
+        check("Cost sheet: a draft of half a rupee applies to a whole-rupee column",
+              float(mm["Sizing_Rates"].set_index(["Route type", "Warp count up to (Ne)"]).loc[("Yarn Dyed", 40), "Rs per kg warp"]) == 16.5)
         frac = cs.copy().astype(object); frac.loc[0, "Mill"] = "Mill D"; frac.loc[0, "Fabric code"] = "D-1"; frac.loc[0, "Margin %"] = 0.08; frac.loc[0, "Weaving Rs/pick"] = 45
         rd = costsheet.analyse(costsheet.read(frac))["rows"][0]
         check("Cost sheet: 0.08 read as 8%, a weaving rate in paise is not used", any("read as 8%" in x for x in rd["notes"]) and any("paise" in x for x in rd["notes"]))

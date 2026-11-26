@@ -1048,17 +1048,18 @@ def costsheet_apply(payload: dict = Body(...)):
     if not picked:
         raise HTTPException(400, "Those drafts are no longer there; reload the page")
     import shutil
-    backup = masters.MASTER_PATH.replace(".xlsx", f" before mill cost sheet {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
-    shutil.copyfile(masters.MASTER_PATH, backup)
     m2 = {k: v.copy() for k, v in m.items()}
-    log = costsheet.apply(m2, picked, chosen)
     try:
+        log = costsheet.apply(m2, picked, chosen)
         masters.cost(dict(masters.EXAMPLE_ROW), m2)        # the rate master must still cost a fabric
     except Exception as e:
-        raise HTTPException(400, f"Not applied: the rate master would no longer cost the example fabric ({e})")
+        raise HTTPException(400, f"Not applied, nothing changed: {e}")
+    # the copy is taken only once the change is known to be good, and to the second, so none is overwritten
+    backup = masters.MASTER_PATH.replace(".xlsx", f" before mill cost sheet {dt.datetime.now():%Y%m%d-%H%M%S}.xlsx")
+    shutil.copyfile(masters.MASTER_PATH, backup)
     save_masters(m2)
     _briefs.update(key=None)
-    return {"applied": log, "backup": os.path.basename(backup), "folder": os.path.dirname(masters.MASTER_PATH)}
+    return {"applied": log, "backup": os.path.basename(backup)}
 
 
 @app.post("/api/list/download")
