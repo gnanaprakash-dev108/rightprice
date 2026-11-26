@@ -24,8 +24,9 @@ const CONFIG = {
         { id: "select", header: "", width: 40, pinned: true, type: "select" },
         { id: "image", header: "Image", width: 60, pinned: true, type: "thumb" },
         { id: "code", header: "Fabric code", width: 130, pinned: true, type: "link" },
-        { id: "band", header: "Against range", width: 120, type: "band", help: "The negotiation brief's verdict on today's rates: in the usual range for this fabric type, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates)" },
-        { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your negotiation status. Kept in this browser" },
+        { id: "band", header: "Against range", width: 120, type: "band", help: "The price on the row (the mill's quote, or the price paid) against the usual range for this fabric type on today's rates: in it, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates). Where the talks have reached since is in the Negotiation column" },
+        { id: "nego", header: "Negotiation", width: 270, help: "From the tracker on the fabric's Negotiation tab: the agreed price, or while it is open the mill's latest price (our counter if the mill has not quoted)" },
+        { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
         { id: "route", header: "Route", width: 90 },
@@ -54,11 +55,11 @@ const CONFIG = {
         { name: "Held-back third", filters: { held_back: ["Yes"] } },
         { name: "Orders of 3,000 m and above", filters: { order_size: ["3,000 m and above"] } },
       ],
-      sortFields: [["code", "Fabric code"], ["description", "Description"], ["supplier", "Supplier"], ["should", "Should-cost"], ["price", "Price"], ["gap_pct", "Above should-cost, %"], ["excess", "Above should-cost, Rs"], ["band", "Against range (most to ask about first)"], ["metres", "Metres"], ["added", "Added on"]],
+      sortFields: [["code", "Fabric code"], ["description", "Description"], ["supplier", "Supplier"], ["should", "Should-cost"], ["price", "Price"], ["gap_pct", "Above should-cost, %"], ["excess", "Above should-cost, Rs"], ["band", "Against range (most to ask about first)"], ["nego", "Negotiation (agreed first, then open)"], ["metres", "Metres"], ["added", "Added on"]],
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
-        { id: "order_size", label: "Order size" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
+        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
@@ -132,7 +133,7 @@ const state = {
   search: { text: "", mode: store.get("searchMode", "like"), active: null }, filters: {}, costedOnly: false,
   sort: { field: "excess", dir: "desc" }, saved: "Default", selection: new Set(), shown: CONFIG.pageSize, cardSize: store.get("cardSize", 115),
   colOrder: store.get("colOrder", null), colHidden: new Set(store.get("colHidden", [])), colWidth: store.get("colWidth", {}),
-  edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
+  negos: {}, negoKinds: [], edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
   me: { initials: "RP", name: "Signed-in user", email: "" }, library: null, libs: store.get("libs", {}),
   downloads: [], log: store.get("log", []), rows: [], counts: {}, detail: null, loading: false,
 };
@@ -152,6 +153,7 @@ function h(tag, attrs, ...kids) {
 // replaceChildren turns an array or a null into text: flatten and drop the empties first
 const fill = (el, ...kids) => { el.replaceChildren(...kids.flat(Infinity).filter(k => k !== null && k !== undefined && k !== false)); return el; };
 const keyOf = r => `${r.source}|${r.id || r.code}`;
+const negoOf = k => { const n = state.negos[k]; return n && n.events && n.events.length ? n : null; };      // a fabric whose steps were all removed keeps only its log
 const val = (r, id) => {
   const col = CONFIG.modules.costs.columns.find(c => c.id === id);
   if (id === "status") return (state.pending[keyOf(r)] || {}).status ?? (state.edits[keyOf(r)] || {}).status ?? "Not started";
@@ -159,6 +161,11 @@ const val = (r, id) => {
   if (id === "held_back") return r.held_back === null || r.held_back === undefined ? "" : r.held_back ? "Yes" : "No";
   if (id === "placeholder") return r.placeholders ? "Yes" : "No";
   if (id === "added") return r.id || r.added || "";            // list ids carry the time they were added
+  if (id === "nego" || id === "nego_status") { const n = negoOf(keyOf(r)); if (!n) return id === "nego" ? "" : "Not tracked"; const s_ = n.summary;
+    if (id === "nego_status") return s_.status;
+    const d = s_.won_per_m, chk = s_.warnings.length ? "Check a step \u00B7 " : "";
+    if (s_.status === "Agreed") return chk + `Agreed Rs ${n2(s_.agreed)}` + (s_.first === null ? " (no mill quote)" : d === 0 ? " (the first quote)" : ` (${n2(Math.abs(d))} ${d > 0 ? "below" : "above"} first quote)`);
+    return chk + (s_.reopened !== null ? "Open again, " : "Open, ") + (s_.latest !== null ? `mill at Rs ${n2(s_.latest)}` : `our counter Rs ${n2(s_.counter)}`); }
   if (id === "band_rank") return { "Push": 0, "Ask break-up, above range": 1, "Check quote": 2, "Ask break-up": 3, "Below": 4, "Fair": 5 }[r.band] ?? 6;
   if (col && col.value) return col.value(r);
   return r[id];
@@ -318,13 +325,14 @@ function route() {
   const [id, ...rest] = hsh.split("/");
   document.querySelectorAll(".menu, .side, .colpanel").forEach(e => e.remove()); $("#drawer").hidden = true; $("#flyout").hidden = true;
   state.frame = null; state.library = null;
-  if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || "item", editing: false }; }
+  if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || tabMemo(rest.join("/")) || "item", editing: false }; }
   else state.detail = null;
   if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
   else if (CONFIG.frames[id]) state.frame = hsh;
   else if (id !== "rightcost" && id !== "item") { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
   $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library ? " fixed listpage" : "");
   railActive(); render();
+  if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
   document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
 const frameSrc = hsh => `/?embed=1&bare=1&in=page#${hsh}`;
@@ -373,7 +381,7 @@ function toolbar(rows) {
   const saved = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, [...mod.savedSearches, ...state.userSearches].map(x => ({ label: x.name, on: state.saved === x.name, run: () => applySaved(x) })).concat(state.userSearches.length ? ["-", { label: "Delete a saved search…", run: deleteSaved }] : [])) }, state.saved, h("span", {}, "▾"));
   const sortName = (mod.sortFields.find(f => f[0] === state.sort.field) || [0, state.sort.field])[1];
   const sortIcon = tipOn(h("button", { type: "button", class: "selbtn", html: svg("sort"), onclick: () => { state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc"; rerunWithSkeleton(); } }), state.sort.dir === "asc" ? (state.sort.field === "added" ? "Oldest to latest" : "Ascending") + ": click for descending" : (state.sort.field === "added" ? "Latest to oldest" : "Descending") + ": click for ascending");
-  const sortSel = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.sortFields.map(([k, l]) => ({ label: l, on: state.sort.field === k, run: () => { state.sort.field = k; if (k === "band") state.sort.dir = "asc"; rerunWithSkeleton(); } }))) }, sortName, h("span", {}, "▾"));
+  const sortSel = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.sortFields.map(([k, l]) => ({ label: l, on: state.sort.field === k, run: () => { state.sort.field = k; if (k === "band" || k === "nego") state.sort.dir = "asc"; rerunWithSkeleton(); } }))) }, sortName, h("span", {}, "▾"));
   const active = Object.keys(state.filters).filter(k => k !== "_codes").length > 0 || state.costedOnly;
   const filt = ib("filter", "Filters", () => openDrawer()); if (active) filt.append(h("span", { class: "dot" }));
   const more = ib("dots", "More", e => menu(e.currentTarget, mod.moreActions.map(a => ({ label: a, run: () => moreAction(a, rows) })), { right: true }));
@@ -472,7 +480,8 @@ function cardView(rows) {
     return h("div", { class: "card" + (state.selection.has(k) ? " picked" : "") },
       h("div", { class: "img", style: { background: (ROUTE_COLOR[r.route] || "#B9BEC7") + "22" }, html: svg("fabric") }), bar,
       h("div", { class: "txt" }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code), h("div", { class: "desc", title: r.description }, r.description || ""),
-        h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Should-cost ${n2(r.should)} \u00B7 ${r.price ? `${r.source === "Purchase orders" ? "paid" : "quoted"} ${n2(r.price)} (${pc(r.gap_pct)})` : "no price"}` : r.band)),
+        h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Should-cost ${n2(r.should)} \u00B7 ${r.price ? `${r.source === "Purchase orders" ? "paid" : "quoted"} ${n2(r.price)} (${pc(r.gap_pct)})` : "no price"}` : r.band),
+        val(r, "nego") ? h("div", { class: "fig nego" }, val(r, "nego")) : null),
       ck, h("button", { type: "button", class: "qv", onclick: () => quickView(r) }, "Quick view"));
   }));
   grid.addEventListener("scroll", () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 80 && state.shown < rows.length) { const t = grid.scrollTop; state.shown += CONFIG.pageSize; render(); const g = $(".cards"); if (g) g.scrollTop = t; } });
@@ -523,9 +532,13 @@ function quickView(r) {
     h("div", { style: "margin-top:14px;display:flex;gap:8px" }, h("button", { type: "button", class: "btn fill", onclick: () => { p.remove(); openDetail(r); } }, "Open"), h("button", { type: "button", class: "btn line", onclick: () => openCostPopup(r) }, "Open in Create cost")));
   document.body.append(p);
 }
+// the tab a fabric was left on, so a reload or Back returns to it (this browser tab only)
+function tabMemo(key, tab) {
+  try { const m = JSON.parse(sessionStorage.getItem("rc-tabs") || "{}"); if (tab === undefined) return m[key]; m[key] = tab; sessionStorage.setItem("rc-tabs", JSON.stringify(m)); } catch (e) { /* no memory */ }
+}
 function openDetail(r) {
   closeLayers(); state.library = null; state.frame = null;
-  state.detail = { key: keyOf(r), tab: "item", editing: false };
+  state.detail = { key: keyOf(r), tab: "item", editing: false }; tabMemo(keyOf(r), "item");
   if (decodeURIComponent(location.hash.slice(1)) !== "item/" + keyOf(r)) { location.hash = "#item/" + encodeURIComponent(keyOf(r)); return; }
   state.recent = [{ key: keyOf(r), code: r.code, at: new Date().toISOString() }, ...state.recent.filter(v => v.key !== keyOf(r))].slice(0, 12); store.set("recent", state.recent);
   scrollTo(0, 0); render();
@@ -539,7 +552,7 @@ function renderDetail(main) {
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
     ib("open", "Open in Create cost", () => openCostPopup(r)));
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
-  const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; render(); } }, l)));
+  const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; tabMemo(k, t); render(); if (t === "negotiation" || t === "log") loadNegos(); } }, l)));
   let content;
   if (d.tab === "item") {
     const edit = state.edits[k] || {};
@@ -553,10 +566,16 @@ function renderDetail(main) {
     else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost")));
     else { content = h("div", { class: "buckets" }, "Working it out…"); liveCosting(r, content); }
   } else if (d.tab === "negotiation") {
-    content = h("div", { class: "brief" }, "Working it out…"); negotiationTab(r, content);
+    const brief = h("div", { class: "brief" }, "Working it out\u2026"), slot = h("div", {}, trackerCard(r));
+    const was = briefShould[k]; negotiationTab(r, brief).then(() => { if (briefShould[k] !== was && slot.isConnected) fill(slot, trackerCard(r)); });        // the tracker measures against the brief's should-cost
+    content = [brief, slot];
   } else {
-    const mine = state.log.filter(x => x.text.startsWith(r.code + ":"));
-    content = h("div", { class: "log" }, mine.length ? mine.map(x => h("div", {}, `${new Date(x.at).toLocaleString("en-IN")} · ${x.text.slice(r.code.length + 2)}`)) : h("div", { class: "empty" }, "No changes recorded in this browser."));
+    const mine = state.log.filter(x => x.text.startsWith(r.code + ":")).map(x => ({ at: x.at, text: x.text.slice(r.code.length + 2) + " (this browser)" }));
+    const ng = state.negos[k] || {}, who = x => x ? ` (${x})` : "", stepText = e => `${e.kind} Rs ${n2(e.price)}, dated ${dayOf(e.date)}${e.note ? ` \u2013 ${e.note}` : ""}`;
+    const steps = [...(ng.events || []).map(e => ({ at: e.at, text: `Negotiation step recorded${who(e.by)}: ${stepText(e)}` })),
+      ...(ng.removed || []).flatMap(e => [{ at: e.at, text: `Negotiation step recorded${who(e.by)}, since removed: ${stepText(e)}` }, { at: e.removed_at, text: `Negotiation step removed${who(e.removed_by)}: ${stepText(e)}` }])];
+    const all = [...mine, ...steps].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    content = h("div", { class: "log" }, all.length ? all.map(x => h("div", {}, `${new Date(x.at).toLocaleString("en-IN")} · ${x.text}`)) : h("div", { class: "empty" }, "Nothing recorded yet: no negotiation steps (recorded or removed), and no changes in this browser."));
   }
   fill(main, crumbs, head, tabs, content);
   renderSelbar();
@@ -579,17 +598,113 @@ async function liveCosting(r, box) {
 }
 async function negotiationTab(r, box) {
   if (r.problems && r.problems.length) { box.textContent = "Not costed yet: " + r.problems.join("; ") + ". Open it in Create cost to finish it."; return; }
-  if (!r.choices || !r.price) { box.textContent = "No price on this row, so there is nothing to negotiate yet."; return; }
+  // the price the brief judges: the agreed price or the mill's latest in the tracker, else the price on the row
+  const ng = negoOf(keyOf(r)), s_ = ng && ng.summary, tracked = s_ ? (s_.status === "Agreed" ? s_.agreed : s_.latest) : null, price = tracked ?? r.price;
+  if (!r.choices || !price) { box.textContent = "No price on this row and no mill price in the tracker yet, so there is nothing to judge."; return; }
+  const what = tracked === null ? "the price" : s_.status === "Agreed" ? "the agreed price" : "the mill's latest price";
   try {
-    const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.choices) })).json();
+    const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, r.choices, { "Quoted price (Rs/m)": price }, r.metres ? { "Order quantity (m)": r.metres } : {})) })).json();
+    if (res.total_per_m) briefShould[keyOf(r)] = res.total_per_m;
     const b = res.brief; if (!b) { box.textContent = "No brief: the price is not usable."; return; }
     const label = { push: ["Push", "#E5484D"], fair: ["Fair", "#2E9E5B"], below: ["Below", "#3D8BFD"], ask: ["Ask for the break-up", "#B98900"] }[b.stance];
-    fill(box, h("div", {}, h("span", { class: "st", style: { background: label[1] + "22", color: label[1] } }, b.implausible ? "Check the quote first" : label[0]), ` On today's rates the should-cost is Rs ${n2(b.should)}; the price is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`),
-      h("ul", {}, h("li", {}, `Usual range for this fabric: Rs ${n2(b.lower)} to Rs ${n2(b.settle_up_to)} (${b.band.why}).`), b.stance === "push" ? h("li", {}, `Open at Rs ${n2(b.open_at)}; aim for Rs ${n2(b.settle_up_to)}.`) : null,
+    const done = s_ && s_.status === "Agreed";
+    fill(box, h("div", {}, h("span", { class: "st", style: { background: label[1] + "22", color: label[1] } }, b.implausible ? "Check the quote first" : done ? { push: "Agreed above the usual range", fair: "Agreed in the usual range", below: "Agreed below the usual range", ask: "Agreed; the tool is unsure of this fabric" }[b.stance] : label[0]),
+        ` On today's rates the should-cost is Rs ${n2(b.should)}; ${what} is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`,
+        tracked !== null && r.price && Math.abs(tracked - r.price) >= 0.005 ? ` (The ${r.source === "Purchase orders" ? "purchase order" : "fabric list"} has Rs ${n2(r.price)}; this brief follows the tracker below.)` : ""),
+      h("ul", {}, h("li", {}, `Usual range for this fabric: Rs ${n2(b.lower)} to Rs ${n2(b.settle_up_to)} (${b.band.why}).`), b.stance === "push" && !done ? h("li", {}, s_ && s_.counter !== null ? `You have countered at Rs ${n2(s_.counter)}` + (s_.counter <= b.settle_up_to ? `: do not open above it. Aim for Rs ${n2(s_.counter)} to Rs ${n2(b.settle_up_to)}, the top of the usual range.` : `, which is above the top of the usual range (Rs ${n2(b.settle_up_to)}).`) : `Open at Rs ${n2(b.open_at)}; aim for Rs ${n2(b.settle_up_to)}.`) : null,
         b.weak.length ? h("li", {}, "Why no target: " + b.weak.join("; ") + ".") : null, (b.caveats || []).map(c => h("li", {}, c)),
         b.at_stake !== null && b.quantity ? h("li", {}, `On ${n0(b.quantity)} m that is Rs ${n0(Math.abs(b.at_stake))} ${b.gap >= 0 ? "above" : "below"} should-cost.`) : null),
-      h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Full brief in Create cost"));
+      h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, tracked !== null && r.price && Math.abs(tracked - r.price) >= 0.005 ? "Open in Create cost (on the row's own price)" : "Full brief in Create cost"));
   } catch (e) { box.textContent = "Could not work it out: " + e.message; }
+}
+
+// ------------------------------------------------------------------ negotiation tracker
+/* Each step with the mill, in order: its quote, our counter, a revised quote, the agreed price. What was
+   won is the first quote less the agreed price, times the metres. Kept on the server for everyone. */
+const briefShould = {}, drafts = {};
+const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const dayOf = iso => new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+function negoWords(rec, should) {
+  const s_ = rec.summary, ref = s_.status === "Agreed" ? s_.agreed : s_.latest, out = [];
+  let head = s_.status === "Agreed" ? `Agreed at Rs ${n2(s_.agreed)}` : s_.latest !== null ? `Open: the mill is at Rs ${n2(s_.latest)}` + (s_.counter !== null ? `, our counter Rs ${n2(s_.counter)}` : "")
+    : `Open: our counter is Rs ${n2(s_.counter)}; no mill quote recorded yet`;
+  if (s_.reopened !== null && s_.reopened !== undefined) head += ` (open again after an agreement at Rs ${n2(s_.reopened)})`;
+  if (s_.won_per_m !== null && (s_.status === "Agreed" || s_.won_per_m !== 0)) {
+    const d = s_.won_per_m, money = s_.status === "Agreed" && s_.warnings.length ? " (no rupee total, and not counted as won, until the step flagged below is put right)" : s_.won === null ? " (no metres on this fabric, so no rupee total)"
+      : d === 0 ? "" : s_.status === "Agreed" ? ` (Rs ${n0(Math.abs(s_.won))} ${d > 0 ? "saved" : "more"} on ${n0(rec.metres)} m${d > 0 ? "" : ": a loss"})` : ` (Rs ${n0(Math.abs(s_.won))} ${d > 0 ? "less" : "more"} on ${n0(rec.metres)} m if agreed there)`;
+    out.push(d === 0 ? `the same as the first quote of Rs ${n2(s_.first)}` : `Rs ${n2(Math.abs(d))} a metre ${d > 0 ? "below" : "above"} the first quote of Rs ${n2(s_.first)}${money}`);
+
+  }
+  if (s_.status === "Agreed" && s_.first === null) out.push("no mill quote is recorded, so nothing is counted as won: record the mill's first quote, with its date");
+  if (ref !== null && should) { const g = ref - should, w = s_.status === "Agreed" ? "the agreed price is" : "the mill's price is"; out.push(Math.abs(g) < 0.005 ? `${w} today's should-cost of Rs ${n2(should)}` : `${w} Rs ${n2(Math.abs(g))} a metre ${g > 0 ? "above" : "below"} today's should-cost of Rs ${n2(should)}`); }
+  return [head, out];
+}
+function trackerCard(r) {
+  const k = keyOf(r), rec = negoOf(k), s_ = rec && rec.summary, should = briefShould[k] || r.should;
+  const box = h("div", { class: "brief tracker" });
+  const steps = rec ? rec.events : [];           // in the server's order: by date, the agreed price last on its day
+  const lastKind = steps.length ? steps[steps.length - 1].kind : null, dr = drafts[k] || {};
+  const kind = h("select", { "aria-label": "What happened" }, state.negoKinds.map(x => h("option", {}, x)));
+  kind.value = dr.kind || (!lastKind ? "Mill's quote" : lastKind === "Our counter" || lastKind === "Agreed" ? "Mill's revised quote" : "Our counter");
+  const minDay = (() => { const d = new Date(); d.setDate(d.getDate() - 730); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); })();
+  const price = h("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", placeholder: "Rs per metre", "aria-label": "Price, Rs per metre", value: dr.price ?? (!rec && r.price ? r.price : "") });
+  const date = h("input", { type: "date", value: dr.date || today(), max: today(), min: minDay, "aria-label": "Date" });
+  const note = h("input", { type: "text", maxlength: "500", placeholder: "Note (optional): what was said", "aria-label": "Note", value: dr.note || "" });
+  const msg = h("p", { class: "formmsg", role: "alert", hidden: true }), say = t => { msg.textContent = t; msg.hidden = !t; };
+  const asked = { stamp: null, at: 0 }; let busy = false;
+  const btn = h("button", { type: "button", class: "btn fill" }, "Record");
+  const keep = () => { drafts[k] = { kind: kind.value, price: price.value, date: date.value, note: note.value }; };
+  [kind, price, date, note].forEach(el => { el.addEventListener("input", keep); el.addEventListener("change", keep); });
+  const add = async () => {
+    const p = Number(price.value);
+    if (!price.value || !(p > 0)) { say("Type the price in rupees per metre."); price.focus(); return; }
+    if (!date.value) { say("Choose the date."); date.focus(); return; }
+    if (date.value > today()) { say("The date is in the future."); date.focus(); return; }
+    if (date.value < minDay) { say(`The date is ${dayOf(date.value)}, more than two years ago: check the year.`); date.focus(); return; }
+    if (p < 1 || p > 50000) { say("A price per metre is between Rs 1 and Rs 50,000: check what was typed."); price.focus(); return; }
+    // a figure that looks mistyped is asked about once: against the should-cost (or the row's price), and against the first quote
+    const base = should || r.price, first = s_ && s_.first;
+    const odd = base && (p > 1.5 * base || p < 0.67 * base) ? `${should ? "the should-cost" : "the price on the row"} of Rs ${n2(base)}` : first && (p > 1.25 * first || p < 0.75 * first) ? `the mill's first quote of Rs ${n2(first)}` : null;
+    const stamp = `${kind.value}|${price.value}`;
+    if (odd && (asked.stamp !== stamp || Date.now() - asked.at < 700)) { if (asked.stamp !== stamp) { asked.stamp = stamp; asked.at = Date.now(); } say(`Rs ${n2(p)} is a long way from ${odd}. If it is right, press Record again.`); price.focus(); return; }
+    if (busy) return; busy = true; btn.disabled = true; say("");
+    try {
+      const res = await fetch("/api/negotiations/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        key: k, kind: kind.value, price: price.value, date: date.value, note: note.value, code: r.code, supplier: r.supplier, description: r.description, source: r.source, metres: r.metres, should, row_price: r.price, seen: steps.length }) });
+      if (res.status === 409) { const t = (await res.json()).detail; await loadNegos(true); toast(t, false); return; }
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      state.negos[k] = await res.json(); delete drafts[k]; if (state.detail) state.detail.further = false; toast("Recorded"); render();
+    } catch (e) { say(e.message); toast(e.message, false); } finally { busy = false; btn.disabled = false; }
+  };
+  const words = rec ? negoWords(rec, should) : null;
+  const other = r.duplicate_of ? state.rows.find(x => x.source === r.source && x.code === r.duplicate_of && !x.duplicate_of) : null, otherN = other && negoOf(keyOf(other));
+  fill(box, h("h3", { style: "margin:0 0 6px;font-size:15px" }, "Where it stands with the mill"),
+    !rec && r.duplicate_of ? null : !rec ? h("p", { style: "margin:4px 0 10px;color:var(--text2)" }, "Nothing recorded yet. Record the mill's quote, then each counter and revision, and the agreed price.")
+      : h("p", { style: "margin:4px 0 10px" }, h("b", { class: s_.status === "Agreed" && s_.won_per_m < 0 ? "loss" : null }, words[0]), words[1].map(w => " · " + w)),
+    rec && s_.warnings.length ? h("ul", { class: "warns" }, s_.warnings.map(w => h("li", {}, w))) : null,
+    steps.length ? h("table", { class: "steps" }, h("tbody", {}, steps.map(e => h("tr", {}, h("td", { class: "d" }, dayOf(e.date)), h("td", { class: "k" }, e.kind), h("td", { class: "n" }, "Rs " + n2(e.price)),
+      h("td", { class: "note" }, e.note || ""),
+      h("td", { class: "x" }, h("button", { type: "button", class: "btn rm", "aria-label": `Remove this step: ${e.kind} Rs ${n2(e.price)}`, title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
+        try { const res = await fetch("/api/negotiations/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k, id: e.id }) }); if (!res.ok) throw new Error((await res.json()).detail || res.statusText); toast("Removed (the Log tab keeps a record)"); } catch (err) { toast(err.message, false); }
+        await loadNegos(true); } }, "Remove")))))) : null,
+    r.duplicate_of && !rec ? h("p", { style: "margin:4px 0 0" }, `This row repeats the order of ${r.duplicate_of}, so its negotiation is kept there and the order is counted once. `,
+        otherN ? h("b", {}, `On ${r.duplicate_of}: ${val(other, "nego")}. `) : `Nothing is recorded on ${r.duplicate_of} yet. `, other ? h("button", { type: "button", class: "code", onclick: () => { openDetail(other); state.detail.tab = "negotiation"; tabMemo(keyOf(other), "negotiation"); } }, `Open ${r.duplicate_of}`) : null)
+      : s_ && s_.status === "Agreed" && !(state.detail && state.detail.further) && !drafts[k] ? h("div", {}, h("button", { type: "button", class: "btn line", onclick: () => { state.detail.further = true; render(); } }, "The price was reopened: record a further step"))
+      : [h("div", { class: "stepform" }, kind, price, date, note, btn), msg],
+    r.duplicate_of && rec ? h("p", { style: "margin:8px 0 0;font-size:12px" }, `This row repeats the order of ${r.duplicate_of}: it is not counted in what was won. Keep the steps on ${r.duplicate_of}.`) : null,
+    h("p", { style: "margin:8px 0 0;font-size:12px;color:var(--text2)" }, "Kept on the server: everyone using RightPrice sees the same steps (this page looks for new ones every half minute). Steps run in date order; on one day the agreed price comes last. What was won is the mill's first quote less the agreed price, times the metres; a fabric with a step to check is not counted until it is put right."));
+  btn.addEventListener("click", add);
+  [price, note].forEach(el => el.addEventListener("keydown", e => { if (e.key === "Enter") add(); }));
+  return box;
+}
+/* The steps are shared, so another person (or another tab) may have added one: read them again when the
+   Negotiation tab or the list opens and when the window is looked at again. Only a change redraws the page. */
+async function loadNegos(always) {
+  try {
+    const ng = await (await fetch("/api/negotiations")).json(), was = JSON.stringify(state.negos);
+    state.negos = ng.items || {}; state.negoKinds = ng.kinds || state.negoKinds;
+    if ((always || was !== JSON.stringify(state.negos)) && !state.frame && !state.library && !document.querySelector(".grid td.edit select, .grid td.edit input")) render();
+  } catch (e) { /* the next look will try again */ }
 }
 
 // ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
@@ -840,11 +955,14 @@ addEventListener("message", e => {
   if (e.data.rp === "popup" && e.data.move) { try { sessionStorage.setItem("rp-list-move", JSON.stringify(e.data.move)); } catch (err) { /* no handover */ } }
   if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
 });
+const catchUp = () => { if (!document.hidden && !state.frame && !state.library && state.rows.length && !document.querySelector(".scrim")) loadNegos(); };
+addEventListener("focus", catchUp); document.addEventListener("visibilitychange", catchUp); setInterval(catchUp, 30000);
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
   try {
-    const d = await (await fetch("/api/costs")).json();
+    const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
+    state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];
     state.rows = d.rows; state.counts = d.counts;
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";

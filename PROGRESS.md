@@ -1,9 +1,157 @@
 # RightPrice: progress and handover
 
-As of 25 November 2026. **Start with "Handover" below**; the sections after it are the record of
-how the tool got here, oldest first.
+As of 26 November 2026. **Start with "Handover, 26 November 2026" below.** The earlier handover
+(25 November) and the sections after it are the record of how the tool got here, oldest first.
 
-## Handover, 25 November 2026
+## Handover, 26 November 2026
+
+**The aim of the tool is a better negotiation with the vendor.** Every screen is judged by whether it
+helps a fabric buyer walk into a meeting with a mill better prepared. The owner is GP.
+
+### Where things stand
+
+- Merged and deployed (deploy runs green): pull requests 10 to 16.
+  - 10: negotiation brief fixes (usual range per fabric type, mirror opening price, placeholders weighed).
+  - 11: negotiation pack (one printable page per mill sheet).
+  - 12: Right cost (every costing in one list; "+" popup).
+  - 13: mill sheet terms per mill in the rate master (`Mill_Sheet_Terms`); poly cotton and linen rows.
+  - 14: should-cost pinned beside the fabric code on a phone.
+  - 15: **one shell for every screen, in RightPrice's own look** (see Architecture below).
+  - 16: mill cost sheets (Prices > Mill cost sheets; drafts GP applies).
+- **Pull request 17, the negotiation tracker: reviewed and merged (26 Nov, second session).** The ten findings of
+  its first cold review were fixed, a fresh cold review found 18 more (three on money), a second reviewer
+  confirmed 13 of the fixes and found 15 further points; those were fixed too and checked by `check_server.py`
+  and by the build session in the browser, not by a third reviewer.
+
+### Negotiation tracker: how it behaves now
+
+- The **first quote** is the mill's first "Mill's quote" or revised quote, never our counter or the agreed price.
+  Steps run by date; on one day the mill's quote comes first and the agreed price last. A step after an
+  agreement opens it again ("Open again").
+- **Not counted as won**: open negotiations; an agreed price with no mill quote, or no metres; a fabric with a
+  step to check (a price more than twice or under half the should-cost or the first quote, `FAR` in `server.py`;
+  a counter above the mill's price; an agreed price dated before the first quote); a list row that repeats
+  another order (its tracker sends the buyer to the other row). The Dashboard names the fabrics to check.
+- Entry: prices outside Rs 1 to 50,000 and dates in the future or more than two years back are refused; a
+  price more than 1.5 times or under two thirds of the should-cost, or a quarter away from the first quote, is
+  asked about once ("press Record again"). A page that has not seen the latest step cannot record over it (409).
+- A mill written two ways is one mill (`mill_key`). Losses inside a net gain are shown apart.
+- The brief on the Negotiation tab follows the tracker's price (agreed, or the mill's latest) and says so; with
+  a counter recorded it says "do not open above it". Removed steps are kept for the Log tab; on Azure each step
+  carries the signed-in person's name.
+- Pages re-read the shared steps every half minute and when the window is looked at again.
+- GP's decision, 26 Nov: the per-browser Status column stays as it is (a personal label), though it can disagree
+  with the tracker.
+
+Left as they are (told to GP): the list's "Against range" verdict is on the row's own price, so a fabric agreed
+lower still shows Push there (the Negotiation column beside it shows the agreement); the mirror rule for the
+opening price can give an opening figure only paise below a quote that is just above the range; a plausible
+typo inside the thresholds above is not caught; the Negotiation column needs a sideways scroll in the phone's
+list view (cards show it); the Log timestamps are in the browser's format.
+- `python check_engine.py` and `python check_server.py` both print ALL OK; Qlty-1 = Rs 181.40.
+- GP confirmed the live site by eye after pull request 15 ("looking fine"). **Not confirmed by eye since.**
+
+### Rules (unchanged; all nine hold)
+
+1. Work on a branch (`claude/sleepy-dirac-dknzrp`) and open a pull request. Never push to `main`:
+   every push there redeploys the live Azure site.
+2. `data/Rate_Master.xlsx` is the source of truth. Never run `build_masters.py --force`. Save a dated
+   backup before any script changes it. Never change a rate unless GP asks (a rate changed by GP's own
+   Apply on Mill cost sheets is GP's action).
+3. Run `python check_engine.py` and `python check_server.py` after changes; both must print ALL OK.
+4. A rate with no data behind it gets the Basis "Placeholder".
+5. Calibration proposals stay drafts. Do not apply them.
+6. Merge when the pull request's "checks" job passes; confirm the deploy run is green; if the live site
+   goes down, revert the merge.
+7. After building screens, run a cold review (a fresh reviewer that has not seen the code uses the
+   running app). Fix what it finds; a second reviewer confirms. Every round so far found real faults.
+8. The live server keeps its own rate master in `/home/rightprice-data`; new tables reach it only
+   through `masters.load()` (`_add_missing_tables`), which saves a dated copy first.
+9. Report plainly: what was checked, what was not, what did not improve. Ask GP before decisions that
+   are his (use the select-an-option question form; GP prefers that). The build session cannot sign in
+   to the live site: ask GP to confirm by eye.
+
+### What GP asked for on 26 Nov: five builds, one by one (1 is done)
+
+1. **Negotiation tracker** (pull request 17, done). On each fabric's Negotiation tab in Right
+   cost: record the mill's quote, our counter, revised quotes and the agreed price (date, note); what
+   was won against the first quote and against should-cost; Negotiation column and filter in Right
+   cost; "Won in negotiation" panel by mill on the Dashboard. Stored in `negotiations.json` beside the
+   rate master. Endpoints `/api/negotiations*`.
+2. **Supplier page.** One page per mill: every fabric bought (purchase orders) and quoted (fabric list),
+   its verdict (Push / Fair / Below / Ask break-up), money above should-cost, mill sums that were off,
+   tracker status and money won, and a combined question list for the next meeting with that mill
+   (reuse the pack's question logic in `server.py` `_questions`). Reach it from Right cost's Suppliers
+   tab and the Dashboard's supplier panel. Printable.
+3. **Quote alerts.** When a mill sheet is uploaded (Bulk upload), flag at once every row priced above
+   its usual range, with sums off, a repeated order, or a quote far below should-cost; show them first
+   on the Dashboard and as a count on the Right cost rail item. No e-mail or push yet.
+4. **E-mail drafting with the Claude API**, "humanised, a fresh draft every time". From a fabric's
+   brief, a negotiation pack, or a supplier page: a short, polite e-mail (and a WhatsApp-length text)
+   to the mill asking for the break-up or a revised price, with the figures from the tool, in GP's
+   voice (plain, courteous, firm; Indian business English; no jargon). Editable before copying; never
+   sent by the tool.
+   - Use the official `anthropic` Python SDK on the server (add to `requirements.txt`); model
+     `claude-opus-5-5`, thinking left adaptive (it cannot be disabled), `output_config.effort` "low"
+     or "medium"; stream or keep `max_tokens` around 4000; handle `stop_reason == "refusal"`; opt into
+     server-side fallbacks (`betas=["server-side-fallback-2026-07-01"]`, `fallbacks="default"`) and
+     tell GP. Load the `claude-api` skill before writing the code.
+   - The key: ask GP for it with the secure credential form (never in chat); on Azure it must be the
+     app setting `ANTHROPIC_API_KEY` (GP sets it in the portal: Web app > Settings > Environment
+     variables). Without a key the feature says so and offers a plain template instead.
+   - Send only the figures needed; no supplier price lists beyond the fabric in question.
+5. **MCP server**, so an AI assistant (for example Claude Desktop) can use RightPrice: tools to cost a
+   fabric, read Right cost rows, read a brief, make a negotiation pack, read and record tracker steps.
+   Python `mcp` package; streamable HTTP mounted on the app (for example `/mcp`) plus a stdio entry
+   for local use. The live site is behind Microsoft sign-in, so ask GP how the assistant should
+   authenticate (a separate token, or local only) before exposing it on Azure.
+
+### Waiting on GP
+
+1. Yarn prices for July to November 2026 (GP chose to wait for them before dating the yarn rates;
+   the history in `inputs/Yarn_Inteliigence_Master.xlsx` stops in June 2026).
+2. Mill cost sheets back from one or two mills (template on Prices > Mill cost sheets). Placeholder
+   wastage, overhead and margin are why 67% of purchase-order costings come out "Ask break-up".
+3. Real yarn rates for poly cotton and linen (six placeholders).
+4. A current quote for Amsler 24s yarn (yarn-dyed plain is over-costed by about 10%).
+5. A decision on the calibration draft; print method and a mill cost sheet for one print.
+6. Price sheets from mills other than Arvind (add a row to `Mill_Sheet_Terms` for each mill).
+7. For build 4: the Anthropic API key (secure form; app setting on Azure). For build 5 GP chose, on 26 Nov,
+   **a secret token on the live site** (so `/mcp` must be let through Microsoft sign-in and checked by the app).
+
+### Decisions GP has made (26 Nov)
+
+- Right cost lists the 1,696 purchase-order costings plus the fabric list; stays its own page.
+- Status and Remarks in Right cost, saved searches and Library lists are kept per browser.
+- Usual-range floor 5%, cap 10%; mirror rule for the opening price; placeholder blocks above 10%.
+- The 265 uncosted purchase-order fabrics stay out; the pilot is not re-run.
+- Every screen in the new shell and look (not a copy of the company PLM): Home (Dashboard | Pilot
+  results), Right cost, Prices (market prices, rate master, mill cost sheets, settings, costing and
+  sourcing setup lists); "New cost" popup with Create cost, Bulk upload, Compare, Negotiation pack;
+  ⋮ menu: Download Excel and those four; settings under the user icon; dark mode; initials from the
+  Microsoft sign-in.
+
+### Architecture since 26 Nov (read before touching the front end)
+
+- `/` serves `web/rightcost.html` + `rightcost.js` + `rightcost.css`: the **shell** (rail, Right cost
+  list and detail pages, Library lists, the popup). Hash routes: `#dashboard`, `#pilot`, `#rightcost`,
+  `#item/<source|code>`, `#lib/<name>`, the Prices pages (`#yarn`, `#cotton`, `#intake`, `#rates`,
+  `#ratecard`, `#costsheets`, `#settings`); `?new=<tab>` after a route is the popup
+  (`cost`, `bulk`, `compare`, `pack`).
+- `/?embed=1` serves the earlier front end (`web/index.html` + `app.js` + `app.css`) without its own
+  panel and header; the shell shows it in an iframe (`&bare=1&in=page` for pages, `&bare=1` in the
+  popup). A page in the frame posts `{rp:"nav"}` so the shell's heading and address follow, and
+  `{rp:"popup"}` to open a costing screen in the popup; the popup posts `{rp:"close"}` on Escape and
+  `{rp:"listChanged"}` after Add to list.
+- Lessons that cost time: `replaceChildren` turns arrays and nulls into text (use `fill()` in
+  rightcost.js, spread arrays in app.js); moving an iframe in the DOM reloads it; numpy numbers break
+  JSON responses (convert); edit scripts must match the file's real characters (· — −), not escapes;
+  a lost CSS brace silently swallows later rules (`check_server.py` now checks braces).
+- Test data for local runs is not in the repository: make a mill sheet with `mill_sheet.COLUMNS` and
+  upload it, as the checks do; run the server with `RIGHTPRICE_NO_CLASSIC=1` and a temporary
+  `RIGHTPRICE_DATA` folder so `data/` is never touched.
+
+## Earlier handover, 25 November 2026 (superseded)
 
 **The aim of the tool is a better negotiation with the vendor.** Every screen is judged by whether
 it helps a fabric buyer walk into a meeting with a mill better prepared.
@@ -125,6 +273,17 @@ mills' figures for that rate, with the sheets behind it). Nothing changes until 
 presses Apply (asked twice); the rate master is copied with the date first, and the new rate's Basis
 names the mills. A wastage, overhead or margin for a route and weave the rate master has no row for
 adds that row (today such fabrics fall back to the placeholder Default row). `costsheet.py`.
+
+### Negotiation tracker (26 Nov)
+
+GP asked on 26 Nov for five builds in order: the negotiation tracker, a supplier page, quote alerts, email
+drafting with the Claude API, and an MCP server so an AI assistant can use RightPrice.
+
+The tracker: on each fabric's Negotiation tab in Right cost, record each step (the mill's quote, our
+counter, a revised quote, the agreed price) with date and note. It shows where it stands, what was won
+against the first quote (per metre and on the metres), and where the price ended against should-cost.
+A "Negotiation" column in Right cost, and a "Won in negotiation" panel on the Dashboard by mill. Kept on
+the server (`negotiations.json` beside the rate master), so everyone sees the same steps.
 
 ### Waiting on the owner
 

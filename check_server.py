@@ -289,6 +289,90 @@ def main():
         check("Cost sheet: once applied, the same sheets draft nothing for that rate", not any(x["id"] == d["id"] for x in after["drafts"]))
         c.post("/api/costsheet/remove", json={"ids": [r["id"] for r in after["rows"]]})
 
+        # negotiation tracker
+        base = {"key": "Fabric list|T-9", "code": "T-9", "supplier": "Arvind", "metres": 1000, "should": 170}
+        ev = lambda body: c.post("/api/negotiations/event", json=body)
+        refused = [ev(dict(base, kind="Agreed", price=0)), ev(dict(base, kind="Agreed", price=180, date="2099-01-01")),
+                   ev(dict(base, kind="Mill's quote", price=180, date="0206-11-20")), ev(dict(base, kind="Mill's quote", price=0.004)),
+                   ev(dict(base, kind="Mill's quote", price=99999999))]
+        check("Tracker: a price of zero, under Rs 1 or absurd, a date in the future or years ago are refused", all(r.status_code == 400 for r in refused))
+        ev(dict(base, kind="Mill's quote", price=190, date="2026-11-20"))
+        ev(dict(base, kind="Our counter", price=176, date="2026-11-21"))
+        last = ev(dict(base, kind="Agreed", price=182.5, date="2026-11-22")).json()
+        sm = last["summary"]
+        check("Tracker: agreed price, and what was won against the first quote and should-cost",
+              sm["status"] == "Agreed" and sm["agreed"] == 182.5 and sm["won_per_m"] == 7.5 and sm["won"] == 7500 and sm["above_should_per_m"] == 12.5 and sm["counted"])
+        tot = c.get("/api/negotiations/summary").json()
+        check("Tracker: the dashboard total", tot["agreed"] == 1 and tot["won"] == 7500 and tot["suppliers"][0]["supplier"] == "Arvind")
+        agreed_id = last["events"][-1]["id"]
+        c.post("/api/negotiations/remove", json={"key": base["key"], "id": agreed_id})
+        rec = c.get("/api/negotiations").json()["items"][base["key"]]
+        check("Tracker: removing the agreed step reopens it, and the removed step is kept for the log",
+              rec["summary"]["status"] == "Open" and rec["removed"][0]["id"] == agreed_id and rec["removed"][0]["removed_at"])
+        check("Tracker: removing a step twice says it is gone", c.post("/api/negotiations/remove", json={"key": base["key"], "id": agreed_id}).status_code == 404)
+        # the first quote is a quote: never our counter, never the agreed price
+        k2 = dict(base, key="Fabric list|T-10", code="T-10", supplier="Arvind Ltd")
+        only = ev(dict(k2, kind="Agreed", price=180, date="2026-11-10")).json()["summary"]
+        check("Tracker: an agreed price with no mill quote is not counted as won", only["first"] is None and only["won"] is None and only["no_quote"] and not only["counted"])
+        late = ev(dict(k2, kind="Mill's quote", price=200, date="2026-11-12")).json()["summary"]
+        check("Tracker: an agreed price dated before the first quote is not counted as agreed, and is flagged",
+              late["status"] == "Open" and late["first"] == 200 and late["reopened"] == 180 and any("before the mill's first quote" in w for w in late["warnings"]))
+        same = ev(dict(dict(base, key="Fabric list|T-12", code="T-12"), kind="Agreed", price=180, date="2026-11-15")).json()
+        same = ev(dict(dict(base, key="Fabric list|T-12", code="T-12"), kind="Mill's quote", price=190, date="2026-11-15")).json()
+        check("Tracker: a quote entered after the agreed price on the same day comes before it",
+              same["summary"]["status"] == "Agreed" and same["summary"]["won"] == 10000 and same["events"][-1]["kind"] == "Agreed")
+        for e in c.get("/api/negotiations").json()["items"][k2["key"]]["events"]:
+            c.post("/api/negotiations/remove", json={"key": k2["key"], "id": e["id"]})
+        ev(dict(k2, kind="Mill's quote", price=200, date="2026-11-12"))
+        again = ev(dict(k2, kind="Agreed", price=210, date="2026-11-14")).json()["summary"]
+        check("Tracker: agreeing above the first quote is a loss", again["status"] == "Agreed" and again["won_per_m"] == -10 and again["won"] == -10000)
+        ev(dict(base, kind="Agreed", price=182.5, date="2026-11-22"))
+        tot = c.get("/api/negotiations/summary").json()
+        check("Tracker: a mill written two ways is one mill; a loss is netted and also shown apart",
+              len(tot["suppliers"]) == 1 and tot["suppliers"][0]["fabrics"] == 3 and tot["won"] == 7500 and tot["lost"] == 10000 and tot["lost_fabrics"] == 1, str(tot))
+        # a mistyped first quote must not become money won
+        k3 = dict(base, key="Fabric list|T-11", code="T-11")
+        typo = ev(dict(k3, kind="Mill's quote", price=2150, date="2026-11-20")).json()["summary"]
+        typo2 = ev(dict(k3, kind="Agreed", price=150, date="2026-11-21")).json()["summary"]
+        tot2 = c.get("/api/negotiations/summary").json()
+        check("Tracker: a first quote far from should-cost is flagged as the odd figure, and left out of what was won",
+              any("first quote" in w and "2,150.00" in w for w in typo["warnings"]) and not typo2["counted"] and tot2["won"] == 7500
+              and [x["code"] for x in tot2["to_check"]] == ["T-11"] and not any("150.00 (Agreed" in w for w in typo2["warnings"]), str(typo2))
+        over = ev(dict(dict(base, key="Fabric list|T-13", code="T-13"), kind="Mill's quote", price=185, date="2026-11-20")).json()
+        over = ev(dict(dict(base, key="Fabric list|T-13", code="T-13"), kind="Our counter", price=190, date="2026-11-21")).json()["summary"]
+        check("Tracker: a counter above the mill's price is queried", any("above the mill's price" in w for w in over["warnings"]))
+        k13 = dict(base, key="Fabric list|T-13", code="T-13")
+        stale = ev(dict(k13, kind="Agreed", price=180, date="2026-11-22", seen=1))
+        check("Tracker: a page that has not seen the latest step cannot record over it", stale.status_code == 409)
+        still = ev(dict(k13, kind="Agreed", price=180, date="2026-11-22", seen=2)).json()["summary"]
+        check("Tracker: the counter stays flagged after a later step, and the fabric stays out of what was won",
+              any("above the mill's price" in w for w in still["warnings"]) and not still["counted"])
+        k14 = dict(base, key="Fabric list|T-14", code="T-14")
+        ev(dict(k14, kind="Mill's revised quote", price=190, date="2026-11-20"))
+        o14 = ev(dict(k14, kind="Mill's quote", price=200, date="2026-11-20")).json()["summary"]
+        check("Tracker: on one day the mill's quote comes before its revised quote", o14["first"] == 200 and o14["latest"] == 190)
+        half = ev(dict(k14, kind="Agreed", price=95, date="2026-11-21")).json()["summary"]
+        check("Tracker: an agreed price under half the first quote is flagged and not counted", half["warnings"] and not half["counted"])
+        nc = ev({"key": "Fabric list|T-15", "code": "T-15", "kind": "Mill's quote", "price": 2150, "row_price": 185, "date": "2026-11-20"}).json()["summary"]
+        check("Tracker: a fabric not costed is checked against the price on its row", any("price on the row" in w for w in nc["warnings"]))
+        check("Mill names: Ltd, Limited, Mills and a cut-off Limited are dropped",
+              server.mill_key("Rajapalayam Mills Limite") == server.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and server.mill_key("Arvind") == server.mill_key("Arvind Limited"))
+        check("Rupees in Indian grouping", server._inr(99999999) == "9,99,99,999.00" and server._inr(1234.5) == "1,234.50")
+        # a list row that repeats another order: no second negotiation
+        buf = io.BytesIO()
+        pd.DataFrame([dict(base_row, **{"Fab Code": "D-1", "Total order qnty": 3100}), dict(base_row, **{"Fab Code": "D-2", "Total order qnty": 3100})],
+                     columns=mill_sheet.COLUMNS).to_excel(buf, index=False)
+        c.post("/api/list/upload", files={"file": ("dup.xlsx", io.BytesIO(buf.getvalue()))})
+        lst_rows = [r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Fabric list" and r["code"] in ("D-1", "D-2")]
+        dup = next((r for r in lst_rows if r.get("duplicate_of")), None)
+        r_ = ev({"key": f"Fabric list|{dup['id']}", "code": dup["code"], "kind": "Mill's quote", "price": 185}) if dup else None
+        check("Tracker: a row repeating another order is sent to that order", bool(dup) and r_.status_code == 400 and dup["duplicate_of"] in r_.json()["detail"])
+        c.post("/api/list/remove", json={"ids": [r["id"] for r in lst_rows]})
+        for key, it in c.get("/api/negotiations").json()["items"].items():
+            for e in it["events"]:
+                c.post("/api/negotiations/remove", json={"key": key, "id": e["id"]})
+        check("Tracker: with every step removed nothing is counted", c.get("/api/negotiations/summary").json()["fabrics"] == 0)
+
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
         t = c.post("/api/intake/file", files={"file": ("list.csv", io.BytesIO(csv))}).json()
