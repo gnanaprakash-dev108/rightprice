@@ -374,3 +374,61 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
 .rail .item .badge { position: absolute; top: 2px; right: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #E5484D; color: #fff; font-size: 10.5px; font-weight: 800; line-height: 18px; text-align: center; }
 .chip.alertchip { background: #E5484D22; border: 1px solid #E5484D66; font-weight: 700; cursor: pointer; color: var(--text); font: inherit; font-weight: 700; }
 .brief.flagged { border-left: 4px solid #E5484D; margin-bottom: 12px; } .brief.flagged ul { margin: 0 0 8px; }
+
+/* ---------- side panel: a floating rounded card. Folded it is a column of icons with a name beside the one
+   under the pointer; the arrow opens it to icons with their names, and the page moves over to make room. */
+body { --rail-c: 64px; --rail-w: var(--rail-c); --rail-push: var(--rail-w); --rail-gap: 10px; }
+body.rail-open { --rail-w: 224px; }
+.rail { inset: var(--rail-gap) auto var(--rail-gap) var(--rail-gap); width: var(--rail-w); border-radius: 18px; padding: 12px 10px; gap: 6px; align-items: stretch;
+  box-shadow: 0 12px 32px rgba(10, 25, 18, .22); transition: width .22s ease; }
+.main { margin-left: calc(var(--rail-push) + var(--rail-gap) * 2); transition: margin-left .22s ease; }
+.flyout { left: calc(var(--rail-w) + var(--rail-gap) + 8px); }
+.selbar { left: calc(var(--rail-push) + var(--rail-gap) * 2 + 16px); }
+.toast { left: calc(var(--rail-push) + var(--rail-gap) * 2 + 20px); }
+
+.rail .rhead { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 12px; }
+.rail .logo { margin-bottom: 0; flex: none; }
+.rail .rname { color: #fff; font-size: 15px; font-weight: 800; letter-spacing: .01em; }
+.rail .rtoggle { width: 28px; height: 28px; border-radius: 9px; border: 0; background: #fff; color: var(--rail); display: grid; place-items: center; cursor: pointer; flex: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
+.rail .rtoggle svg { width: 15px; height: 15px; transition: transform .22s ease; }
+.rail .rtoggle:hover { filter: brightness(.94); }
+body.rail-open .rail .rhead { flex-direction: row; }
+body.rail-open .rail .rtoggle { margin-left: auto; }
+body.rail-open .rail .rtoggle svg { transform: rotate(180deg); }
+
+.rail .grp { align-items: stretch; gap: 4px; }
+.rail .item { width: 100%; height: 44px; padding: 0; flex-direction: row; justify-content: center; gap: 12px; font-size: 13.5px; font-weight: 600; letter-spacing: 0; white-space: nowrap; }
+.rail .item .ico { display: grid; place-items: center; flex: none; }
+.rail .lbl { display: none; }
+body.rail-open .rail .lbl { display: block; animation: railname .22s ease-out; }
+@keyframes railname { from { opacity: 0; transform: translateX(-6px); } }
+body.rail-open .rail .item { justify-content: flex-start; padding: 0 12px; }
+body.rail-open .rail .item .lbl { overflow: hidden; text-overflow: ellipsis; }
+.rail .item .badge { top: 3px; right: 3px; }
+body.rail-open .rail .item .badge { top: 13px; right: 10px; }
+
+/* folded: the name appears beside the icon under the pointer or the keyboard focus */
+.rail .rtip { position: absolute; left: calc(100% + 16px); top: 50%; transform: translate(-6px, -50%); background: var(--rail); color: #fff; font-size: 12.5px; font-weight: 700; padding: 7px 11px; border-radius: 9px;
+  white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s ease, transform .15s ease; box-shadow: 0 6px 18px rgba(0, 0, 0, .25); z-index: 31; }
+.rail .item:hover .rtip, .rail .item:focus-visible .rtip { opacity: 1; transform: translate(0, -50%); }
+body.rail-open .rail .rtip { display: none; }
+
+.rail .grp.bottom { flex-direction: row; align-items: center; justify-content: center; gap: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .12); }
+.rail .avatar { flex: none; }
+.rail .racct { background: none; border: 0; padding: 0; color: var(--rail-ink); font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail .racct:hover { color: #fff; }
+body.rail-open .rail .grp.bottom { justify-content: flex-start; padding-left: 4px; }
+
+@media (max-width: 900px) {
+  body { --rail-c: 52px; --rail-gap: 6px; }
+  body.rail-open { --rail-push: var(--rail-c); }          /* on a phone the open panel lies over the page */
+  .rail { width: var(--rail-w); padding: 10px 7px; border-radius: 15px; }
+  .rail .item { width: 100%; font-size: 13.5px; height: 42px; }
+  .main { margin-left: calc(var(--rail-push) + var(--rail-gap) * 2); }
+  .flyout { left: calc(var(--rail-w) + var(--rail-gap) + 6px); }
+  .selbar { left: calc(var(--rail-push) + var(--rail-gap) * 2); }
+  .toast { left: calc(var(--rail-push) + var(--rail-gap) * 2); }
+  body.rail-open .rail { box-shadow: 0 16px 48px rgba(0, 0, 0, .4); }
+}
+@media (prefers-reduced-motion: reduce) { .rail, .main, .rail .rtoggle svg, .rail .rtip { transition: none; } body.rail-open .rail .lbl { animation: none; } }
+@media print { .main { margin-left: 0 !important; } }

@@ -276,9 +276,16 @@ function renderRail() {
     else openFly(it.fly, e.currentTarget);
   }, onmouseenter: it.fly ? e => openFly(it.fly, e.currentTarget, true) : null,
     onmouseleave: () => setTimeout(() => { const f = $("#flyout"); if (openFly.hover && !f.matches(":hover") && !document.querySelector(".rail .item:hover")) { f.hidden = true; railActive(); } }, 250) },
-    h("span", { html: svg(it.icon) }), h("span", {}, it.label)));
-  fill($("#rail"), h("div", { class: "logo", html: svg("logo"), title: "RightPrice" }), h("div", { class: "grp" }, CONFIG.rail.map(item)),
-    h("div", { class: "grp bottom" }, h("button", { type: "button", class: "avatar", id: "avatar", "aria-label": "Settings and account", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials)));
+    h("span", { class: "ico", html: svg(it.icon) }), h("span", { class: "lbl" }, it.label),
+    it.fly ? null : h("span", { class: "rtip", "aria-hidden": "true" }, it.label)));
+  // the panel floats beside the page: folded it shows icons, the arrow opens it to icons with their names
+  const setOpen = open => { document.body.classList.toggle("rail-open", open); const t = $("#railToggle"); if (t) { t.setAttribute("aria-expanded", String(open)); t.setAttribute("aria-label", open ? "Fold the side panel" : "Open the side panel"); } };
+  const toggle = h("button", { type: "button", class: "rtoggle", id: "railToggle", onclick: () => { const open = !document.body.classList.contains("rail-open"); store.set("railOpen", open); closeLayers(); setOpen(open); },
+    html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>' });
+  fill($("#rail"), h("div", { class: "rhead" }, h("div", { class: "logo", html: svg("logo"), title: "RightPrice" }), h("b", { class: "lbl rname" }, "RightPrice"), toggle), h("div", { class: "grp" }, CONFIG.rail.map(item)),
+    h("div", { class: "grp bottom" }, h("button", { type: "button", class: "avatar", id: "avatar", "aria-label": "Settings and account", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials),
+      h("button", { type: "button", class: "lbl racct", tabindex: "-1", "aria-hidden": "true", onclick: () => $("#avatar").click() }, "Settings and account")));
+  setOpen(store.get("railOpen", false));
   railActive();
 }
 function go(href) {
