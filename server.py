@@ -1062,6 +1062,116 @@ def costsheet_apply(payload: dict = Body(...)):
     return {"applied": log, "backup": os.path.basename(backup)}
 
 
+# ------------------------------------------------------------------ negotiation tracker
+NEGO_PATH = os.path.join(os.path.dirname(masters.LOG_PATH), "negotiations.json")
+NEGO_KINDS = ["Mill's quote", "Our counter", "Mill's revised quote", "Agreed"]
+
+
+def _negos():
+    try:
+        with open(NEGO_PATH, encoding="utf8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_negos(d):
+    os.makedirs(os.path.dirname(NEGO_PATH), exist_ok=True)
+    tmp = NEGO_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf8") as f:
+        json.dump(d, f, default=str)
+    os.replace(tmp, NEGO_PATH)
+
+
+def nego_summary(rec):
+    """Where one fabric's negotiation stands: first and latest mill price, the agreed price, and what was won."""
+    ev = sorted(rec.get("events", []), key=lambda e: (e["date"], e.get("at", "")))
+    mill = [e for e in ev if e["kind"] in ("Mill's quote", "Mill's revised quote", "Agreed")]
+    agreed = next((e for e in reversed(ev) if e["kind"] == "Agreed"), None)
+    first = mill[0]["price"] if mill else None
+    latest = mill[-1]["price"] if mill else None
+    metres = rec.get("metres") or 0
+    should = rec.get("should")
+    out = {"status": "Agreed" if agreed else ("Open" if ev else "Not started"), "first": first, "latest": latest,
+           "agreed": agreed["price"] if agreed else None, "counter": next((e["price"] for e in reversed(ev) if e["kind"] == "Our counter"), None),
+           "steps": len(ev), "last_date": ev[-1]["date"] if ev else None}
+    ref = out["agreed"] if agreed else latest
+    out["won_per_m"] = None if first is None or ref is None else round(first - ref, 2)
+    out["won"] = None if out["won_per_m"] is None or not metres else round(out["won_per_m"] * metres)
+    out["above_should_per_m"] = None if ref is None or should is None else round(ref - should, 2)
+    return out
+
+
+@app.get("/api/negotiations")
+def negotiations():
+    """Every fabric's negotiation: its steps and where it stands."""
+    d = _negos()
+    return {"kinds": NEGO_KINDS, "items": {k: dict(v, summary=nego_summary(v)) for k, v in d.items()}}
+
+
+@app.post("/api/negotiations/event")
+def negotiation_event(payload: dict = Body(...)):
+    """Record one step: the mill's quote, our counter, a revised quote, or the agreed price."""
+    key, kind = str(payload.get("key") or ""), payload.get("kind")
+    price = _num_or_none(payload.get("price"))
+    if not key or kind not in NEGO_KINDS:
+        raise HTTPException(400, "Choose the fabric and what happened")
+    if price is None or price <= 0:
+        raise HTTPException(400, "Type the price in rupees per metre")
+    try:
+        day_ = dt.date.fromisoformat(str(payload.get("date") or dt.date.today().isoformat()))
+    except ValueError:
+        raise HTTPException(400, "The date is not a date")
+    if day_ > dt.date.today():
+        raise HTTPException(400, "The date is in the future")
+    d = _negos()
+    rec = d.setdefault(key, {"key": key, "events": []})
+    for f in ("code", "supplier", "description", "source"):
+        if payload.get(f):
+            rec[f] = payload[f]
+    for f in ("metres", "should"):
+        v = _num_or_none(payload.get(f))
+        if v is not None:
+            rec[f] = v
+    rec["events"].append({"id": f"{dt.datetime.now():%Y%m%d%H%M%S%f}", "at": dt.datetime.now().isoformat(timespec="seconds"),
+                          "date": day_.isoformat(), "kind": kind, "price": round(price, 2), "note": str(payload.get("note") or "")[:500]})
+    _save_negos(d)
+    return dict(rec, summary=nego_summary(rec))
+
+
+@app.post("/api/negotiations/remove")
+def negotiation_remove(payload: dict = Body(...)):
+    key, eid = str(payload.get("key") or ""), str(payload.get("id") or "")
+    d = _negos()
+    if key not in d:
+        raise HTTPException(404, "No negotiation for that fabric")
+    d[key]["events"] = [e for e in d[key]["events"] if e["id"] != eid]
+    if not d[key]["events"]:
+        d.pop(key)
+    _save_negos(d)
+    return {"removed": True}
+
+
+@app.get("/api/negotiations/summary")
+def negotiations_summary():
+    """What negotiation has won, overall and by mill: against the first quote, and where prices ended against should-cost."""
+    items = [dict(v, summary=nego_summary(v)) for v in _negos().values()]
+    by = {}
+    for it in items:
+        s_ = it["summary"]
+        b = by.setdefault(it.get("supplier") or "No supplier", {"supplier": it.get("supplier") or "No supplier", "fabrics": 0, "agreed": 0, "open": 0, "won": 0.0, "metres": 0.0})
+        b["fabrics"] += 1
+        b["agreed" if s_["status"] == "Agreed" else "open"] += 1
+        if s_["status"] == "Agreed" and s_["won"] is not None:
+            b["won"] += s_["won"]
+            b["metres"] += it.get("metres") or 0
+    agreed = [it for it in items if it["summary"]["status"] == "Agreed"]
+    return {"fabrics": len(items), "agreed": len(agreed), "open": len(items) - len(agreed),
+            "won": round(sum(it["summary"]["won"] or 0 for it in agreed)),
+            "no_quantity": sum(1 for it in agreed if not it.get("metres")),
+            "suppliers": sorted(by.values(), key=lambda b: -b["won"])}
+
+
 @app.post("/api/list/download")
 def list_download(options: dict = Body(default={})):
     v = list_view(options)

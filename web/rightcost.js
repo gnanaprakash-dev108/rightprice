@@ -25,7 +25,8 @@ const CONFIG = {
         { id: "image", header: "Image", width: 60, pinned: true, type: "thumb" },
         { id: "code", header: "Fabric code", width: 130, pinned: true, type: "link" },
         { id: "band", header: "Against range", width: 120, type: "band", help: "The negotiation brief's verdict on today's rates: in the usual range for this fabric type, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates)" },
-        { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your negotiation status. Kept in this browser" },
+        { id: "nego", header: "Negotiation", width: 160, help: "From the tracker on the fabric's Negotiation tab: agreed price, or the latest price while it is open" },
+        { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
         { id: "route", header: "Route", width: 90 },
@@ -58,7 +59,7 @@ const CONFIG = {
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
-        { id: "order_size", label: "Order size" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
+        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
@@ -132,7 +133,7 @@ const state = {
   search: { text: "", mode: store.get("searchMode", "like"), active: null }, filters: {}, costedOnly: false,
   sort: { field: "excess", dir: "desc" }, saved: "Default", selection: new Set(), shown: CONFIG.pageSize, cardSize: store.get("cardSize", 115),
   colOrder: store.get("colOrder", null), colHidden: new Set(store.get("colHidden", [])), colWidth: store.get("colWidth", {}),
-  edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
+  negos: {}, negoKinds: [], edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
   me: { initials: "RP", name: "Signed-in user", email: "" }, library: null, libs: store.get("libs", {}),
   downloads: [], log: store.get("log", []), rows: [], counts: {}, detail: null, loading: false,
 };
@@ -158,7 +159,9 @@ const val = (r, id) => {
   if (id === "remarks") return (state.pending[keyOf(r)] || {}).remarks ?? (state.edits[keyOf(r)] || {}).remarks ?? "";
   if (id === "held_back") return r.held_back === null || r.held_back === undefined ? "" : r.held_back ? "Yes" : "No";
   if (id === "placeholder") return r.placeholders ? "Yes" : "No";
-  if (id === "added") return r.id || r.added || "";            // list ids carry the time they were added
+  if (id === "added") return r.id || r.added || "";
+  if (id === "nego" || id === "nego_status") { const n = state.negos[keyOf(r)]; if (!n) return id === "nego" ? "" : "Not started"; const s_ = n.summary;
+    return id === "nego_status" ? s_.status : s_.status === "Agreed" ? `Agreed Rs ${n2(s_.agreed)}` : `Open, at Rs ${n2(s_.latest ?? s_.counter)}`; }            // list ids carry the time they were added
   if (id === "band_rank") return { "Push": 0, "Ask break-up, above range": 1, "Check quote": 2, "Ask break-up": 3, "Below": 4, "Fair": 5 }[r.band] ?? 6;
   if (col && col.value) return col.value(r);
   return r[id];
@@ -553,7 +556,8 @@ function renderDetail(main) {
     else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost")));
     else { content = h("div", { class: "buckets" }, "Working it out…"); liveCosting(r, content); }
   } else if (d.tab === "negotiation") {
-    content = h("div", { class: "brief" }, "Working it out…"); negotiationTab(r, content);
+    const brief = h("div", { class: "brief" }, "Working it out\u2026"); negotiationTab(r, brief);
+    content = [brief, trackerCard(r)];
   } else {
     const mine = state.log.filter(x => x.text.startsWith(r.code + ":"));
     content = h("div", { class: "log" }, mine.length ? mine.map(x => h("div", {}, `${new Date(x.at).toLocaleString("en-IN")} · ${x.text.slice(r.code.length + 2)}`)) : h("div", { class: "empty" }, "No changes recorded in this browser."));
@@ -590,6 +594,40 @@ async function negotiationTab(r, box) {
         b.at_stake !== null && b.quantity ? h("li", {}, `On ${n0(b.quantity)} m that is Rs ${n0(Math.abs(b.at_stake))} ${b.gap >= 0 ? "above" : "below"} should-cost.`) : null),
       h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Full brief in Create cost"));
   } catch (e) { box.textContent = "Could not work it out: " + e.message; }
+}
+
+// ------------------------------------------------------------------ negotiation tracker
+/* Each step with the mill, in order: its quote, our counter, a revised quote, the agreed price. What was
+   won is the first quote less the agreed price, times the metres. Kept on the server for everyone. */
+function trackerCard(r) {
+  const k = keyOf(r), rec = state.negos[k], s_ = rec && rec.summary;
+  const box = h("div", { class: "brief tracker" });
+  const kind = h("select", { "aria-label": "What happened" }, state.negoKinds.map(x => h("option", {}, x)));
+  if (!rec) kind.value = "Mill's quote"; else kind.value = s_.status === "Agreed" ? "Agreed" : rec.events.length % 2 ? "Our counter" : "Mill's revised quote";
+  const price = h("input", { type: "number", step: "0.01", min: "0", placeholder: "Rs per metre", "aria-label": "Price, Rs per metre", value: !rec && r.price ? r.price : "" });
+  const date = h("input", { type: "date", value: new Date().toISOString().slice(0, 10), max: new Date().toISOString().slice(0, 10), "aria-label": "Date" });
+  const note = h("input", { type: "text", placeholder: "Note (optional): what was said", "aria-label": "Note" });
+  const add = async () => {
+    try {
+      const res = await fetch("/api/negotiations/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        key: k, kind: kind.value, price: price.value, date: date.value, note: note.value, code: r.code, supplier: r.supplier, description: r.description, source: r.source, metres: r.metres, should: r.should }) });
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      state.negos[k] = await res.json(); toast("Recorded"); render();
+    } catch (e) { toast(e.message, false); }
+  };
+  const steps = rec ? [...rec.events].sort((a, b) => (a.date + a.at).localeCompare(b.date + b.at)) : [];
+  fill(box, h("h3", { style: "margin:0 0 6px;font-size:15px" }, "Where it stands"),
+    !rec ? h("p", { style: "margin:4px 0 10px;color:var(--text2)" }, "Nothing recorded yet. Record the mill's quote, then each counter and revision, and the agreed price.")
+      : h("p", { style: "margin:4px 0 10px" }, h("b", {}, s_.status === "Agreed" ? `Agreed at Rs ${n2(s_.agreed)}` : `Open: the mill is at Rs ${n2(s_.latest)}` + (s_.counter ? `, our counter Rs ${n2(s_.counter)}` : "")),
+        s_.won_per_m !== null ? ` \u00B7 ${s_.won_per_m >= 0 ? "down" : "up"} Rs ${n2(Math.abs(s_.won_per_m))} a metre from the first quote of Rs ${n2(s_.first)}` + (s_.won !== null ? ` (Rs ${n0(Math.abs(s_.won))} on ${n0(rec.metres)} m)` : " (no metres recorded, so no rupee total)") : "",
+        s_.above_should_per_m !== null ? ` \u00B7 Rs ${n2(Math.abs(s_.above_should_per_m))} a metre ${s_.above_should_per_m >= 0 ? "above" : "below"} should-cost` : ""),
+    steps.length ? h("table", { class: "steps" }, h("tbody", {}, steps.map(e => h("tr", {}, h("td", {}, new Date(e.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })), h("td", {}, e.kind), h("td", { class: "n" }, "Rs " + n2(e.price)), h("td", { class: "note" }, e.note || ""),
+      h("td", {}, h("button", { type: "button", class: "btn", title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Remove: sure?"; return; }
+        await fetch("/api/negotiations/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k, id: e.id }) }); await load(); toast("Removed"); } }, "Remove")))))) : null,
+    h("div", { class: "stepform" }, kind, price, date, note, h("button", { type: "button", class: "btn fill", onclick: add }, "Record")),
+    h("p", { style: "margin:8px 0 0;font-size:12px;color:var(--text2)" }, "Kept on the server: everyone using RightPrice sees the same steps."));
+  price.addEventListener("keydown", e => { if (e.key === "Enter") add(); });
+  return box;
 }
 
 // ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
@@ -844,7 +882,8 @@ addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) {
 
 async function load() {
   try {
-    const d = await (await fetch("/api/costs")).json();
+    const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
+    state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];
     state.rows = d.rows; state.counts = d.counts;
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";

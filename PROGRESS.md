@@ -126,6 +126,17 @@ presses Apply (asked twice); the rate master is copied with the date first, and 
 names the mills. A wastage, overhead or margin for a route and weave the rate master has no row for
 adds that row (today such fabrics fall back to the placeholder Default row). `costsheet.py`.
 
+### Negotiation tracker (26 Nov)
+
+GP asked on 26 Nov for five builds in order: the negotiation tracker, a supplier page, quote alerts, email
+drafting with the Claude API, and an MCP server so an AI assistant can use RightPrice.
+
+The tracker: on each fabric's Negotiation tab in Right cost, record each step (the mill's quote, our
+counter, a revised quote, the agreed price) with date and note. It shows where it stands, what was won
+against the first quote (per metre and on the metres), and where the price ended against should-cost.
+A "Negotiation" column in Right cost, and a "Won in negotiation" panel on the Dashboard by mill. Kept on
+the server (`negotiations.json` beside the rate master), so everyone sees the same steps.
+
 ### Waiting on the owner
 
 1. Real yarn rates for poly cotton and linen (six placeholders are in the yarn master).

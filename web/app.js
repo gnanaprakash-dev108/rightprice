@@ -309,6 +309,16 @@ PAGES.dashboard = async () => {
 
   nodes.push(askCard(ins));
 
+  // what negotiation has won, from the tracker on each fabric in Right cost
+  try {
+    const w = await getJSON("/api/negotiations/summary");
+    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Won in negotiation"),
+      h("div", { class: "sub", style: "margin:2px 0 0" }, "From the tracker on each fabric's Negotiation tab in Right cost: the mill's first quote less the agreed price, times the metres."))),
+      w.fabrics ? [h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `${plural(w.agreed, "fabric")} agreed, ${w.open} still open`), h("b", { class: "num" }, `Rs ${fmt(w.won, 0)}`), h("span", { class: "sub", style: "margin:0" }, "below the first quotes" + (w.no_quantity ? ` (${plural(w.no_quantity, "agreed fabric")} without metres not counted)` : ""))),
+        dataTable({ columns: ["Mill", "Fabrics", "Agreed", "Open", "Won, Rs"], rows: w.suppliers.map(b => [b.supplier, b.fabrics, b.agreed, b.open, Math.round(b.won)]) }, { label: "Won in negotiation by mill" })]
+        : h("p", { class: "empty" }, "Nothing tracked yet. Open a fabric in Right cost, go to its Negotiation tab and record the mill's quote, your counter and the agreed price.")));
+  } catch (e) { /* the tracker is not on this server yet */ }
+
   // 5. supplier cost ratios, and suppliers against should-cost
   const sup = p ? h("div", { class: "table-wrap tall" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Supplier"), h("th", { class: "n" }, "Fabrics costed"), h("th", { class: "n" }, "Paid above should-cost, middle fabric"), h("th", { class: "n" }, "Tool within 10%"), h("th", {}, "Mostly buys"))),
     h("tbody", {}, p.suppliers.map(s => h("tr", {}, h("td", {}, s.supplier), h("td", { class: "n" }, String(s.fabrics)), h("td", { class: "n" }, gapTag(s.gap, s.trust)), h("td", { class: "n" }, pct(s.within10, 0)), h("td", {}, `${s.mostly} (${pct(s.mostly_share, 0)})`)))))) : null;

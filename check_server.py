@@ -289,6 +289,23 @@ def main():
         check("Cost sheet: once applied, the same sheets draft nothing for that rate", not any(x["id"] == d["id"] for x in after["drafts"]))
         c.post("/api/costsheet/remove", json={"ids": [r["id"] for r in after["rows"]]})
 
+        # negotiation tracker
+        base = {"key": "Fabric list|T-9", "code": "T-9", "supplier": "Arvind", "metres": 1000, "should": 170}
+        bad = c.post("/api/negotiations/event", json=dict(base, kind="Agreed", price=0))
+        future = c.post("/api/negotiations/event", json=dict(base, kind="Agreed", price=180, date="2099-01-01"))
+        check("Tracker: a price of zero and a date in the future are refused", bad.status_code == 400 and future.status_code == 400)
+        c.post("/api/negotiations/event", json=dict(base, kind="Mill's quote", price=190, date="2026-11-20"))
+        c.post("/api/negotiations/event", json=dict(base, kind="Our counter", price=176, date="2026-11-21"))
+        last = c.post("/api/negotiations/event", json=dict(base, kind="Agreed", price=182.5, date="2026-11-22")).json()
+        sm = last["summary"]
+        check("Tracker: agreed price, and what was won against the first quote and should-cost",
+              sm["status"] == "Agreed" and sm["agreed"] == 182.5 and sm["won_per_m"] == 7.5 and sm["won"] == 7500 and sm["above_should_per_m"] == 12.5)
+        tot = c.get("/api/negotiations/summary").json()
+        check("Tracker: the dashboard total", tot["agreed"] == 1 and tot["won"] == 7500 and tot["suppliers"][0]["supplier"] == "Arvind")
+        ev = last["events"][-1]["id"]
+        c.post("/api/negotiations/remove", json={"key": base["key"], "id": ev})
+        check("Tracker: removing the agreed step reopens it", c.get("/api/negotiations").json()["items"][base["key"]]["summary"]["status"] == "Open")
+
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
         t = c.post("/api/intake/file", files={"file": ("list.csv", io.BytesIO(csv))}).json()

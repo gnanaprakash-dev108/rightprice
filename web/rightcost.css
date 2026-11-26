@@ -291,3 +291,13 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; ta
 select { appearance: none; -webkit-appearance: none; background: var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2366706A' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center; border: 1px solid var(--border); border-radius: 10px; padding: 6px 30px 6px 10px; color: var(--text); }
 .grid td select { padding-right: 24px; background-position: right 6px center; }
 .selbar .btn { height: 32px; }
+
+/* ---------- negotiation tracker */
+.tracker { margin-top: 12px; }
+.tracker table.steps { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 13px; }
+.tracker table.steps td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.tracker table.steps td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tracker table.steps td.note { color: var(--text2); }
+.stepform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.stepform input, .stepform select { height: 36px; border: 1px solid var(--border); border-radius: 10px; padding: 0 10px; background: var(--panel2); }
+.stepform input[type=number] { width: 130px; } .stepform input[type=text] { flex: 1 1 220px; min-width: 0; }
