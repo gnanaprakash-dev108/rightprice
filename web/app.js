@@ -290,18 +290,27 @@ PAGES.dashboard = async () => {
     const box = h("div", { class: "card alerts", hidden: true });
     const tellShell = msg => { if (parent !== window) parent.postMessage(msg, location.origin); };
     const seen = async body => { try { const a = await (await postJSON("/api/alerts/seen", body)).json(); last = JSON.stringify(a); paint(a); tellShell({ rp: "alertsChanged" }); } catch (e) { toast(e.message, "err"); } };
+    const open = { all: false, groups: new Set() };            // what the buyer has unfolded
     const paint = a => {
-      box.hidden = !a.count && !a.seen;
+      box.hidden = !a.count && !a.seen; box.classList.toggle("quiet", !a.count);
       if (!a.count) { box.replaceChildren(h("p", { class: "sub", style: "margin:0" }, `No quote alerts to look at. ${plural(a.seen, "alert")} marked seen. `, h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them back"))); return; }
       const kinds = Object.entries(a.by_kind).filter(([, n]) => n).map(([k, n]) => `${n} ${a.kinds[k].toLowerCase()}`).join("; ");
+      const money = [a.above_rows ? `Rs ${fmt(a.above_money, 0)} is quoted above the usual ranges on ${plural(a.above_rows, "row")}.` : null,
+        a.sums_rows ? `On ${plural(a.sums_rows, "row")} the mills' own sums come to Rs ${fmt(a.sums_money, 0)} less than they ask` + (a.above_rows ? " (largely the same rupees seen another way: do not add the two)." : ".") : null,
+        a.no_quantity ? `${plural(a.no_quantity, "flagged row")} with no quantity ${a.no_quantity === 1 ? "is" : "are"} in neither figure.` : null].filter(Boolean).join(" ");
+      const groups = open.all ? a.groups : a.groups.slice(0, 3);
+      const row = r => h("li", {}, parent !== window ? h("button", { type: "button", class: "linkish", title: "Open this fabric", onclick: () => tellShell({ rp: "go", hash: "item/" + encodeURIComponent(r.key) }) }, r.code) : h("b", {}, r.code),
+        ...r.flags.map(f => h("div", { class: "alert-flag" }, h("span", { class: "tag " + (f.kind === "low" || f.kind === "repeat" ? "warn" : "down") }, a.kinds[f.kind]), " " + f.text)));
       box.replaceChildren(...[h("div", { class: "card-head" }, h("div", {}, h("h2", {}, `${plural(a.count, "new quote")} to look at`),
-          h("div", { class: "sub", style: "margin:2px 0 0" }, `Flagged when the sheet was uploaded, before any price is accepted: ${kinds}.` + (a.above_money ? ` Rs ${fmt(a.above_money, 0)} is quoted above the usual ranges` : "") + (a.sums_money ? `${a.above_money ? "; " : " "}Rs ${fmt(a.sums_money, 0)} is the mills' own sums gone wrong` : "") + (a.above_money || a.sums_money ? "." : ""))),
+          h("div", { class: "sub", style: "margin:2px 0 0" }, `Rows of the fabric list that need a look before their price is accepted: ${kinds}. ${money}`)),
           parent !== window ? h("button", { type: "button", class: "btn", onclick: () => tellShell({ rp: "showAlerts" }) }, "Show them in Right cost") : null),
-        ...a.groups.map(g => h("div", { class: "alert-group" }, h("div", { class: "alert-head" }, h("b", {}, millLink(g.supplier, g.mill)), h("span", { class: "sub", style: "margin:0" }, ` \u00B7 ${g.upload} \u00B7 ${plural(g.rows.length, "fabric")}`),
+        ...groups.map(g => { const gk = g.mill + "|" + g.upload, rows = open.groups.has(gk) ? g.rows : g.rows.slice(0, 3);
+          return h("div", { class: "alert-group" }, h("div", { class: "alert-head" }, h("b", {}, millLink(g.supplier, g.mill)), h("span", { class: "sub", style: "margin:0" }, ` · ${g.upload} · ${plural(g.rows.length, "fabric")}`),
             h("button", { type: "button", class: "btn small", onclick: () => seen({ ids: g.rows.map(r => r.id) }) }, g.rows.length === 1 ? "Mark seen" : `Mark all ${g.rows.length} seen`)),
-          h("ul", { class: "alert-list" }, ...g.rows.map(r => h("li", {}, parent !== window ? h("button", { type: "button", class: "linkish", title: "Open this fabric", onclick: () => tellShell({ rp: "go", hash: "item/" + encodeURIComponent(r.key) }) }, r.code) : h("b", {}, r.code),
-            ...r.flags.map(f => h("div", { class: "alert-flag" }, h("span", { class: "tag " + (f.kind === "low" || f.kind === "repeat" ? "warn" : "down") }, a.kinds[f.kind]), " " + f.text))))))),
-        h("p", { class: "sub", style: "margin:10px 0 0" }, "An alert goes when it is marked seen (for everyone), when its row is removed, or when a negotiation step is recorded on the fabric." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them back") : null)].filter(Boolean));
+            h("ul", { class: "alert-list" }, ...rows.map(row)),
+            g.rows.length > rows.length ? h("button", { type: "button", class: "linkish", onclick: () => { open.groups.add(gk); paint(a); } }, `Show the other ${g.rows.length - rows.length} from this upload (the largest sums are shown)`) : null); }),
+        a.groups.length > groups.length ? h("p", { style: "margin:12px 0 0" }, h("button", { type: "button", class: "linkish", onclick: () => { open.all = true; paint(a); } }, `Show ${plural(a.groups.length - groups.length, "more upload")} (${plural(a.groups.slice(3).reduce((n, g) => n + g.rows.length, 0), "fabric")})`)) : null,
+        h("p", { class: "sub", style: "margin:10px 0 0" }, "Worked out from the list as it stands, on today's rates. An alert goes when it is marked seen (for everyone), when its row is removed, or when its price is agreed in the tracker." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them all back") : null)].filter(Boolean));
     };
     let last = JSON.stringify(await getJSON("/api/alerts")); paint(JSON.parse(last));
     nodes.push(box);
@@ -1113,10 +1122,10 @@ PAGES.bulk = async (arg) => {
     if (!file.files[0]) return;
     const fd = new FormData(); fd.append("file", file.files[0]);
     status.replaceChildren(h("p", { class: "empty" }, "Reading and costing every row..."));
-    try { const r = await (await api("/api/list/upload", { method: "POST", body: fd })).json(); status.replaceChildren(h("div", { class: "notice info", style: "margin-top:12px" }, `${r.added} rows added from a ${r.kind}.` + (r.already ? ` ${r.already} were already in the list and were not added again.` : "") + (r.added ? (r.not_costed ? ` ${r.not_costed} could not be costed yet; the reason is in Remarks.` : " All were costed.") : "")),
+    try { const r = await (await api("/api/list/upload", { method: "POST", body: fd })).json(); status.replaceChildren(h("div", { class: "notice info", style: "margin-top:12px" }, `${plural(r.added, "row")} added from a ${r.kind}.` + (r.already ? ` ${r.already} ${r.already === 1 ? "was" : "were"} already in the list and ${r.already === 1 ? "was" : "were"} not added again.` : "") + (r.added ? (r.not_costed ? ` ${r.not_costed} could not be costed yet; the reason is in Remarks.` : " All were costed.") : "")),
       r.alerts && r.alerts.length ? h("div", { class: "notice warn", style: "margin-top:12px" }, h("b", {}, `${plural(r.alerts.length, "row")} of this sheet ${r.alerts.length === 1 ? "needs" : "need"} a look before the price is accepted:`),
-        h("ul", { class: "alert-list" }, ...r.alerts.map(a => h("li", {}, h("b", {}, a.code), ...a.flags.map(f => h("div", { class: "alert-flag" }, f.text))))),
-        h("p", { class: "sub", style: "margin:6px 0 0" }, "They stay on the Dashboard and on the Right cost item of the left rail until marked seen.")) : r.added && r.alerts ? h("div", { class: "notice info", style: "margin-top:12px" }, "No quote alert on this sheet: no row is above its usual range, has sums that are off, repeats an order or is far below should-cost.") : null);
+        h("ul", { class: "alert-list" }, ...[...r.alerts].reverse().map(a => h("li", {}, h("b", {}, a.code), ...a.flags.map(f => h("div", { class: "alert-flag" }, f.text))))),
+        h("p", { class: "sub", style: "margin:6px 0 0" }, "They stay on the Dashboard, on the Right cost item of the left rail and on each fabric's Negotiation tab until marked seen or agreed.")) : r.added && r.alerts ? h("div", { class: "notice info", style: "margin-top:12px" }, "No quote alert on this sheet: no row is above its usual range, has sums that are off, repeats an order or is far below should-cost.") : null);
       if (parent !== window) parent.postMessage({ rp: "alertsChanged" }, location.origin); file.value = ""; await load(); }
     catch (e) { status.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
   });

@@ -530,7 +530,7 @@ async def list_upload(file: UploadFile = File(...)):
     try:
         book = pd.read_excel(io.BytesIO(data), sheet_name=None)
     except Exception as e:
-        raise HTTPException(400, f"Could not read this file as an Excel workbook: {e}")
+        raise HTTPException(400, "This file could not be read as an Excel workbook (.xlsx). Save the mill's sheet as Excel and upload that.")
     rows, kind = [], None
     for name, df in book.items():
         df = df.rename(columns=lambda c: str(c).strip()).dropna(how="all")
@@ -1633,7 +1633,7 @@ def supplier(mill: str):
 """A mill sheet is uploaded: every row that needs a look before the price is accepted is flagged at once.
 Four kinds: priced above its usual range, the mill's own sums are off, the row repeats an order already on the
 list, or the quote is far below should-cost. An alert stays until someone marks it seen, the row is removed, or
-a negotiation step is recorded on the fabric (the buyer has taken it up). No e-mail or push: they show on the Dashboard, on the Right cost rail
+its negotiation is agreed in the tracker (recording the mill's quote alone does not clear it). No e-mail or push: they show on the Dashboard, on the Right cost rail
 item and on the Bulk upload screen."""
 SEEN_PATH = os.path.join(os.path.dirname(masters.LOG_PATH), "alerts_seen.json")
 ALERT_KINDS = {"above": "Above its usual range", "sums": "Mill's sums off", "repeat": "Repeats an order", "low": "Far below should-cost"}
@@ -1647,64 +1647,88 @@ def _seen():
         return set()
 
 
+ALERT_MIN_ABOVE = 0.005        # a quote less than half a per cent of should-cost above its range is not worth an alert
+
+
 def _alerts_all():
-    """Every flagged row of the fabric list, newest upload first; whether seen or agreed is marked, not filtered."""
+    """Every flagged row of the fabric list; whether seen or agreed is marked, not filtered. Worked out afresh each
+    time from the list as it stands, so a corrected sheet or a changed rate changes the alerts."""
     try:
         p = pack({})
     except HTTPException:
         return []
     listed = {r["id"]: r for r in list_view({})["rows"]}
     negos = {k: nego_summary(v) for k, v in _negos().items() if v.get("events")}
+    newest = {r["code"]: r for r in reversed(p["rows"]) if not r["duplicate_of"]}       # the row an older one is measured against
     seen, out = _seen(), []
     for r in p["rows"]:
         flags = []
         qty = r["quantity"]
         on = lambda per_m: f" (Rs {_inr(abs(per_m) * qty, 0)} on {_inr(qty, 0)} m)" if qty else " (no quantity on the row, so no rupee total)"
-        if r["duplicate_of"]:
-            flags.append({"kind": "repeat", "text": f"Repeats the order of {r['duplicate_of']} (same cloth and quantity, or the same sheet row): check it is not ordered twice.", "money": 0})
+        dup = r["duplicate_of"]
+        if dup and dup == r["code"]:
+            # an older row of the same code and quantity: the newer row carries the live price
+            new_ = newest.get(dup)
+            flags.append({"kind": "repeat", "money": 0, "counted": False,
+                          "text": f"An older row for {dup}, at Rs {_inr(r['quote'])}: a newer row for the same code and quantity is on the list"
+                                  + (f" at Rs {_inr(new_['quote'])}" if new_ else "") + ". If the newer one replaces it, remove this row; the alerts are on the newer row."})
         else:
-            if r["stance"] == "push":
-                flags.append({"kind": "above", "money": r["above_range_money"],
+            if dup:
+                flags.append({"kind": "repeat", "money": 0, "counted": False,
+                              "text": f"Repeats the order of {dup} ({_inr(qty, 0) + ' m at ' if qty else ''}Rs {_inr(r['quote'])}; the same cloth and quantity, or every column of the sheet the same): check it is not ordered twice. "
+                                      "If it is a second order, the flags below apply to it as well; its rupees are not added to the totals."})
+            if r["stance"] == "push" and r["above_band"] >= ALERT_MIN_ABOVE * r["should"]:
+                flags.append({"kind": "above", "money": 0 if dup else r["above_range_money"], "counted": not dup and bool(qty),
                               "text": f"Quoted Rs {_inr(r['quote'])}, Rs {_inr(r['above_band'])} a metre above the top of its usual range (Rs {_inr(r['upper'])}; should-cost Rs {_inr(r['should'])})" + on(r["above_band"]) + "."})
             if r["stance"] == "check":
-                flags.append({"kind": "low", "money": 0,
+                flags.append({"kind": "low", "money": 0, "counted": False,
                               "text": f"Quoted Rs {_inr(r['quote'])}, {abs(r['gap_pct']):.0%} below the should-cost of Rs {_inr(r['should'])}: check it is per metre and for this cloth before treating it as a saving."})
             if r["sums"] and r["own_gap"] is not None and r["own_gap"] >= 0.01:
-                flags.append({"kind": "sums", "money": r["own_at_stake"] or 0,
+                flags.append({"kind": "sums", "money": 0 if dup else (r["own_at_stake"] or 0), "counted": not dup and bool(qty),
                               "text": f"The mill's own build-up comes to Rs {_inr(r['own_price'])}, not the Rs {_inr(r['quote'])} it asks: Rs {_inr(r['own_gap'])} a metre too much" + on(r["own_gap"]) + "."})
+            elif r["sums"] and r["own_gap"] is not None and r["own_gap"] <= -0.01:
+                flags.append({"kind": "sums", "money": 0, "counted": False,
+                              "text": f"The sheet's own build-up comes to Rs {_inr(r['own_price'])}, Rs {_inr(-r['own_gap'])} a metre more than the Rs {_inr(r['quote'])} it asks. "
+                                      "The price asked is the lower figure: hold it, and ask for the sheet to be corrected."})
             elif r["sums"]:
-                flags.append({"kind": "sums", "money": 0, "text": "The sheet's sums do not agree: " + "; ".join(r["sums"]) + "."})
+                flags.append({"kind": "sums", "money": 0, "counted": False,
+                              "text": "The sheet's figures do not agree with each other (the ex-mill price itself is not affected): " + "; ".join(r["sums"]) + ". Ask for the sheet to be corrected."})
         if not flags:
             continue
         src = listed.get(r["id"]) or {}
         ng = negos.get(f"Fabric list|{r['id']}")
         out.append({"id": r["id"], "key": f"Fabric list|{r['id']}", "code": r["code"], "description": r["description"], "supplier": r["supplier"] or "No supplier",
-                    "upload": src.get("upload") or "Added on screen", "added": src.get("added"), "flags": flags, "kinds": [f["kind"] for f in flags],
-                    "money": max(f["money"] for f in flags), "seen": r["id"] in seen, "tracked": bool(ng)})
+                    "upload": src.get("upload") or "Added on screen", "added": src.get("added"), "flags": flags, "kinds": list(dict.fromkeys(f["kind"] for f in flags)),
+                    "money": max(f["money"] for f in flags), "no_quantity": not qty, "seen": r["id"] in seen, "agreed": bool(ng and ng["status"] == "Agreed")})
     return out
 
 
 @app.get("/api/alerts")
 def alerts():
-    """The alerts still to look at, grouped by the upload they came in with."""
+    """The alerts still to look at, grouped by mill and the upload they came in with; and every flag, for the fabric pages."""
     every = _alerts_all()
-    live = [a for a in every if not a["seen"] and not a["tracked"]]
+    live = [a for a in every if not a["seen"] and not a["agreed"]]
     groups = {}
     for a in live:
         groups.setdefault((mill_key(a["supplier"]), a["upload"]), []).append(a)
     count = {k: sum(1 for a in live if k in a["kinds"]) for k in ALERT_KINDS}
+    money = lambda kind: [f for a in live for f in a["flags"] if f["kind"] == kind and f["counted"]]
     return {"count": len(live), "kinds": ALERT_KINDS, "by_kind": count,
-            "above_money": round(sum(f["money"] for a in live for f in a["flags"] if f["kind"] == "above")),
-            "sums_money": round(sum(f["money"] for a in live for f in a["flags"] if f["kind"] == "sums")),
-            "groups": [{"supplier": v[0]["supplier"], "mill": k[0], "upload": k[1], "rows": sorted(v, key=lambda a: -a["money"])} for k, v in groups.items()],
+            "above_money": round(sum(f["money"] for f in money("above"))), "above_rows": len(money("above")),
+            "sums_money": round(sum(f["money"] for f in money("sums"))), "sums_rows": len(money("sums")),
+            "no_quantity": sum(1 for a in live if a["no_quantity"] and any(k in a["kinds"] for k in ("above", "sums"))),
+            "groups": [{"supplier": v[0]["supplier"], "mill": k[0], "upload": k[1], "rows": sorted(v, key=lambda a: -a["money"])}
+                       for k, v in sorted(groups.items(), key=lambda kv: -max(a["money"] for a in kv[1]))],
             "ids": {a["id"]: a["kinds"] for a in live},
-            "seen": sum(1 for a in every if a["seen"] and not a["tracked"]), "tracked": sum(1 for a in every if a["tracked"])}
+            "all": {a["id"]: {"flags": a["flags"], "state": "seen" if a["seen"] else "agreed" if a["agreed"] else "live"} for a in every},
+            "seen": sum(1 for a in every if a["seen"] and not a["agreed"]), "agreed": sum(1 for a in every if a["agreed"])}
 
 
 @app.post("/api/alerts/seen")
 def alerts_seen(payload: dict = Body(...)):
-    """Mark alerts seen (ids), or bring every seen alert back (restore: true). Shared: seen by one is seen by all."""
-    seen = set() if payload.get("restore") else _seen() | {str(i) for i in payload.get("ids") or []}
+    """Mark alerts seen (ids), bring some back (ids with undo: true) or all back (restore: true). Shared: seen by one is seen by all."""
+    ids = {str(i) for i in payload.get("ids") or []}
+    seen = set() if payload.get("restore") else (_seen() - ids if payload.get("undo") else _seen() | ids)
     os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
     tmp = SEEN_PATH + ".tmp"
     with open(tmp, "w", encoding="utf8") as f:
