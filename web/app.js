@@ -297,7 +297,8 @@ PAGES.dashboard = async () => {
       const kinds = Object.entries(a.by_kind).filter(([, n]) => n).map(([k, n]) => `${n} ${a.kinds[k].toLowerCase()}`).join("; ");
       const money = [a.above_rows ? `Rs ${fmt(a.above_money, 0)} is quoted above the usual ranges on ${plural(a.above_rows, "row")}.` : null,
         a.sums_rows ? `On ${plural(a.sums_rows, "row")} the mills' own sums come to Rs ${fmt(a.sums_money, 0)} less than they ask` + (a.above_rows ? " (largely the same rupees seen another way: do not add the two)." : ".") : null,
-        a.no_quantity ? `${plural(a.no_quantity, "flagged row")} with no quantity ${a.no_quantity === 1 ? "is" : "are"} in neither figure.` : null].filter(Boolean).join(" ");
+        a.no_quantity ? `${plural(a.no_quantity, "flagged row")} with no quantity ${a.no_quantity === 1 ? "is" : "are"} in neither figure.` : null,
+        a.repeat_rows ? `${plural(a.repeat_rows, "row")} repeating another order ${a.repeat_rows === 1 ? "is" : "are"} in neither figure either: if one is a real second order, its rupees are on its own line below.` : null].filter(Boolean).join(" ");
       const groups = open.all ? a.groups : a.groups.slice(0, 3);
       const row = r => h("li", {}, parent !== window ? h("button", { type: "button", class: "linkish", title: "Open this fabric", onclick: () => tellShell({ rp: "go", hash: "item/" + encodeURIComponent(r.key) }) }, r.code) : h("b", {}, r.code),
         ...r.flags.map(f => h("div", { class: "alert-flag" }, h("span", { class: "tag " + (f.kind === "low" || f.kind === "repeat" ? "warn" : "down") }, a.kinds[f.kind]), " " + f.text)));
@@ -310,7 +311,7 @@ PAGES.dashboard = async () => {
             h("ul", { class: "alert-list" }, ...rows.map(row)),
             g.rows.length > rows.length ? h("button", { type: "button", class: "linkish", onclick: () => { open.groups.add(gk); paint(a); } }, `Show the other ${g.rows.length - rows.length} from this upload (the largest sums are shown)`) : null); }),
         a.groups.length > groups.length ? h("p", { style: "margin:12px 0 0" }, h("button", { type: "button", class: "linkish", onclick: () => { open.all = true; paint(a); } }, `Show ${plural(a.groups.length - groups.length, "more upload")} (${plural(a.groups.slice(3).reduce((n, g) => n + g.rows.length, 0), "fabric")})`)) : null,
-        h("p", { class: "sub", style: "margin:10px 0 0" }, "Worked out from the list as it stands, on today's rates. An alert goes when it is marked seen (for everyone), when its row is removed, or when its price is agreed in the tracker." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them all back") : null)].filter(Boolean));
+        h("p", { class: "sub", style: "margin:10px 0 0" }, "The newest upload is first. Worked out from the list as it stands, on today's rates. An alert goes when it is marked seen (for everyone), when its row is removed, or when its price is agreed in the tracker." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them all back") : null)].filter(Boolean));
     };
     let last = JSON.stringify(await getJSON("/api/alerts")); paint(JSON.parse(last));
     nodes.push(box);

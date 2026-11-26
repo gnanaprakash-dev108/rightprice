@@ -18,10 +18,19 @@ helps a fabric buyer walk into a meeting with a mill better prepared. The owner 
   - 14: should-cost pinned beside the fabric code on a phone.
   - 15: **one shell for every screen, in RightPrice's own look** (see Architecture below).
   - 16: mill cost sheets (Prices > Mill cost sheets; drafts GP applies).
-- **Pull request 17, the negotiation tracker: reviewed and merged (26 Nov, second session).** The ten findings of
-  its first cold review were fixed, a fresh cold review found 18 more (three on money), a second reviewer
-  confirmed 13 of the fixes and found 15 further points; those were fixed too and checked by `check_server.py`
-  and by the build session in the browser, not by a third reviewer.
+- **Second session of 26 Nov: pull requests 17, 18 and 19 merged; deploy runs green for each.**
+  - 17: negotiation tracker. The ten findings of its first cold review were fixed; a fresh cold review found 18
+    more (three on money); a second reviewer confirmed 13 of the fixes and found 15 further points.
+  - 18: supplier page. Two cold reviews; the second confirmed 7 of 10 fixes and found more.
+  - 19: quote alerts. Two cold reviews; the second confirmed 9 of 11 fixes and found more.
+  - In each, the last round of fixes (those on money, and the cheap ones) was checked by `check_server.py` and by
+    the build session in the browser or through the API, **not by a third reviewer**. What was left is listed in
+    each section below.
+- **Next: build 4 (e-mail drafting) and build 5 (MCP server)**, each with its own pull request, cold review and
+  merge. Read "What GP asked for" below: both have a point to settle first (the API key; the Azure sign-in).
+- GP has not confirmed the live site by eye since pull request 15. Ask him to look at: a fabric's Negotiation
+  tab, the Dashboard's "Won in negotiation" and "new quotes to look at" panels, a supplier page (and its print),
+  and a Bulk upload of a mill sheet.
 
 ### Negotiation tracker: how it behaves now
 
@@ -89,6 +98,16 @@ rail item, as a column, filter and chip in Right cost, and on the fabric's Negot
   row say "an older row ... a newer row is on the list at Rs ...".
 - A repeated row keeps its price flags; its rupees are not added to the totals. The two totals (above the ranges;
   the mills' own sums) overlap and the heading says so.
+- Both rows of a repeated order carry the warning: the older one ("repeats" or "an older row"), and the newer
+  one ("the same order is already on the list as ...", saying if that row is agreed or seen), so a sheet just
+  uploaded says so at once. A fabric agreed before a re-quote arrived keeps its gain in "Won"; a repeated row is
+  left out only when the row it repeats has a negotiation of its own (`_list_duplicates(blocking=True)`).
+- Quantities typed as text ("5000 mtr", "3,333") are read (`_qty`).
+- Left as they are: the pack and Right cost still call the *older* of two identical rows the duplicate; a repeat
+  row cannot have its own negotiation unless it had steps before the repeat arrived; a quote a paisa above its
+  range shows Push in the list though it raises no alert; a negative quantity changes the should-cost; the upload
+  notice does not say which older rows a corrected sheet has turned into "older row" alerts; removing a row on
+  the Bulk upload screen moves the rail count only at the next half-minute look.
 - **Speed**: `list_view` and `costs` keep their answer while the fabric list, the rate master and the purchase
   history are unchanged (`_state_key`, `_list_memo`, `_costs_memo` in `server.py`). Anything that changes rows it
   got from them must work on copies. Before this, pages polling every half minute cost 3 to 6 seconds each time.

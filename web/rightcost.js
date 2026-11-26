@@ -795,9 +795,9 @@ function paintBadge() {
 }
 async function loadAlerts() {
   try {
-    const a = await (await fetch("/api/alerts")).json(), was = JSON.stringify(state.alerts.ids);
+    const a = await (await fetch("/api/alerts")).json(), wasAll = JSON.stringify(state.alerts.all);
     state.alerts = a; paintBadge();
-    if (was !== JSON.stringify(a.ids) && !state.frame && !state.library && !state.supplier && !state.detail && !document.querySelector(".grid td.edit select, .grid td.edit input")) render();
+    if (wasAll !== JSON.stringify(a.all) && !state.frame && !state.library && !state.supplier && !document.querySelector(".grid td.edit select, .grid td.edit input")) render();
   } catch (e) { /* the next look will try again */ }
 }
 async function markSeen(ids, undo) {

@@ -491,6 +491,15 @@ def _num_or_none(v):
         return None
 
 
+def _qty(v):
+    """A quantity as mills type it: 5000, "3,333", "5000 mtr", "4,200 m"."""
+    n = _num_or_none(v)
+    if n is None and isinstance(v, str):
+        hit = re.fullmatch(r"\s*([\d,]+(?:\.\d+)?)\s*(m|mt|mtr|mtrs|mts|metre|metres|meter|meters)?\.?\s*", v.lower())
+        n = float(hit.group(1).replace(",", "")) if hit and hit.group(1).strip(",") else None
+    return n
+
+
 def _write_list(df):
     os.makedirs(os.path.dirname(masters.LOG_PATH), exist_ok=True)
     df.to_csv(masters.LOG_PATH, index=False)
@@ -633,7 +642,7 @@ def list_view(options: dict = Body(default={})):
                 res = masters.cost(inputs, m)
                 item.update(should_cost=res["total_per_m"], per_kg=res["per_kg"], gsm=res["gsm"], gap=res["gap"],
                             gap_pct=res["gap_pct"], placeholders=res["placeholders"], yarn=yarn_sensitivity(res))
-                qty = _num_or_none((mill or {}).get("Total order qnty")) or _num_or_none(inputs.get("Order quantity (m)"))
+                qty = _qty((mill or {}).get("Total order qnty")) or _qty(inputs.get("Order quantity (m)"))
                 qty = qty if qty and qty > 0 else None          # a negative or zero quantity puts nothing at stake
                 item["quantity"] = qty
                 item["brief"] = brief(res, m, qty, item["notes"], inputs)
@@ -1237,13 +1246,20 @@ def _nego_view(rec):
     return dict(rec, events=_nego_order(rec.get("events", [])), summary=nego_summary(rec))
 
 
-def _list_duplicates():
-    """Fabric-list rows that repeat an order already on the list, as Right cost and the pack decide it: {key: code it repeats}."""
-    out = {}
-    for r in costs()["rows"]:
-        if r["source"] == "Fabric list" and r.get("duplicate_of"):
-            out[f"Fabric list|{r['id']}"] = r["duplicate_of"]
-    return out
+def _list_duplicates(blocking=False):
+    """Fabric-list rows that repeat an order already on the list, as Right cost and the pack decide it: {key: code it repeats}.
+    blocking: only those whose negotiation must be left out of what was won, because the row they repeat has a
+    negotiation of its own (the same order would be counted twice). A row agreed before a re-quote arrived keeps its gain."""
+    rows = [r for r in costs()["rows"] if r["source"] == "Fabric list"]
+    out = {f"Fabric list|{r['id']}": r["duplicate_of"] for r in rows if r.get("duplicate_of")}
+    if not blocking:
+        return out
+    tracked = {k for k, v in _negos().items() if v.get("events")}
+    live = {}
+    for r in rows:
+        if not r.get("duplicate_of"):
+            live.setdefault(r["code"], []).append(f"Fabric list|{r['id']}")
+    return {k: code for k, code in out.items() if any(o in tracked for o in live.get(code, []))}
 
 
 @app.get("/api/negotiations")
@@ -1276,8 +1292,8 @@ def negotiation_event(payload: dict = Body(...), request: Request = None):
         raise HTTPException(400, "The date is in the future")
     if day_ < dt.date.today() - dt.timedelta(days=730):
         raise HTTPException(400, f"The date is {_day(day_.isoformat())}, more than two years ago: check the year")
-    if key.startswith("Fabric list|"):
-        dup = _list_duplicates().get(key)
+    if key.startswith("Fabric list|") and not _negos().get(key, {}).get("events"):
+        dup = _list_duplicates().get(key)           # a row with steps already (agreed before a re-quote came in) keeps its negotiation
         if dup:
             raise HTTPException(400, f"This row repeats the order of {dup}: record the negotiation on {dup}, so it is counted once")
     d = _negos()
@@ -1319,7 +1335,7 @@ def negotiation_remove(payload: dict = Body(...), request: Request = None):
 def negotiations_summary():
     """What negotiation has won, overall and by mill: against the first quote. A mill written two ways is one mill.
     Counted: agreed, with a mill quote and metres, no step to check, and not a row that repeats another order."""
-    dups = _list_duplicates()
+    dups = _list_duplicates(blocking=True)
     items = [_nego_view(v) for v in _negos().values() if v.get("events")]
     by, check, total, lost, lost_n = {}, [], 0, 0, 0
     count = {"no_quantity": 0, "no_quote": 0, "duplicates": 0}
@@ -1583,7 +1599,7 @@ def supplier(mill: str):
                         + (f"; and {len(high) - 3} more" if len(high) > 3 else "") + ". Please send the cost break-up (yarn count and rate, wastage, weaving per pick, dyeing per kilo, finish, margin).")
 
     # the tracker: where each negotiation with this mill stands
-    dups = _list_duplicates()
+    dups = _list_duplicates(blocking=True)
     track, won, lost, agreed, open_ = [], 0, 0, 0, 0
     for k, v in _negos().items():
         if not v.get("events") or mill_key(v.get("supplier")) != key:
@@ -1660,7 +1676,7 @@ def _alerts_all():
     listed = {r["id"]: r for r in list_view({})["rows"]}
     negos = {k: nego_summary(v) for k, v in _negos().items() if v.get("events")}
     newest = {r["code"]: r for r in reversed(p["rows"]) if not r["duplicate_of"]}       # the row an older one is measured against
-    seen, out = _seen(), []
+    seen, found = _seen(), {}
     for r in p["rows"]:
         flags = []
         qty = r["quantity"]
@@ -1693,13 +1709,31 @@ def _alerts_all():
             elif r["sums"]:
                 flags.append({"kind": "sums", "money": 0, "counted": False,
                               "text": "The sheet's figures do not agree with each other (the ex-mill price itself is not affected): " + "; ".join(r["sums"]) + ". Ask for the sheet to be corrected."})
-        if not flags:
+        if flags:
+            found[r["id"]] = (r, flags)
+    # the row a repeat points at is the newer one: it carries the warning too, so a sheet just uploaded says so at once,
+    # even when the older row's alert has been marked seen or its price agreed
+    by_id = {r["id"]: r for r in p["rows"]}
+    for rid, (r, flags) in list(found.items()):
+        dup = r["duplicate_of"]
+        new_ = newest.get(dup) if dup else None
+        if not new_ or new_["id"] == rid:
             continue
-        src = listed.get(r["id"]) or {}
-        ng = negos.get(f"Fabric list|{r['id']}")
-        out.append({"id": r["id"], "key": f"Fabric list|{r['id']}", "code": r["code"], "description": r["description"], "supplier": r["supplier"] or "No supplier",
+        ng = negos.get(f"Fabric list|{rid}")
+        was = (f"; that row is agreed at Rs {_inr(ng['agreed'])} in the tracker" if ng and ng["status"] == "Agreed" else
+               "; that row's alert was marked seen" if rid in seen else "")
+        text = (f"An older row for this code and quantity is on the list at Rs {_inr(r['quote'])}{was}. If this row replaces it, remove the older one; if it is a second order, say so to the mill."
+                if dup == r["code"] else
+                f"The same order is already on the list as {r['code']} ({_inr(r['quantity'], 0) + ' m at ' if r['quantity'] else ''}Rs {_inr(r['quote'])}){was}: check it is not ordered twice.")
+        found.setdefault(new_["id"], (by_id[new_["id"]], []))[1].insert(0, {"kind": "repeat", "money": 0, "counted": False, "text": text})
+    out = []
+    for rid, (r, flags) in found.items():
+        src = listed.get(rid) or {}
+        ng = negos.get(f"Fabric list|{rid}")
+        out.append({"id": rid, "key": f"Fabric list|{rid}", "code": r["code"], "description": r["description"], "supplier": r["supplier"] or "No supplier",
                     "upload": src.get("upload") or "Added on screen", "added": src.get("added"), "flags": flags, "kinds": list(dict.fromkeys(f["kind"] for f in flags)),
-                    "money": max(f["money"] for f in flags), "no_quantity": not qty, "seen": r["id"] in seen, "agreed": bool(ng and ng["status"] == "Agreed")})
+                    "money": max(f["money"] for f in flags), "no_quantity": not r["quantity"], "repeat": bool(r["duplicate_of"]),
+                    "seen": rid in seen, "agreed": bool(ng and ng["status"] == "Agreed")})
     return out
 
 
@@ -1716,9 +1750,10 @@ def alerts():
     return {"count": len(live), "kinds": ALERT_KINDS, "by_kind": count,
             "above_money": round(sum(f["money"] for f in money("above"))), "above_rows": len(money("above")),
             "sums_money": round(sum(f["money"] for f in money("sums"))), "sums_rows": len(money("sums")),
-            "no_quantity": sum(1 for a in live if a["no_quantity"] and any(k in a["kinds"] for k in ("above", "sums"))),
+            "no_quantity": sum(1 for a in live if a["no_quantity"] and not a["repeat"] and any(k in a["kinds"] for k in ("above", "sums"))),
+            "repeat_rows": sum(1 for a in live if a["repeat"] and any(k in a["kinds"] for k in ("above", "sums"))),
             "groups": [{"supplier": v[0]["supplier"], "mill": k[0], "upload": k[1], "rows": sorted(v, key=lambda a: -a["money"])}
-                       for k, v in sorted(groups.items(), key=lambda kv: -max(a["money"] for a in kv[1]))],
+                       for k, v in sorted(groups.items(), key=lambda kv: max(a["id"] for a in kv[1]), reverse=True)],       # the newest upload first
             "ids": {a["id"]: a["kinds"] for a in live},
             "all": {a["id"]: {"flags": a["flags"], "state": "seen" if a["seen"] else "agreed" if a["agreed"] else "live"} for a in every},
             "seen": sum(1 for a in every if a["seen"] and not a["agreed"]), "agreed": sum(1 for a in every if a["agreed"])}

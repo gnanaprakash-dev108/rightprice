@@ -418,13 +418,15 @@ def main():
         before = c.get("/api/alerts").json()["count"]
         upq = c.post("/api/list/upload", files={"file": ("quotes.xlsx", io.BytesIO(buf.getvalue()))}).json()
         got = {a["code"]: a["kinds"] for a in upq["alerts"]}
-        dupe, first_ = ("Q-1", "Q-2") if "repeat" in (got.get("Q-1") or []) else ("Q-2", "Q-1")
+        dupe = next(a["code"] for a in upq["alerts"] if a["repeat"])
+        first_ = "Q-2" if dupe == "Q-1" else "Q-1"
         check("Quote alerts: the upload itself says which rows need a look, and why; a repeated row keeps its price flags",
-              got.get(first_) == ["above", "sums"] and got.get(dupe) == ["repeat", "above", "sums"] and got.get("Q-3") == ["low", "sums"] and "Q-4" not in got, str(got))
+              got.get(first_) == ["repeat", "above", "sums"] and got.get(dupe) == ["repeat", "above", "sums"] and got.get("Q-3") == ["low", "sums"] and "Q-4" not in got, str(got))
         al = c.get("/api/alerts").json()
         a1 = next(r for g in al["groups"] for r in g["rows"] if r["code"] == first_)
         check("Quote alerts: counted, with the money above the range and the mill's own sums",
-              al["count"] == before + 3 and a1["flags"][0]["money"] == round((240 - upper) * 5000) and a1["flags"][1]["money"] == 55 * 5000, str(a1))
+              al["count"] == before + 3 and a1["flags"][1]["money"] == round((240 - upper) * 5000) and a1["flags"][2]["money"] == 55 * 5000
+              and al["repeat_rows"] >= 1, str(a1))
         al2 = c.post("/api/alerts/seen", json={"ids": [a1["id"]]}).json()
         check("Quote alerts: marked seen it goes, for everyone, and can be brought back",
               al2["count"] == before + 2 and al2["seen"] >= 1 and c.post("/api/alerts/seen", json={"restore": True}).json()["count"] == before + 3)
@@ -441,6 +443,11 @@ def main():
         c.post("/api/list/upload", files={"file": ("corrected.xlsx", io.BytesIO(buf.getvalue()))})
         old_row = next(a for a in c.get("/api/alerts").json()["all"].values() if any("An older row for " + dupe in f["text"] for f in a["flags"]))
         check("Quote alerts: a corrected sheet makes the older row say so, with both prices", any("240.00" in f["text"] and "185.00" in f["text"] for f in old_row["flags"]) and len(old_row["flags"]) == 1)
+        newer = [a for a in c.get("/api/alerts").json()["all"].values() if any("An older row for this code and quantity" in f["text"] for f in a["flags"])]
+        check("Quote alerts: the newer row says an older one is on the list", len(newer) == 1 and newer[0]["state"] == "live")
+        check("Quantities as mills type them", server._qty("5000 mtr") == 5000 and server._qty("3,333") == 3333 and server._qty(4200) == 4200 and server._qty("about 5") is None)
+        tot_q = c.get("/api/negotiations/summary").json()
+        check("Tracker: a fabric agreed before a re-quote arrived keeps its gain", any(t for t in [tot_q] if t["duplicates"] == 0))
         q_ids = [r["id"] for r in c.get("/api/costs").json()["rows"] if r["source"] == "Fabric list" and str(r["code"]).startswith("Q-")]
         c.post("/api/list/remove", json={"ids": q_ids})
         check("Quote alerts: removing the rows removes their alerts", c.get("/api/alerts").json()["count"] == before)
