@@ -104,6 +104,17 @@ in the browser by the build session, not by a third reviewer.
 Known and left: Cost a fabric calls a purchase-order price a "quote" when one is opened from Right
 cost; supplier names are cut short in the purchase-order data itself ("Rajapalayam Mills Limite").
 
+### One shell for every screen (26 Nov, asked by GP)
+
+The app now opens in the shell first built for Right cost, restyled in its own look (forest-green
+rail with labelled icons, warm paper background, saffron for the one button to press, Manrope, pill
+tabs), deliberately unlike the PLM it was modelled on. Rail: Home (Dashboard | Pilot results), Right
+cost, Prices (market prices, rate master and settings, costing and sourcing setup lists). "New cost"
+opens a popup with Create cost, Bulk upload, Compare and Negotiation pack as tabs; the list's ⋮ menu
+has Download Excel and those four. Light or dark and settings sit under the user icon. The earlier
+screens are shown inside the shell in an embedded frame with the shell's palette; a page there that
+asks for a costing screen opens the popup instead. `/rightcost` now leads to `/#rightcost`.
+
 ### Waiting on the owner
 
 1. Real yarn rates for poly cotton and linen (six placeholders are in the yarn master).

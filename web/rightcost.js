@@ -4,11 +4,11 @@
 "use strict";
 
 // ================================================================== CONFIG
-const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Ask break-up": "#F5C542", "Above, ask break-up": "#EF7D32", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
-const ROUTE_COLOR = { "Yarn Dyed": "#5C6BC0", "Piece Dyed": "#26A69A", "Printed": "#EF6C00", "RFD / Bleached": "#90A4AE" };
+const BAND_COLOR = { "Fair": "#2E9E5B", "Below": "#3D8BFD", "Ask break-up": "#F5C542", "Ask break-up, above range": "#EF7D32", "Push": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
+const ROUTE_COLOR = { "Yarn Dyed": "#3F6E9E", "Piece Dyed": "#2F8F63", "Printed": "#C9772B", "RFD / Bleached": "#8C9A92" };
 const STATUS = ["Not started", "To negotiate", "In negotiation", "Agreed", "Dropped"];
-const n0 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
-const n2 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const n0 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 }).replace("-", "\u2212");
+const n2 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).replace("-", "\u2212");
 const pc = v => v === null || v === undefined || v === "" ? "" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(1) + "%";
 
 const CONFIG = {
@@ -23,8 +23,8 @@ const CONFIG = {
       columns: [
         { id: "select", header: "", width: 40, pinned: true, type: "select" },
         { id: "image", header: "Image", width: 60, pinned: true, type: "thumb" },
-        { id: "code", header: "Fabric Code", width: 130, pinned: true, type: "link" },
-        { id: "band", header: "Against Range", width: 120, type: "band", help: "The negotiation brief's verdict on today's rates: in the usual range for this fabric type, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates)" },
+        { id: "code", header: "Fabric code", width: 130, pinned: true, type: "link" },
+        { id: "band", header: "Against range", width: 120, type: "band", help: "The negotiation brief's verdict on today's rates: in the usual range for this fabric type, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates)" },
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your negotiation status. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
@@ -37,24 +37,24 @@ const CONFIG = {
         { id: "epippi", header: "EPI × PPI", width: 80, value: r => r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : "" },
         { id: "width", header: "Width (in)", width: 70, type: "num", fmt: v => v ? Number(v).toFixed(1) : "" },
         { id: "should", header: "Should-cost Rs/m", width: 110, type: "num", fmt: n2 },
-        { id: "price", header: "Paid or Quoted Rs/m", width: 110, type: "num", fmt: n2, help: "Purchase orders: the price paid. Fabric list: the mill's quote, not yet paid" },
-        { id: "gap_pct", header: "Above Should-cost", width: 110, type: "num", fmt: pc },
+        { id: "price", header: "Paid or quoted Rs/m", width: 110, type: "num", fmt: n2, help: "Purchase orders: the price paid. Fabric list: the mill's quote, not yet paid" },
+        { id: "gap_pct", header: "Above should-cost", width: 110, type: "num", fmt: pc },
         { id: "metres", header: "Metres", width: 80, type: "num", fmt: n0 },
-        { id: "excess", header: "Above Should-cost, Rs", width: 120, type: "num", fmt: n0, help: "Price minus should-cost, times the metres. Purchase orders: money paid above should-cost. Fabric list: on a quote, not yet paid" },
-        { id: "order_size", header: "Order Size", width: 110 },
+        { id: "excess", header: "Above should-cost, Rs", width: 120, type: "num", fmt: n0, help: "Price minus should-cost, times the metres. Purchase orders: money paid above should-cost. Fabric list: on a quote, not yet paid" },
+        { id: "order_size", header: "Order size", width: 110 },
         { id: "source", header: "Source", width: 110 },
         { id: "remarks", header: "Remarks", width: 170, type: "edit-text", help: "Your note. Kept in this browser" },
         { id: "rowstatus", header: "", width: 50, type: "status" },
       ],
       savedSearches: [
         { name: "Default", filters: {} },
-        { name: "Above the usual range", filters: { band: ["Above range", "Above, ask break-up"] } },
+        { name: "Above the usual range", filters: { band: ["Push", "Ask break-up, above range"] } },
         { name: "Ask for the break-up", filters: { band: ["Ask break-up"] } },
         { name: "More than 20% above should-cost (any verdict)", filters: { gap_pct: { min: "20", max: "" } } },
         { name: "Held-back third", filters: { held_back: ["Yes"] } },
         { name: "Orders of 3,000 m and above", filters: { order_size: ["3,000 m and above"] } },
       ],
-      sortFields: [["code", "Fabric Code"], ["description", "Description"], ["supplier", "Supplier"], ["should", "Should-cost"], ["price", "Price"], ["gap_pct", "Above Should-cost"], ["excess", "Above Should-cost, Rs"], ["band", "Against Range (most to ask about first)"], ["metres", "Metres"], ["added", "Added On"]],
+      sortFields: [["code", "Fabric code"], ["description", "Description"], ["supplier", "Supplier"], ["should", "Should-cost"], ["price", "Price"], ["gap_pct", "Above should-cost, %"], ["excess", "Above should-cost, Rs"], ["band", "Against range (most to ask about first)"], ["metres", "Metres"], ["added", "Added on"]],
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
@@ -62,43 +62,33 @@ const CONFIG = {
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
-      moreActions: ["Download Excel", "Download Excel with Images", "Bulk Upload", "Download Templatised Data", "Negotiation Pack", "Reports and Utilities"],
+      moreActions: ["Download Excel", "Create cost", "Bulk upload", "Compare", "Negotiation pack"],
     },
   },
-  rail: {
-    top: [
-      { id: "home", icon: "home", label: "Home (Dashboard)", href: "/#dashboard" },
-      "div",
-      { id: "costs", icon: "list", label: "Right cost", page: true },
-      { id: "costing", icon: "fabric", label: "Costing", fly: "costing" },
-      { id: "prices", icon: "chart", label: "Prices", fly: "prices" },
-      { id: "rates", icon: "table", label: "Rates", fly: "rates" },
-      { id: "library", icon: "box", label: "Library", fly: "library" },
-      { id: "tools", icon: "tools", label: "Tools", fly: "tools" },
-    ],
-    bottom: [
-      { id: "notes", icon: "bell", label: "Notifications", fly: "notes" },
-      { id: "recent", icon: "clock", label: "Recent Visits", fly: "recent" },
-      { id: "bookmarks", icon: "bookmark", label: "Bookmarks", fly: "bookmarks" },
-      { id: "downloads", icon: "download", label: "Downloads", fly: "downloads" },
-      { id: "settings", icon: "gear", label: "Settings", fly: "settings" },
-    ],
-  },
+  // the left rail: Home, Right cost and one Prices menu. Everything about costing a fabric is in the "+" popup.
+  rail: [
+    { id: "home", icon: "home", label: "Home", hash: "dashboard" },
+    { id: "costs", icon: "list", label: "Right cost", hash: "rightcost" },
+    { id: "prices", icon: "chart", label: "Prices", fly: "prices" },
+  ],
   flyouts: {
-    costing: { title: "Costing", icon: "fabric", groups: [["Costing", [["Right cost", "/rightcost"], ["Cost a fabric (popup)", "popup:cost"], ["Bulk upload and list", "/#bulk"], ["Compare", "/#compare"], ["Negotiation pack", "/#pack"]]], ["Analysis", [["Dashboard", "/#dashboard"], ["Pilot results", "/#pilot"]]]] },
-    prices: { title: "Prices", icon: "chart", groups: [["Prices", [["Yarn prices", "/#yarn"], ["Cotton prices", "/#cotton"], ["Bring in prices", "/#intake"]]]] },
-    rates: { title: "Rates", icon: "table", groups: [["Rate master", [["Rate tables", "/#rates"], ["Mill rate card", "/#ratecard"], ["Settings", "/#settings"]]]] },
-    tools: { title: "Tools", icon: "tools", groups: [["Utilities", [["Bulk Uploads", "/#bulk"], ["Earlier screens", "/classic/"]]]] },
-    settings: { title: "Settings", icon: "gear", groups: [["Application", [["Light or dark", "theme:toggle"], ["Settings", "/#settings"], ["Rate tables", "/#rates"]]]] },
-    library: { title: "Library", icon: "box", groups: [
-      ["Relationships", [["Suppliers", "lib:Suppliers"]]],
-      ["Standard Specifications", ["Product Life Cycle Stages", "Color Cards", "Size Cards", "Seasons", "Units of measurement", "Points of Measure", "Body Types", "Approval Forms", "Genders", "BOM Layouts", "Material Contents", "Care Label Instructions", "Constructions", "Made In"].map(n => [n, "lib:" + n])],
-      ["Costing", ["Rating Scale Types", "Rating Scales", "Cost Sheet Types", "Material Cost Configuration", "Seasonal Exchange Rates"].map(n => [n, "lib:" + n])],
-      ["Sourcing", ["Payment Terms", "Delivery Terms", "Sample Type"].map(n => [n, "lib:" + n])],
-      ["Templates", [["Page Templates", "lib:Page Templates"]]]] },
+    prices: { title: "Prices and rates", icon: "chart", groups: [
+      ["Market prices", [["Yarn prices", "#yarn"], ["Cotton prices", "#cotton"], ["Bring in prices", "#intake"]]],
+      ["Rate master", [["Rate tables", "#rates"], ["Mill rate card", "#ratecard"], ["Calculation settings", "#settings"]]],
+      ["Costing setup", ["Rating scale types", "Rating scales", "Cost sheet types", "Material cost configuration", "Seasonal exchange rates"].map(n => [n, "#lib/" + n])],
+      ["Sourcing setup", ["Payment terms", "Delivery terms", "Sample type"].map(n => [n, "#lib/" + n])]] },
   },
+  // the earlier screens shown inside the shell: section, title, and the tabs of that section
+  frames: {
+    dashboard: ["Home", "Dashboard"], pilot: ["Home", "Pilot results"],
+    yarn: ["Prices", "Yarn prices"], cotton: ["Prices", "Cotton prices"], intake: ["Prices", "Bring in prices"],
+    rates: ["Prices", "Rate tables"], ratecard: ["Prices", "Mill rate card"], settings: ["Prices", "Calculation settings"],
+  },
+  sections: { Home: ["dashboard", "pilot"], Prices: ["yarn", "cotton", "intake", "rates", "ratecard", "settings"] },
+  popupTabs: [["cost", "Create cost"], ["bulk", "Bulk upload"], ["compare", "Compare"], ["pack", "Negotiation pack"]],
 };
 const ICONS = {
+  logo: '<path d="M7 19V5h6.5a4.5 4.5 0 0 1 0 9H10m3.5 0 4.5 5"/>',
   home: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>',
   list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   fabric: '<path d="M4 6c3-2 5 2 8 0s5-2 8 0v12c-3 2-5-2-8 0s-5 2-8 0z"/>',
@@ -169,7 +159,7 @@ const val = (r, id) => {
   if (id === "held_back") return r.held_back === null || r.held_back === undefined ? "" : r.held_back ? "Yes" : "No";
   if (id === "placeholder") return r.placeholders ? "Yes" : "No";
   if (id === "added") return r.id || r.added || "";            // list ids carry the time they were added
-  if (id === "band_rank") return { "Above range": 0, "Above, ask break-up": 1, "Check quote": 2, "Ask break-up": 3, "Below range": 4, "In range": 5 }[r.band] ?? 6;
+  if (id === "band_rank") return { "Push": 0, "Ask break-up, above range": 1, "Check quote": 2, "Ask break-up": 3, "Below": 4, "Fair": 5 }[r.band] ?? 6;
   if (col && col.value) return col.value(r);
   return r[id];
 };
@@ -265,94 +255,134 @@ function rerunWithSkeleton() { state.loading = true; state.shown = CONFIG.pageSi
 
 // ================================================================== RENDER
 function railActive(id) {
-  document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === (id || "costs")));
+  const first = decodeURIComponent(location.hash.slice(1)).split("/")[0] || "dashboard";
+  const now = id || (first === "rightcost" || first === "item" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
+  document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === now));
 }
 function renderRail() {
-  const item = it => it === "div" ? h("div", { class: "div" }) : tipOn(h("button", { type: "button", class: "item", "data-id": it.id, html: svg(it.icon), onclick: e => {
-    if (it.href) location.href = it.href; else if (it.page) { state.detail = null; state.library = null; closeLayers(); render(); }
+  const item = it => (h("button", { type: "button", class: "item", "data-id": it.id, "aria-label": it.label, onclick: e => {
+    if (it.hash) { closeLayers(); if (location.hash.slice(1) === it.hash) route(); else location.hash = "#" + it.hash; }
     else openFly(it.fly, e.currentTarget);
-  }, onmouseenter: it.fly && ["costing", "prices", "rates", "library", "tools"].includes(it.fly) ? e => openFly(it.fly, e.currentTarget, true) : null, onmouseleave: () => setTimeout(() => { const f = $("#flyout"); if (openFly.hover && !f.matches(":hover") && !document.querySelector(".rail .item:hover")) { f.hidden = true; railActive(); } }, 250) }, it.id === "notes" ? h("span", { class: "badge", id: "notebadge", hidden: true }) : null), it.label);
-  fill($("#rail"), h("div", { class: "grp" }, CONFIG.rail.top.map(item)), h("div", { class: "grp bottom" }, CONFIG.rail.bottom.map(item),
-    tipOn(h("button", { type: "button", class: "avatar", id: "avatar", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials), state.me.name)));
+  }, onmouseenter: it.fly ? e => openFly(it.fly, e.currentTarget, true) : null,
+    onmouseleave: () => setTimeout(() => { const f = $("#flyout"); if (openFly.hover && !f.matches(":hover") && !document.querySelector(".rail .item:hover")) { f.hidden = true; railActive(); } }, 250) },
+    h("span", { html: svg(it.icon) }), h("span", {}, it.label)));
+  fill($("#rail"), h("div", { class: "logo", html: svg("logo"), title: "RightPrice" }), h("div", { class: "grp" }, CONFIG.rail.map(item)),
+    h("div", { class: "grp bottom" }, h("button", { type: "button", class: "avatar", id: "avatar", "aria-label": "Settings and account", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials)));
   railActive();
 }
-function bookmarkBtn(label, href) {
-  const on = state.bookmarks.some(b => b.href === href);
-  return tipOn(h("button", { type: "button", class: "bm" + (on ? " on" : ""), html: svg("bookmark"), onclick: e => {
-    e.stopPropagation();
-    state.bookmarks = on ? state.bookmarks.filter(b => b.href !== href) : [...state.bookmarks, { label, href }]; store.set("bookmarks", state.bookmarks);
-    toast(on ? "Bookmark removed" : "Bookmarked"); openFly(openFly.last, null, false, true);
-  } }), on ? "Remove bookmark" : "Bookmark this page");
+function go(href) {
+  closeLayers();
+  if (href === "theme:toggle") return toggleTheme();
+  if (href.startsWith("#")) { if (location.hash === href) route(); else location.hash = href; return; }
+  if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); }
+  location.href = href;
 }
-function go(href) { closeLayers(); if (href === "popup:cost") return openCostPopup(); if (href === "theme:toggle") return toggleTheme(); if (href.startsWith("lib:")) { state.detail = null; state.library = { name: href.slice(4), page: 0, size: 20 }; return render(); } if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); } location.href = href; }
 function openFly(name, anchor, hover, keep) {
   const fly = $("#flyout");
   if (!keep && !fly.hidden && openFly.last === name && !hover) {
     if (openFly.hover) { openFly.hover = false; return; }         // a click on what the pointer opened: keep it open
     fly.hidden = true; railActive(); return;
   }
-  openFly.last = name; railActive(name === "profile" ? null : { notes: "notes", recent: "recent", bookmarks: "bookmarks", downloads: "downloads" }[name] || name);
-  const cfg = CONFIG.flyouts[name], kids = [];
-  const link = (label, href) => h("div", { class: "lnkrow" }, bookmarkBtn(label, href), h("button", { type: "button", class: "lnk", onclick: () => go(href) }, label));
+  openFly.last = name; railActive(name === "profile" ? null : name);
+  const cfg = CONFIG.flyouts[name], kids = [], here = location.hash;
+  const link = (label, href) => h("button", { type: "button", class: "lnk" + (here === href || here === encodeURI(href) ? " on" : ""), onclick: () => go(href) }, label);
   if (cfg) { kids.push(h("div", { class: "ttl", html: svg(cfg.icon) + `<span>${cfg.title}</span>` })); for (const [g, links] of cfg.groups) kids.push(h("div", { class: "g" }, g), links.map(([l, href]) => link(l, href))); }
-  else if (name === "notes") {
-    const above = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range" && !r.duplicate_of && r.range && r.gap_pct - r.range[1] >= 2);
-    kids.push(h("div", { class: "ttl", html: svg("bell") + "<span>Notifications</span>" }), h("div", { class: "tabs2" }, h("b", {}, "Messages"), h("span", {}, "System Messages")),
-      above.length ? above.map(r => h("button", { type: "button", class: "lnk", onclick: () => go("detail:" + keyOf(r)) }, `${r.code}: the mill's quote is ${pc(r.gap_pct)} against should-cost, above the usual range`)) : h("div", { class: "empty" }, "No Unread Message!"),
-      h("div", { class: "btnrow" }, h("button", { type: "button", onclick: () => toast("Archived") }, "Archive"), h("button", { type: "button", onclick: () => toast("Marked as read") }, "Mark As Read")));
-  } else if (name === "recent") {
-    kids.push(h("div", { class: "ttl", html: svg("clock") + "<span>Recent Visits</span>" }), state.recent.length ? state.recent.map(v => h("button", { type: "button", class: "lnk", onclick: () => go("detail:" + v.key) }, h("span", {}, h("b", {}, v.code), ` · ${ago(v.at)}`))) : h("div", { class: "empty" }, "No visits yet. Open a fabric code from the list."));
-  } else if (name === "bookmarks") {
-    kids.push(h("div", { class: "ttl", html: svg("bookmark") + "<span>Bookmarks</span>" }), state.bookmarks.length ? state.bookmarks.map(b => link(b.label, b.href)) : h("div", { class: "empty" }, "No Bookmarked Pages! Open a flyout, point at a link and click the bookmark mark beside it."));
-  } else if (name === "downloads") {
-    kids.push(h("div", { class: "ttl", html: svg("download") + "<span>Download Center</span>" }), h("div", { class: "note" }, "Files made in this visit. The browser keeps the files themselves."),
-      state.downloads.length ? state.downloads.map(d => h("div", { class: "lnk" }, `${d.name} · ${ago(d.at)}`)) : h("div", { class: "empty", style: "margin-top:8px" }, "No downloads yet."));
-  } else if (name === "profile") {
-    kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), h("div", { class: "note" }, state.me.email || "RightPrice"), h("div", { class: "g" }, "Account"),
-      h("button", { type: "button", class: "lnk", onclick: () => go("/#settings") }, "User Preferences"), h("button", { type: "button", class: "lnk", onclick: () => go("/.auth/logout") }, "Log Out"));
+  else if (name === "profile") {
+    const dark = document.documentElement.dataset.theme === "dark";
+    kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), state.me.email ? h("div", { class: "note" }, state.me.email) : null,
+      h("div", { class: "g" }, "Settings"),
+      h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
+      link("Calculation settings", "#settings"), link("Rate tables", "#rates"),
+      h("div", { class: "g" }, "Account"),
+      h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/classic/"; } }, "Earlier screens (classic)"),
+      h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
   fill(fly, ...kids); fly.hidden = false;
   if (!openFly.bound) { openFly.bound = true; fly.addEventListener("mouseleave", () => { if (openFly.hover) { fly.hidden = true; railActive(); } }); }
   openFly.hover = !!hover;
 }
 
+// ------------------------------------------------------------------ pages: the address decides
+const LIB_NAMES = () => CONFIG.flyouts.prices.groups.flatMap(g => g[1]).map(x => x[1]).filter(x => x.startsWith("#lib/")).map(x => x.slice(5));
+function route() {
+  let full = decodeURIComponent(location.hash.slice(1)) || "dashboard";
+  // the earlier addresses of the costing screens open them in the popup, over the Dashboard
+  if (CONFIG.popupTabs.some(t => t[0] === full.split("/")[0])) { history.replaceState(null, "", "#dashboard?new=" + full.split("/")[0]); full = "dashboard?new=" + full.split("/")[0]; }
+  let [hsh, q] = full.split("?"), want = new URLSearchParams(q || "").get("new"), open = document.querySelector(".scrim[data-popup]");
+  if (want && !CONFIG.popupTabs.some(t => t[0] === want)) { want = "cost"; history.replaceState(null, "", "#" + hsh + "?new=cost"); }
+  if (want && !open) openPopup(want, undefined, true);
+  else if (!want && open) { open.remove(); load(); }
+  else if (want && open && open.dataset.tab !== want) open.switchTo(want, true);
+  if (route.page === hsh && (want || open)) return;            // only the popup changed
+  route.page = hsh;
+  const [id, ...rest] = hsh.split("/");
+  document.querySelectorAll(".menu, .side, .colpanel").forEach(e => e.remove()); $("#drawer").hidden = true; $("#flyout").hidden = true;
+  state.frame = null; state.library = null;
+  if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || "item", editing: false }; }
+  else state.detail = null;
+  if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
+  else if (CONFIG.frames[id]) state.frame = hsh;
+  else if (id !== "rightcost" && id !== "item") { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
+  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library ? " fixed listpage" : "");
+  railActive(); render();
+  document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
+}
+const frameSrc = hsh => `/?embed=1&bare=1&in=page#${hsh}`;
+function renderFrame(main) {
+  const id = state.frame.split("/")[0], [section, title] = CONFIG.frames[id];
+  const tabs = h("div", { class: "tabs", role: "tablist" }, CONFIG.sections[section].map(k => h("button", { type: "button", role: "tab", class: "tab" + (k === id ? " on" : ""), "aria-selected": String(k === id), onclick: () => { location.hash = "#" + k; } }, CONFIG.frames[k][1])));
+  const src = frameSrc(state.frame);
+  const head = h("div", { class: "framehead" }, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", section, "\u00A0\u203A\u00A0", h("span", {}, title)),
+    h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, title)), tabs), newCostButton()));
+  const old = main.querySelector("iframe.frame");
+  if (old && old.dataset.src === src && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) {
+    main.firstElementChild.replaceWith(head);           // the frame stays where it is: moving an iframe reloads it
+  } else {
+    const frame = h("iframe", { class: "frame", src, title, "data-src": src }); frame.addEventListener("load", () => syncFrameTheme(frame));
+    fill(main, head, frame);
+  }
+  $("#selbar").hidden = true;
+  const on = main.querySelector(".tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+function syncFrameTheme(frame) { try { frame.contentDocument.documentElement.dataset.theme = document.documentElement.dataset.theme; } catch (e) { /* not loaded */ } }
+const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
+
 function render() {
   const main = $("#main");
+  if (state.frame) return renderFrame(main);
   if (state.library) return renderLibrary(main);
   if (state.detail) return renderDetail(main);
   const mod = CONFIG.modules.costs, rows = filtered(), cls = mod.classes.find(c => c[0] === state.cls) || mod.classes[0];
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", mod.crumbs[0], "›", h("span", {}, cls[1]));
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", CONFIG.appName, "\u00A0\u203A\u00A0", h("span", {}, cls[1]));
   const title = h("button", { type: "button", class: "title", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.classes.map(([k, label]) => ({ label: `${label} (${k === "*" ? state.rows.length : state.counts[k] || 0})`, on: k === state.cls, run: () => { state.cls = k; store.set("cls", k); state.selection.clear(); rerunWithSkeleton(); } }))) },
     CONFIG.appName, h("span", { class: "caret" }, "▾"));
-  const fab = tipOn(h("button", { type: "button", class: "fab", html: svg("plus"), onclick: () => openCostPopup() }), "Create cost: cost a new fabric");
-  const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label, h("span", { class: "dots", "aria-hidden": "true" }, "⋮"))), fab);
-  fill(main, crumbs, h("div", {}, title, h("span", { style: "margin-left:12px;color:var(--text2);font-size:13px" }, cls[1])), tabs, toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
+  const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label)));
+  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1])), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
-  const badge = $("#notebadge"); if (badge) { const n = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range" && !r.duplicate_of && r.range && r.gap_pct - r.range[1] >= 2).length; badge.hidden = !n; badge.textContent = n; }
 }
 
 function toolbar(rows) {
   const mod = CONFIG.modules.costs, s = state.search;
-  const input = h("input", { class: "search", id: "search", type: "search", placeholder: "Search by Code, Name Or Reference", value: s.text, "aria-label": "Search by code, name or reference" });
+  const input = h("input", { class: "search", id: "search", type: "search", placeholder: "Search code, name or supplier", value: s.text, "aria-label": "Search code, name or supplier" });
   input.addEventListener("input", () => { s.text = input.value; });
   input.addEventListener("keydown", e => { if (e.key === "Enter") runSearch(s.mode); });
   input.addEventListener("paste", e => { const t = e.clipboardData.getData("text"); if (/[\n\t]/.test(t)) { e.preventDefault(); s.text = terms(t).join(", "); input.value = s.text; } });
-  const views = [ib("cards", "Card View", () => setView("card"), { class: "ib" + (state.view === "card" ? " on" : ""), "aria-pressed": String(state.view === "card") }),
-    ib("rows", "List View", () => setView("list"), { class: "ib" + (state.view === "list" ? " on" : ""), "aria-pressed": String(state.view === "list") })];
+  const views = [ib("cards", "Cards", () => setView("card"), { class: "ib" + (state.view === "card" ? " on" : ""), "aria-pressed": String(state.view === "card") }),
+    ib("rows", "List", () => setView("list"), { class: "ib" + (state.view === "list" ? " on" : ""), "aria-pressed": String(state.view === "list") })];
   const slider = state.view === "card" ? h("input", { type: "range", class: "slider", min: "80", max: "200", value: String(state.cardSize), "aria-label": "Card size", oninput: e => { state.cardSize = Number(e.target.value); store.set("cardSize", state.cardSize); const c = $(".cards"); if (c) c.style.gridTemplateColumns = `repeat(auto-fill, minmax(${Math.round(state.cardSize * 1.3)}px, 1fr))`; } }) : null;
   const saved = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, [...mod.savedSearches, ...state.userSearches].map(x => ({ label: x.name, on: state.saved === x.name, run: () => applySaved(x) })).concat(state.userSearches.length ? ["-", { label: "Delete a saved search…", run: deleteSaved }] : [])) }, state.saved, h("span", {}, "▾"));
   const sortName = (mod.sortFields.find(f => f[0] === state.sort.field) || [0, state.sort.field])[1];
   const sortIcon = tipOn(h("button", { type: "button", class: "selbtn", html: svg("sort"), onclick: () => { state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc"; rerunWithSkeleton(); } }), state.sort.dir === "asc" ? (state.sort.field === "added" ? "Oldest to latest" : "Ascending") + ": click for descending" : (state.sort.field === "added" ? "Latest to oldest" : "Descending") + ": click for ascending");
   const sortSel = h("button", { type: "button", class: "selbtn", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.sortFields.map(([k, l]) => ({ label: l, on: state.sort.field === k, run: () => { state.sort.field = k; if (k === "band") state.sort.dir = "asc"; rerunWithSkeleton(); } }))) }, sortName, h("span", {}, "▾"));
   const active = Object.keys(state.filters).filter(k => k !== "_codes").length > 0 || state.costedOnly;
-  const filt = ib("filter", "Advanced Filter", () => openDrawer()); if (active) filt.append(h("span", { class: "dot" }));
+  const filt = ib("filter", "Filters", () => openDrawer()); if (active) filt.append(h("span", { class: "dot" }));
   const more = ib("dots", "More", e => menu(e.currentTarget, mod.moreActions.map(a => ({ label: a, run: () => moreAction(a, rows) })), { right: true }));
   const sch = s.active ? h("span", { class: "chip" }, `${s.active.mode === "exact" ? "Exact" : "Search"}: ${s.active.text.length > 40 ? s.active.text.slice(0, 40) + "…" : s.active.text}`, tipOn(h("button", { type: "button", onclick: () => { s.active = null; s.text = ""; rerunWithSkeleton(); } }, "✕"), "Clear the search")) : null;
   return h("div", { class: "toolbar" },
-    ib("search", "Like Search: code, description or supplier contains", () => runSearch("like"), { class: "ib" + (s.mode === "like" ? " on" : "") }),
-    ib("exact", "Exact Search: fabric code matches exactly", () => runSearch("exact"), { class: "ib" + (s.mode === "exact" ? " on" : "") }),
+    ib("search", "Search: code, description or supplier contains", () => runSearch("like"), { class: "ib" + (s.mode === "like" ? " on" : "") }),
+    ib("exact", "Exact search: the fabric code matches exactly", () => runSearch("exact"), { class: "ib" + (s.mode === "exact" ? " on" : "") }),
     h("span", { class: "vdiv" }), input, ib("arrow", "Search", () => runSearch(s.mode)),
-    state.tab !== "items" ? null : h("span", { class: "count", "aria-live": "polite" }, `Showing ${Math.min(state.shown, rows.length).toLocaleString("en-IN")} of ${rows.length.toLocaleString("en-IN")} Records`), sch,
+    state.tab !== "items" ? null : h("span", { class: "count", "aria-live": "polite" }, `Showing ${Math.min(state.shown, rows.length).toLocaleString("en-IN")} of ${rows.length.toLocaleString("en-IN")} records`), sch,
     h("span", { class: "spacer" }), slider, ...views, saved, h("span", { style: "display:inline-flex;align-items:center" }, sortIcon, sortSel), filt, more);
 }
 function chipsRow() {
@@ -412,8 +442,8 @@ function cellFor(r, c, cls, pinStyle, pend) {
   if (c.type === "select") { const b = h("input", { type: "checkbox", class: "cb", "aria-label": `Select ${r.code}` }); b.checked = state.selection.has(k); b.addEventListener("change", () => { b.checked ? state.selection.add(k) : state.selection.delete(k); render(); }); return h("td", { class: cls(c), style: st }, b); }
   if (c.type === "thumb") return h("td", { class: cls(c), style: st }, h("div", { class: "thumb", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" }, title: r.route || "" }, (r.route || "—").split(/[ /]/)[0].slice(0, 5).toUpperCase()));
   if (c.type === "link") return h("td", { class: cls(c), style: st }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code));
-  if (c.type === "band" && r.duplicate_of) return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: "Same order as " + r.duplicate_of + ": counted once in the negotiation pack" }, h("i", { style: { background: "#B9BEC7" } }), "Duplicate of " + r.duplicate_of));
-  if (c.type === "band") return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: r.band === "Ask break-up" && r.why_unsure ? r.why_unsure.join("; ") : null }, h("i", { style: { background: BAND_COLOR[r.band] || "#B9BEC7" } }), r.band));
+  if (c.type === "band" && r.duplicate_of) return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: "Same order as " + r.duplicate_of + ": counted once in the negotiation pack" }, h("i", { style: { background: "#B9BEC7" } }), h("span", { class: "pt" }, "Duplicate of " + r.duplicate_of)));
+  if (c.type === "band") return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: r.band === "Ask break-up" && r.why_unsure ? r.why_unsure.join("; ") : null }, h("i", { style: { background: BAND_COLOR[r.band] || "#B9BEC7" } }), h("span", { class: "pt" }, r.band)));
   if (c.type === "status") return h("td", { class: cls(c), style: st }, pend ? tipOn(h("button", { type: "button", class: "discard", onclick: () => { delete state.pending[k]; render(); } }, "✕"), "Discard the unsaved change") : "");
   if (c.type === "edit-dd" || c.type === "edit-text") {
     const changed = pend && pend[c.id] !== undefined;
@@ -443,16 +473,17 @@ function cardView(rows) {
       h("div", { class: "img", style: { background: (ROUTE_COLOR[r.route] || "#B9BEC7") + "22" }, html: svg("fabric") }), bar,
       h("div", { class: "txt" }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code), h("div", { class: "desc", title: r.description }, r.description || ""),
         h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Should-cost ${n2(r.should)} \u00B7 ${r.price ? `${r.source === "Purchase orders" ? "paid" : "quoted"} ${n2(r.price)} (${pc(r.gap_pct)})` : "no price"}` : r.band)),
-      ck, h("button", { type: "button", class: "qv", onclick: () => quickView(r) }, "Quick View"));
+      ck, h("button", { type: "button", class: "qv", onclick: () => quickView(r) }, "Quick view"));
   }));
   grid.addEventListener("scroll", () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 80 && state.shown < rows.length) { const t = grid.scrollTop; state.shown += CONFIG.pageSize; render(); const g = $(".cards"); if (g) g.scrollTop = t; } });
   return grid;
 }
 function suppliersTab(rows) {
+  if (!rows.length) return h("div", { class: "empty" }, "No records to view");
   const by = {};
   for (const r of rows) { const s = r.supplier || "(none)"; (by[s] = by[s] || []).push(r); }
-  const list = Object.entries(by).map(([s, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should); const met = m.reduce((a, r) => a + r.metres, 0); return { s, n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Above range" || r.band === "Above, ask break-up").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
-  return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier", "Fabrics", "Metres", "Paid Rs/m (avg over metres)", "Should-cost Rs/m", "Paid above", "Above range", "Ask break-up"].map((t, i) => h("th", { class: i ? "n" : "" }, t)))),
+  const list = Object.entries(by).map(([s, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should); const met = m.reduce((a, r) => a + r.metres, 0); return { s, n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" || r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
+  return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier", "Fabrics", "Metres", "Paid Rs/m (average over metres)", "Should-cost Rs/m", "Paid above (average over metres)", "Push", "Ask break-up"].map((t, i) => h("th", { class: i ? "n" : "" }, t)))),
     h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, h("button", { type: "button", class: "code", onclick: () => { state.filters.supplier = [x.s]; state.tab = "items"; rerunWithSkeleton(); } }, x.s)), h("td", { class: "n" }, n0(x.n)), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.unsure)))))));
 }
 function renderSelbar() {
@@ -461,16 +492,17 @@ function renderSelbar() {
   bar.hidden = false;
   const picked = state.rows.filter(r => state.selection.has(keyOf(r)));
   fill(bar, 
-    n ? [tipOn(h("button", { type: "button", class: "clear", onclick: () => { state.selection.clear(); render(); } }), "Clear the selection"), h("span", { class: "n" }, String(n)), h("span", { class: "lbl" }, n === 1 ? "ITEM SELECTED" : "ITEMS SELECTED")] : null,
+    n ? [tipOn(h("button", { type: "button", class: "clear", onclick: () => { state.selection.clear(); render(); } }), "Clear the selection"), h("span", { class: "n" }, String(n)), h("span", { class: "lbl" }, n === 1 ? "row selected" : "rows selected")] : null,
     pend ? h("span", { class: "lbl", style: "margin-left:16px" }, `${pend} unsaved ${pend === 1 ? "change" : "changes"}`) : null,
     pend ? h("button", { type: "button", class: "btn fill", onclick: saveEdits }, "Save") : null,
     pend ? h("button", { type: "button", class: "btn", onclick: () => { state.pending = {}; render(); } }, "Discard") : null,
     h("span", { class: "spacer" }),
-    n ? [ib("edit", "Edit: set status or remarks on the selected rows", () => bulkEdit(picked)), ib("share", "Share: copy the codes and a note", () => share(picked)),
+    n ? [h("button", { type: "button", class: "btn", onclick: () => bulkEdit(picked) }, "Edit"), h("button", { type: "button", class: "btn", onclick: () => share(picked) }, "Share"),
       ib("dots", "More", e => menu(e.currentTarget, [
-        { label: "Add Items to Save Search", run: () => addToSaved(picked) },
-        { label: "Download Selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
-        { label: picked.length === 1 ? "Open in Cost a fabric" : "Open in Cost a fabric (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
+        { label: "Add to a saved search", run: () => addToSaved(picked) },
+        { label: "Download selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
+        { label: picked.length === 1 ? "Open in Create cost" : "Open in Create cost (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
+        { label: "Negotiation pack for the ticked rows", run: () => moreAction("Negotiation pack", picked) },
       ], { right: true }))] : null);
 }
 
@@ -488,24 +520,24 @@ function quickView(r) {
   document.querySelectorAll(".side").forEach(e => e.remove());
   const p = h("aside", { class: "side", "aria-label": "Quick view" }, h("div", { style: "display:flex;justify-content:space-between;align-items:center" }, h("h2", {}, r.code), ib("x", "Close", () => p.remove())),
     h("div", { style: "color:var(--text2);font-size:12px" }, r.description || ""), h("dl", { class: "kv" }, fields(r).map(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))])),
-    h("div", { style: "margin-top:14px;display:flex;gap:8px" }, h("button", { type: "button", class: "btn fill", onclick: () => { p.remove(); openDetail(r); } }, "Open"), h("button", { type: "button", class: "btn line", onclick: () => openCostPopup(r) }, "Open in Cost a fabric")));
+    h("div", { style: "margin-top:14px;display:flex;gap:8px" }, h("button", { type: "button", class: "btn fill", onclick: () => { p.remove(); openDetail(r); } }, "Open"), h("button", { type: "button", class: "btn line", onclick: () => openCostPopup(r) }, "Open in Create cost")));
   document.body.append(p);
 }
 function openDetail(r) {
-  closeLayers(); state.library = null;
+  closeLayers(); state.library = null; state.frame = null;
   state.detail = { key: keyOf(r), tab: "item", editing: false };
-  if (decodeURIComponent(location.hash.slice(1)) !== "item/" + keyOf(r)) history.pushState(null, "", "#item/" + encodeURIComponent(keyOf(r)));
+  if (decodeURIComponent(location.hash.slice(1)) !== "item/" + keyOf(r)) { location.hash = "#item/" + encodeURIComponent(keyOf(r)); return; }
   state.recent = [{ key: keyOf(r), code: r.code, at: new Date().toISOString() }, ...state.recent.filter(v => v.key !== keyOf(r))].slice(0, 12); store.set("recent", state.recent);
   scrollTo(0, 0); render();
 }
 function renderDetail(main) {
   const r = state.rows.find(x => keyOf(x) === state.detail.key);
-  if (!r) { state.detail = null; return render(); }
+  if (!r) { if (!state.rows.length) return fill(main, h("div", { class: "empty" }, "Loading\u2026")); location.hash = "#rightcost"; return; }
   const d = state.detail, k = keyOf(r);
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Costing", "›", h("button", { type: "button", onclick: () => { state.detail = null; history.pushState(null, "", location.pathname); render(); } }, CONFIG.appName), "›", h("span", {}, r.code));
-  const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.detail = null; state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; render(); }),
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", h("button", { type: "button", onclick: () => { location.hash = "#rightcost"; } }, CONFIG.appName), "\u00A0\u203A\u00A0", h("span", {}, r.code));
+  const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; location.hash = "#rightcost"; }),
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
-    ib("open", "Open in Cost a fabric", () => openCostPopup(r)));
+    ib("open", "Open in Create cost", () => openCostPopup(r)));
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
   const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; render(); } }, l)));
   let content;
@@ -513,12 +545,12 @@ function renderDetail(main) {
     const edit = state.edits[k] || {};
     const statusIn = h("select", { id: "f-status", disabled: !d.editing || null }, STATUS.map(o => h("option", {}, o))); statusIn.value = edit.status || "Not started";
     const remIn = h("input", { id: "f-remarks", type: "text", value: edit.remarks || "", disabled: !d.editing || null });
-    content = [h("div", { style: "margin-top:12px;display:flex;gap:8px" }, d.editing ? [h("button", { type: "button", class: "btn fill", onclick: () => { state.edits[k] = { status: statusIn.value, remarks: remIn.value }; store.set("edits", state.edits); addLog(`${r.code}: status ${statusIn.value}${remIn.value ? `, remarks "${remIn.value}"` : ""}`); d.editing = false; toast("Saved Successfully!"); render(); } }, "Save"), h("button", { type: "button", class: "btn", onclick: () => { d.editing = false; render(); } }, "Discard")] : h("button", { type: "button", class: "btn line", onclick: () => { d.editing = true; render(); } }, "Edit status and remarks")),
+    content = [h("div", { style: "margin-top:12px;display:flex;gap:8px" }, d.editing ? [h("button", { type: "button", class: "btn fill", onclick: () => { state.edits[k] = { status: statusIn.value, remarks: remIn.value }; store.set("edits", state.edits); addLog(`${r.code}: status ${statusIn.value}${remIn.value ? `, remarks "${remIn.value}"` : ""}`); d.editing = false; toast("Saved"); render(); } }, "Save"), h("button", { type: "button", class: "btn", onclick: () => { d.editing = false; render(); } }, "Discard")] : h("button", { type: "button", class: "btn line", onclick: () => { d.editing = true; render(); } }, "Edit status and remarks")),
       h("div", { class: "form2" }, h("div", { class: "f" }, h("span", {}, "Status"), statusIn), h("div", { class: "f" }, h("label", { for: "f-remarks" }, "Remarks"), remIn), fields(r).map(([k2, v]) => h("div", { class: "f" }, h("span", {}, k2), h("span", {}, String(v))))),
       h("p", { style: "color:var(--text2);font-size:11px;margin-top:10px" }, "Status and remarks are kept in this browser only.")];
   } else if (d.tab === "costing") {
     if (r.buckets) content = costingTab(r);
-    else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Cost a fabric")));
+    else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost")));
     else { content = h("div", { class: "buckets" }, "Working it out…"); liveCosting(r, content); }
   } else if (d.tab === "negotiation") {
     content = h("div", { class: "brief" }, "Working it out…"); negotiationTab(r, content);
@@ -534,8 +566,8 @@ function costingTab(r, when) {
   return h("div", { class: "buckets" }, Object.entries(b).map(([name, v]) => h("div", { class: "bk" }, h("span", {}, name), h("div", {}, h("div", { class: "b", style: { width: Math.abs(v || 0) / top * 100 + "%" } })), h("span", { style: "text-align:right" }, n2(v)), h("span", { style: "text-align:right;color:var(--text2)" }, r.should ? (100 * (v || 0) / r.should).toFixed(1) + "%" : ""))),
     h("div", { class: "bk tot" }, h("span", {}, "Should-cost"), h("span"), h("span", { style: "text-align:right" }, n2(r.should)), h("span", { style: "text-align:right" }, "100%")),
     r.price ? h("div", { class: "bk" }, h("span", {}, r.source === "Purchase orders" ? "Price paid" : "Mill's quote"), h("span"), h("span", { style: "text-align:right" }, n2(r.price)), h("span", { style: "text-align:right" }, pc(r.gap_pct))) : null,
-    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : "Rs per metre, as costed in the pilot on the rates of 24 Nov 2026. Opened in Cost a fabric it is costed again on today's rates."),
-    h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Cost a fabric"));
+    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : "Rs per metre, as costed in the purchase-order pilot. The Negotiation tab and Create cost work on today's rates; they give the same should-cost unless a rate has changed since."),
+    h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost"));
 }
 async function liveCosting(r, box) {
   // a fabric-list row is costed on today's rates, as the list does
@@ -546,7 +578,7 @@ async function liveCosting(r, box) {
   } catch (e) { box.textContent = "Could not cost it: " + e.message; }
 }
 async function negotiationTab(r, box) {
-  if (r.problems && r.problems.length) { box.textContent = "Not costed yet: " + r.problems.join("; ") + ". Open it in Cost a fabric to finish it."; return; }
+  if (r.problems && r.problems.length) { box.textContent = "Not costed yet: " + r.problems.join("; ") + ". Open it in Create cost to finish it."; return; }
   if (!r.choices || !r.price) { box.textContent = "No price on this row, so there is nothing to negotiate yet."; return; }
   try {
     const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.choices) })).json();
@@ -556,22 +588,43 @@ async function negotiationTab(r, box) {
       h("ul", {}, h("li", {}, `Usual range for this fabric: Rs ${n2(b.lower)} to Rs ${n2(b.settle_up_to)} (${b.band.why}).`), b.stance === "push" ? h("li", {}, `Open at Rs ${n2(b.open_at)}; aim for Rs ${n2(b.settle_up_to)}.`) : null,
         b.weak.length ? h("li", {}, "Why no target: " + b.weak.join("; ") + ".") : null, (b.caveats || []).map(c => h("li", {}, c)),
         b.at_stake !== null && b.quantity ? h("li", {}, `On ${n0(b.quantity)} m that is Rs ${n0(Math.abs(b.at_stake))} ${b.gap >= 0 ? "above" : "below"} should-cost.`) : null),
-      h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Full brief in Cost a fabric"));
+      h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Full brief in Create cost"));
   } catch (e) { box.textContent = "Could not work it out: " + e.message; }
 }
 
-// ------------------------------------------------------------------ Cost a fabric in a popup
-function openCostPopup(r) {
+// ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
+/* One window over the page with the four costing screens as tabs. They are the earlier screens, in one
+   frame, so a fabric opened from the list in Bulk upload carries on in Create cost. */
+function popupHash(tab) { return "#" + (decodeURIComponent(location.hash.slice(1)).split("?")[0] || "dashboard") + (tab ? "?new=" + tab : ""); }
+function openPopup(tab = "cost", r = null, fromAddress = false) {
   closeLayers();
-  const frame = h("iframe", { src: "/?embed=1#cost", title: "Cost a fabric" });
-  const close = () => { s.remove(); load(); };
-  const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "Create cost" },
-    h("div", { class: "ph" }, h("h2", {}, r ? `Cost ${r.code}${r.source === "Purchase orders" ? " (a purchase order: Add to list copies it into the fabric list)" : ""}` : "Create cost"), h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { style: "color:var(--text2);font-size:11px" }, "Add to list keeps it; it then shows here under Fabric list"), ib("x", "Close", close))), frame);
+  document.querySelectorAll(".scrim[data-popup]").forEach(e => e.remove());
+  if (!CONFIG.popupTabs.some(t => t[0] === tab)) tab = "cost";
+  if (!fromAddress) history.pushState({ popup: tab }, "", popupHash(tab));          // Back closes the popup
+  const frame = h("iframe", { src: `/?embed=1&bare=1#${tab}`, title: "Costing" });
+  const close = () => { if (history.state && history.state.popup) history.back(); else { history.replaceState(null, "", popupHash(null)); s.remove(); load(); } };
+  const tabs = h("div", { class: "ptabs", role: "tablist" });
+  const mark = id => { s.dataset.tab = id; tabs.querySelectorAll(".ptab").forEach(b => { const on = b.dataset.tab === id; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }); };
+  const switchTo = (id, fromAddr) => {
+    try { frame.contentWindow.location.replace(`/?embed=1&bare=1#${id}`); } catch (e) { frame.src = `/?embed=1&bare=1#${id}`; }
+    mark(id); if (!fromAddr) history.replaceState(history.state, "", popupHash(id));
+  };
+  for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
+  const note = r ? h("span", { class: "pnote" }, `${r.code}${r.source === "Purchase orders" ? ": a purchase order (its price was paid); Add to list copies it into the fabric list" : ""}`) : null;
+  const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "New cost" },
+    h("div", { class: "ph" }, h("h2", {}, "New cost"), h("div", { class: "ptabwrap" }, tabs), note, ib("x", "Close", close)), frame);
   const s = h("div", { class: "scrim", onmousedown: e => { if (e.target === s) close(); } }, pop);
-  s.dataset.popup = "1";
-  frame.addEventListener("load", () => { const w = frame.contentWindow; const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); });
+  s.dataset.popup = "1"; s.switchTo = switchTo; s.close = close;
+  mark(tab);
+  frame.addEventListener("load", () => {
+    syncFrameTheme(frame);
+    const w = frame.contentWindow;
+    w.addEventListener("hashchange", () => { const id = (w.location.hash.slice(1) || "cost").split("/")[0]; if (CONFIG.popupTabs.some(t => t[0] === id)) { mark(id); history.replaceState(history.state, "", popupHash(id)); } });
+    if (tab === "cost" && r !== undefined) { const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); }
+  }, { once: true });
   $("#layer").append(s);
 }
+const openCostPopup = r => openPopup("cost", r || null);
 
 // ------------------------------------------------------------------ Library: setup lists (kept in this browser)
 function libSeed(name) {
@@ -588,9 +641,9 @@ function renderLibrary(main) {
   const shown = rows.slice(L.page * L.size, (L.page + 1) * L.size);
   const clean = x => x.map(r => ({ name: r.name, active: r.active }));
   const changed = JSON.stringify(clean(rows)) !== JSON.stringify(clean(base()));
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Library", "›", h("span", {}, L.name));
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", "Prices", "\u00A0\u203A\u00A0", h("span", {}, L.name));
   const tools = h("div", { class: "toolbar" },
-    h("button", { type: "button", class: "btn fill", disabled: !changed || null, onclick: () => { state.libs[L.name] = clean(rows).filter(r => r.name.trim()); store.set("libs", state.libs); L.draft = null; toast("Saved Successfully!"); render(); } }, "Save"),
+    h("button", { type: "button", class: "btn fill", disabled: !changed || null, onclick: () => { state.libs[L.name] = clean(rows).filter(r => r.name.trim()); store.set("libs", state.libs); L.draft = null; toast("Saved"); render(); } }, "Save"),
     h("button", { type: "button", class: "btn line", onclick: () => { rows.push({ name: "", active: true }); L.page = Math.ceil(rows.length / L.size) - 1; render(); const ins = document.querySelectorAll(".libname"); if (ins.length) ins[ins.length - 1].focus(); } }, "Add"),
     h("button", { type: "button", class: "btn line", disabled: !rows.some(r => r.picked) || null, onclick: () => { L.draft = rows.filter(r => !r.picked); render(); } }, "Delete"),
     h("span", { class: "spacer" }), h("span", { class: "count" }, `${rows.length} ${rows.length === 1 ? "entry" : "entries"}${changed ? " · unsaved changes" : ""}`));
@@ -604,19 +657,21 @@ function renderLibrary(main) {
   const pager = h("div", { class: "toolbar", style: "justify-content:flex-end" },
     h("button", { type: "button", class: "btn", "aria-label": "Previous page", disabled: L.page === 0 || null, onclick: () => { L.page--; render(); } }, "‹"),
     h("span", { class: "count" }, `Page ${L.page + 1} of ${pages}`),
-    h("button", { type: "button", class: "btn", "aria-label": "Next page", disabled: L.page >= pages - 1 || null, onclick: () => { L.page++; render(); } }, "›"),
+    h("button", { type: "button", class: "btn", "aria-label": "Next page", disabled: L.page >= pages - 1 || null, onclick: () => { L.page++; render(); } }, "\u00A0\u203A\u00A0"),
     [20, 50, 100].map(n => h("button", { type: "button", class: "btn" + (L.size === n ? " fill" : ""), onclick: () => { L.size = n; L.page = 0; render(); } }, String(n))));
-  fill(main, crumbs, h("h1", { class: "title", style: "cursor:default" }, L.name),
+  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, L.name)), newCostButton()),
     h("p", { style: "color:var(--text2);font-size:11px" }, "A setup list kept in this browser. RightPrice's costing does not read it yet."), tools, table, pager);
   $("#selbar").hidden = true;
 }
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = t; try { localStorage.setItem("rp-theme", t); } catch (e) { /* kept for this visit */ }
+  document.querySelectorAll("iframe").forEach(syncFrameTheme);
   toast(t === "dark" ? "Dark" : "Light");
 }
 async function whoAmI() {
   // Azure's sign-in answers /.auth/me with the signed-in person's claims; off Azure there is none
+  if (/^(localhost|127\.|0\.0\.0\.0)/.test(location.hostname)) return;      // no sign-in when run on this computer
   try {
     const r = await fetch("/.auth/me", { credentials: "same-origin" }); if (!r.ok) return;
     const d = await r.json(), u = Array.isArray(d) ? d[0] : null; if (!u) return;
@@ -638,12 +693,12 @@ function deleteSaved() {
 }
 function saveSearchPrompt() {
   const name = h("input", { type: "text", placeholder: "For example: Arvind twills above range" });
-  const d = dialog("Save Search", [h("p", { class: "sub" }, "Keep these filters and the search under a name, to choose again from the saved search list."), name],
+  const d = dialog("Save search", [h("p", { class: "sub" }, "Keep these filters and the search under a name, to choose again from the saved search list."), name],
     [h("button", { type: "button", class: "btn", onclick: () => d.remove() }, "Not now"), h("button", { type: "button", class: "btn fill", onclick: () => {
       const n = name.value.trim(); if (!n) return name.focus();
       const f = Object.assign({}, state.filters); delete f._codes;
       state.userSearches = [...state.userSearches.filter(s => s.name !== n), { name: n, filters: f, search: state.search.active }]; store.set("searches", state.userSearches);
-      state.saved = n; d.remove(); toast("Saved Successfully!"); render();
+      state.saved = n; d.remove(); toast("Saved"); render();
     } }, "Save")]);
   name.addEventListener("keydown", e => { if (e.key === "Enter") d.querySelector(".btn.fill").click(); });
 }
@@ -651,20 +706,20 @@ function addToSaved(picked) {
   const mine = state.userSearches;
   const rNew = h("input", { type: "radio", name: "how", checked: true }), rOld = h("input", { type: "radio", name: "how", disabled: !mine.length || null });
   const name = h("input", { type: "text", placeholder: "Name of the new search" }), old = h("select", { disabled: !mine.length || null }, mine.map(s => h("option", {}, s.name)));
-  const d = dialog("Add Items to Save Search", [h("label", { class: "row" }, rNew, "Create a New Search"), name, h("label", { class: "row" }, rOld, "Update an Existing Search"), old, !mine.length ? h("p", { class: "sub" }, "No saved search yet.") : null],
+  const d = dialog("Add to a saved search", [h("label", { class: "row" }, rNew, "Create a new search"), name, h("label", { class: "row" }, rOld, "Add to an existing search"), old, !mine.length ? h("p", { class: "sub" }, "No saved search yet.") : null],
     [h("button", { type: "button", class: "btn", onclick: () => d.remove() }, "Cancel"), h("button", { type: "button", class: "btn fill", onclick: () => {
       const codes = picked.map(keyOf);
       if (rNew.checked) { const n = name.value.trim(); if (!n) return name.focus(); state.userSearches = [...mine.filter(s => s.name !== n), { name: n, codes }]; }
       else { const s = mine.find(x => x.name === old.value); s.codes = [...new Set([...(s.codes || []), ...codes])]; }
-      store.set("searches", state.userSearches); d.remove(); toast("Saved Successfully!"); render();
+      store.set("searches", state.userSearches); d.remove(); toast("Saved"); render();
     } }, "Save")]);
 }
 function bulkEdit(picked) {
   const st = h("select", {}, h("option", { value: "" }, "(leave as it is)"), STATUS.map(o => h("option", {}, o))), rem = h("input", { type: "text", placeholder: "Leave blank to keep each row's remarks" });
-  const d = dialog(`Edit ${picked.length} ${picked.length === 1 ? "item" : "items"}`, [h("label", { class: "row" }, "Status"), st, h("label", { class: "row" }, "Remarks"), rem, h("p", { class: "sub" }, "Kept in this browser. Costing figures cannot be edited here; open a fabric in Cost a fabric to change its choices.")],
+  const d = dialog(`Edit ${picked.length} ${picked.length === 1 ? "item" : "items"}`, [h("label", { class: "row" }, "Status"), st, h("label", { class: "row" }, "Remarks"), rem, h("p", { class: "sub" }, "Kept in this browser. Costing figures cannot be edited here; open a fabric in Create cost to change its choices.")],
     [h("button", { type: "button", class: "btn", onclick: () => d.remove() }, "Cancel"), h("button", { type: "button", class: "btn fill", onclick: () => {
       for (const r of picked) { const k = keyOf(r), e = Object.assign({}, state.edits[k] || {}); if (st.value) e.status = st.value; if (rem.value.trim()) e.remarks = rem.value.trim(); state.edits[k] = e; addLog(`${r.code}: ${st.value ? "status " + st.value : ""}${st.value && rem.value.trim() ? ", " : ""}${rem.value.trim() ? `remarks "${rem.value.trim()}"` : ""}`); }
-      store.set("edits", state.edits); d.remove(); toast("Saved Successfully!"); render();
+      store.set("edits", state.edits); d.remove(); toast("Saved"); render();
     } }, "Save")]);
 }
 function share(picked) {
@@ -674,23 +729,24 @@ function share(picked) {
 }
 function saveEdits() {
   for (const [k, p] of Object.entries(state.pending)) { state.edits[k] = Object.assign({}, state.edits[k] || {}, p); const r = state.rows.find(x => keyOf(x) === k); addLog(`${r ? r.code : k}: ${Object.entries(p).map(([f, v]) => `${f} ${v}`).join(", ")}`); }
-  store.set("edits", state.edits); state.pending = {}; toast("Saved Successfully!"); render();
+  store.set("edits", state.edits); state.pending = {}; toast("Saved"); render();
 }
 function moreAction(a, rows) {
-  const src = state.cls === "*" ? null : state.cls;
-  if (a === "Download Excel") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("Download Excel ready – see Downloads")).catch(e => toast(e.message, false));
-  else if (a === "Download Excel with Images") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("RightPrice holds no fabric images, so the file has none – see Downloads")).catch(e => toast(e.message, false));
-  else if (a === "Bulk Upload") location.href = "/#bulk";
-  else if (a === "Download Templatised Data") { location.href = "/api/template"; state.downloads.unshift({ name: "RightPrice template.xlsx", at: new Date().toISOString() }); toast("Template downloading – see Downloads"); }
-  else if (a === "Negotiation Pack") {
-    // the pack is made from the fabric list (mill sheets): ticked fabric-list rows travel with it
+  if (a === "Download Excel") return download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("Excel downloaded")).catch(e => toast(e.message, false));
+  const tab = { "Create cost": "cost", "Bulk upload": "bulk", "Compare": "compare", "Negotiation pack": "pack" }[a];
+  if (tab === "pack") {
+    // the pack is made from the fabric list (mill sheets): ticked fabric-list rows go with it
     const ids = state.rows.filter(r => r.source === "Fabric list" && state.selection.has(keyOf(r)) && r.id).map(r => r.id);
+    if (state.selection.size && !ids.length) return toast("The pack is made from fabric-list rows (mill sheets); none of the ticked rows is one. Untick them for the whole list", false);
     try { if (ids.length) sessionStorage.setItem("rp-pack-ids", JSON.stringify(ids)); else sessionStorage.removeItem("rp-pack-ids"); } catch (e) { /* no handover */ }
-    if (state.cls === "Purchase orders") toast("The pack is made from the fabric list (mill sheets), not from purchase orders", false);
-    setTimeout(() => { location.href = "/#pack"; }, state.cls === "Purchase orders" ? 1200 : 0);
   }
-  else toast(`${a}: the Dashboard and Pilot results hold the reports`, false);
-  void src;
+  if (tab === "compare") {
+    const ticked = state.rows.filter(r => state.selection.has(keyOf(r)));
+    const listed = ticked.filter(r => r.source === "Fabric list" && r.id);
+    try { if (listed.length === 2) sessionStorage.setItem("rp-compare-ids", JSON.stringify(listed.map(r => r.id))); else sessionStorage.removeItem("rp-compare-ids"); } catch (e) { /* no handover */ }
+    if (ticked.length && listed.length !== 2) return toast("Compare takes exactly two fabric-list rows. To compare a purchase order, open it in Create cost and press Add to list first", false);
+  }
+  if (tab) openPopup(tab);
 }
 function startResize(e, c) {
   e.preventDefault(); e.stopPropagation();
@@ -729,7 +785,7 @@ function openDrawer() {
   const list = h("div", { class: "body" });
   const paintList = q => fill(list, ...attrs.filter(a => !q || a.label.toLowerCase().includes(q)).map(a => {
     const cnt = Array.isArray(draft[a.id]) ? draft[a.id].length : draft[a.id] ? 1 : 0;
-    const box = h("div", { class: "attr" }, h("button", { type: "button", "aria-expanded": String(open.has(a.id)), onclick: () => { open.has(a.id) ? open.delete(a.id) : open.add(a.id); paintList(q); } }, h("span", {}, a.label, cnt ? h("span", { class: "cnt" }, `(${cnt})`) : null), h("span", {}, open.has(a.id) ? "⌄" : "›")));
+    const box = h("div", { class: "attr" }, h("button", { type: "button", "aria-expanded": String(open.has(a.id)), onclick: () => { open.has(a.id) ? open.delete(a.id) : open.add(a.id); paintList(q); } }, h("span", {}, a.label, cnt ? h("span", { class: "cnt" }, `(${cnt})`) : null), h("span", {}, open.has(a.id) ? "⌄" : "\u00A0\u203A\u00A0")));
     if (open.has(a.id)) {
       if (a.num || a.date) {
         const f = draft[a.id] || (a.date ? { date: true, from: "", to: "" } : { min: "", max: "" });
@@ -754,28 +810,36 @@ function openDrawer() {
     }
     return box;
   }));
-  const search = h("input", { type: "text", placeholder: "Search Filter", "aria-label": "Search the filter attributes" });
+  const search = h("input", { type: "text", placeholder: "Search the filters", "aria-label": "Search the filter attributes" });
   search.addEventListener("input", () => paintList(search.value.toLowerCase()));
   const sw = h("input", { type: "checkbox", class: "cb" }); sw.checked = costed; sw.addEventListener("change", () => { costed = sw.checked; });
-  fill(dr, h("div", { class: "hd" }, "Advanced Filter", ib("x", "Close", () => { dr.hidden = true; })), h("div", { class: "fs", html: svg("search", 'width="14" height="14"') }, search), list,
+  fill(dr, h("div", { class: "hd" }, "Filters", ib("x", "Close", () => { dr.hidden = true; })), h("div", { class: "fs", html: svg("search", 'width="14" height="14"') }, search), list,
     h("div", { class: "ft" }, h("label", { class: "switch" }, "Costed only (leave out rows not costed)", sw), h("div", { style: "display:flex;justify-content:space-between" },
-      h("button", { type: "button", class: "btn", onclick: () => { for (const k of Object.keys(draft)) delete draft[k]; costed = false; sw.checked = false; open.clear(); paintList(""); } }, "Clear Filter"),
-      h("button", { type: "button", class: "btn fill", onclick: () => { const codes = state.filters._codes; state.filters = draft; if (codes) state.filters._codes = codes; state.costedOnly = costed; state.saved = "Default"; dr.hidden = true; rerunWithSkeleton(); if (Object.keys(draft).length) setTimeout(saveSearchPrompt, 450); } }, "Apply Filter"))));
+      h("button", { type: "button", class: "btn", onclick: () => { for (const k of Object.keys(draft)) delete draft[k]; costed = false; sw.checked = false; open.clear(); paintList(""); } }, "Clear"),
+      h("button", { type: "button", class: "btn fill", onclick: () => { const codes = state.filters._codes; state.filters = draft; if (codes) state.filters._codes = codes; state.costedOnly = costed; state.saved = "Default"; dr.hidden = true; rerunWithSkeleton(); if (Object.keys(draft).length) setTimeout(saveSearchPrompt, 450); } }, "Apply"))));
   paintList(""); dr.hidden = false; search.focus();
 }
 
 addEventListener("keydown", e => {
-  if (e.key === "Escape") { const pop = document.querySelector(".scrim"); if (pop) { if (pop.dataset.popup) { pop.remove(); load(); } else pop.remove(); return; } closeLayers(); }
+  if (e.key === "Escape") { const pop = document.querySelector(".scrim"); if (pop) { if (pop.dataset.popup) pop.close(); else pop.remove(); return; } closeLayers(); }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail) { e.preventDefault(); const s = $("#search"); if (s) s.focus(); }
 });
 // the address follows the page: #item/<source|code> is a fabric's detail page; Back returns to the list
-function fromHash() {
-  const hsh = decodeURIComponent(location.hash.slice(1));
-  if (hsh.startsWith("item/")) { const r = state.rows.find(x => keyOf(x) === hsh.slice(5)); if (r) { if (!state.detail || state.detail.key !== keyOf(r)) openDetail(r); return; } }
-  if (state.detail) { state.detail = null; render(); }
-}
-addEventListener("popstate", fromHash);
-addEventListener("message", e => { if (e.origin === location.origin && e.data && e.data.rp === "listChanged") load(); });
+addEventListener("hashchange", route);
+addEventListener("message", e => {
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.rp === "listChanged") load();
+  if (e.data.rp === "close") { const pop = document.querySelector(".scrim[data-popup]"); if (pop) pop.close(); }
+  if (e.data.rp === "nav" && e.data.hash) {
+    const hsh = e.data.hash, id = hsh.split("/")[0], frame = $("#main iframe.frame");
+    if (!CONFIG.frames[id] || !frame || e.source !== frame.contentWindow || hsh === state.frame) return;
+    frame.dataset.src = frameSrc(hsh);                 // the frame is already there: only the heading, tabs and address follow
+    route.page = hsh; history.pushState(null, "", "#" + hsh); route.page = null; route();
+  }
+  // a screen shown in the page asked for one of the costing screens: they live in the popup
+  if (e.data.rp === "popup" && e.data.move) { try { sessionStorage.setItem("rp-list-move", JSON.stringify(e.data.move)); } catch (err) { /* no handover */ } }
+  if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
+});
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
@@ -784,7 +848,7 @@ async function load() {
     state.rows = d.rows; state.counts = d.counts;
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
-    render(); fromHash();
+    if (!state.frame) render();
   } catch (err) { fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
-renderRail(); render(); load(); whoAmI();
+renderRail(); route(); load(); whoAmI();

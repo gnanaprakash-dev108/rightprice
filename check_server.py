@@ -49,7 +49,7 @@ def main():
               man.status_code == 200 and man.json()["display"] == "standalone"
               and all(c.get("/" + i["src"]).status_code == 200 for i in man.json()["icons"])
               and c.get("/icons/icon-180.png").status_code == 200)
-        home = c.get("/")
+        home = c.get("/?embed=1")
         check("Page asks the browser for the current script, not a stored copy",
               "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"
               and c.get("/app.js").headers["cache-control"] == "no-cache")
@@ -232,8 +232,11 @@ def main():
         check("Right cost: the purchase-order costings are listed with their choices", len(po) >= 1600 and all(r["choices"].get("Route") for r in po))
         r0 = po[0]
         check("Right cost: a listed costing reopens at the same should-cost", abs(c.post("/api/cost", json=r0["choices"]).json()["total_per_m"] - r0["should"]) < 0.02)
-        check("Right cost: the page and its files are served", c.get("/rightcost").status_code == 200 and "rightcost.js?v=" in c.get("/rightcost").text
-              and c.get("/rightcost.js").status_code == 200)
+        shell = c.get("/")
+        check("The shell is the home page; the earlier screens are served inside it", "rightcost.js?v=" in shell.text and "rightcost.css?v=" in shell.text
+              and c.get("/rightcost.js").status_code == 200 and "app.js?v=" in c.get("/?embed=1").text)
+        old = c.get("/rightcost", follow_redirects=False)
+        check("The old Right cost address leads to its page in the shell", old.status_code == 307 and old.headers["location"] == "/#rightcost")
         check("Right cost: downloads", c.post("/api/costs/download", json={"source": "Purchase orders"}).content[:2] == b"PK")
         for css in ("web/app.css", "web/rightcost.css"):
             txt = open(css, encoding="utf8").read()

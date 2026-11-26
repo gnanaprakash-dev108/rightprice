@@ -290,9 +290,9 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         band_why = "5% either side of should-cost" + ("" if ins and ins[1] else " (there is no purchase history on this server to set it from)")
     else:
         fit = (f"half of the {cat['fabrics']} {typ} fabrics you bought were priced between {cat['p25']:+.1f}% and "
-               f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)")
+               f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)").replace("-", "\u2212")
         adjusted = (lo, hi) != (cat["p25"], cat["p75"])
-        band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%" if adjusted else "")
+        band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%".replace("-", "\u2212") if adjusted else "")
 
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False
@@ -748,6 +748,7 @@ def pack(options: dict = Body(default={})):
         for k in keys:
             seen.setdefault(k, code)
         row["questions"] = [] if row["duplicate_of"] else _questions(row, b, m)
+        row["has_sheet"] = bool(r["from_mill"])
         for k in ("mill", "inputs", "from_mill"):
             row.pop(k)
         rows.append(row)
@@ -837,7 +838,8 @@ def _pilot_briefs(rows, key):
     return None
 
 
-STANCE_BAND = {"push": "Above range", "fair": "In range", "below": "Below range", "ask": "Ask break-up", "error": "Not costed"}
+# the words of the negotiation brief, so a row reads the same in Right cost, the list and the pack
+STANCE_BAND = {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask break-up", "error": "Not costed"}
 
 
 @app.get("/api/costs")
@@ -901,10 +903,10 @@ def costs():
             "range": None if b is None else [b["band"]["lo"] * 100, b["band"]["hi"] * 100], "buckets": None,
             "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"]})
     # an unsure verdict on a price above the top of its usual range is still money above should-cost:
-    # it is marked "Above, ask break-up" so it is not lost among the unsure rows
+    # it is marked "Ask break-up, above range" so it is not lost among the unsure rows
     for r in out:
         if r["band"] == "Ask break-up" and r.get("range") and r.get("gap_pct") is not None and r["gap_pct"] > r["range"][1]:
-            r["band"] = "Above, ask break-up"
+            r["band"] = "Ask break-up, above range"
     # the same order twice in the fabric list (as the negotiation pack decides it)
     seen = {}
     for r, i in zip([x for x in out if x["source"] == "Fabric list"], listed):
@@ -951,10 +953,9 @@ def costs_download(payload: dict = Body(default={})):
 
 @app.get("/rightcost")
 def rightcost_page():
-    html = open(os.path.join(WEB, "rightcost.html"), encoding="utf8").read()
-    for name in ("rightcost.css", "rightcost.js"):
-        html = html.replace(f'"{name}"', f'"{name}?v={int(os.path.getmtime(os.path.join(WEB, name)))}"')
-    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+    """The earlier address of Right cost: it is now a page of the shell."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/#rightcost", status_code=307)
 
 
 @app.post("/api/list/download")
@@ -1413,13 +1414,21 @@ class FreshFiles(StaticFiles):
         return r
 
 
-@app.get("/")
-def index():
+def _page(file, assets):
     # the script and stylesheet addresses carry the time they were last changed: a new deploy is a new address
-    html = open(os.path.join(WEB, "index.html"), encoding="utf8").read()
-    for name in ("app.css", "app.js"):
+    html = open(os.path.join(WEB, file), encoding="utf8").read()
+    for name in assets:
         html = html.replace(f'"{name}"', f'"{name}?v={int(os.path.getmtime(os.path.join(WEB, name)))}"')
     return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/")
+def index(request: Request):
+    """The app's shell (left rail, Right cost, the "+" popup). Every other screen is the earlier front end
+    shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
+    if request.query_params.get("embed") == "1":
+        return _page("index.html", ("app.css", "app.js"))
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js"))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")
