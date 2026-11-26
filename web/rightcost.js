@@ -26,6 +26,7 @@ const CONFIG = {
         { id: "code", header: "Fabric code", width: 130, pinned: true, type: "link" },
         { id: "band", header: "Against range", width: 120, type: "band", help: "The price on the row (the mill's quote, or the price paid) against the usual range for this fabric type on today's rates: in it, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates). Where the talks have reached since is in the Negotiation column" },
         { id: "nego", header: "Negotiation", width: 270, help: "From the tracker on the fabric's Negotiation tab: the agreed price, or while it is open the mill's latest price (our counter if the mill has not quoted)" },
+        { id: "alert", header: "Quote alert", width: 290, help: "Why a newly quoted fabric needs a look before its price is accepted: above its usual range, the mill's sums are off, it repeats an order, or the quote is far below should-cost. It goes when marked seen (the cell then says Seen), or when the price is agreed in the tracker" },
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
@@ -59,7 +60,7 @@ const CONFIG = {
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "mill", label: "Mill (every spelling)" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
-        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
+        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
@@ -133,7 +134,7 @@ const state = {
   search: { text: "", mode: store.get("searchMode", "like"), active: null }, filters: {}, costedOnly: false,
   sort: { field: "excess", dir: "desc" }, saved: "Default", selection: new Set(), shown: CONFIG.pageSize, cardSize: store.get("cardSize", 115),
   colOrder: store.get("colOrder", null), colHidden: new Set(store.get("colHidden", [])), colWidth: store.get("colWidth", {}),
-  negos: {}, negoKinds: [], edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
+  negos: {}, negoKinds: [], alerts: { count: 0, ids: {}, kinds: {} }, edits: store.get("edits", {}), pending: {}, userSearches: store.get("searches", []), recent: store.get("recent", []), bookmarks: store.get("bookmarks", []),
   me: { initials: "RP", name: "Signed-in user", email: "" }, library: null, libs: store.get("libs", {}),
   downloads: [], log: store.get("log", []), rows: [], counts: {}, detail: null, loading: false,
 };
@@ -166,6 +167,9 @@ const val = (r, id) => {
     const d = s_.won_per_m, chk = s_.warnings.length ? "Check a step \u00B7 " : "";
     if (s_.status === "Agreed") return chk + `Agreed Rs ${n2(s_.agreed)}` + (s_.first === null ? " (no mill quote)" : d === 0 ? " (the first quote)" : ` (${n2(Math.abs(d))} ${d > 0 ? "below" : "above"} first quote)`);
     return chk + (s_.reopened !== null ? "Open again, " : "Open, ") + (s_.latest !== null ? `mill at Rs ${n2(s_.latest)}` : `our counter Rs ${n2(s_.counter)}`); }
+  if (id === "alert" || id === "has_alert") { const a = r.source === "Fabric list" ? (state.alerts.all || {})[r.id] : null, live = a && a.state === "live";
+    if (id === "has_alert") return live ? "Yes" : a ? (a.state === "seen" ? "Seen" : "Agreed since") : "No";
+    return a ? (live ? "" : a.state === "seen" ? "Seen \u00B7 " : "Agreed since \u00B7 ") + [...new Set(a.flags.map(f => (state.alerts.kinds || {})[f.kind] || f.kind))].join("; ") : ""; }
   if (id === "band_rank") return { "Push": 0, "Ask break-up, above range": 1, "Check quote": 2, "Ask break-up": 3, "Below": 4, "Fair": 5 }[r.band] ?? 6;
   if (col && col.value) return col.value(r);
   return r[id];
@@ -403,6 +407,7 @@ function chipsRow() {
     const text = id === "_codes" ? `${state.saved}: ${f.length} items` : Array.isArray(f) ? `${a.label}: ${f.join(", ")}` : f.date ? `${a.label}: ${f.from || "…"} to ${f.to || "…"}` : `${a.label}: ${f.min === "" || f.min === undefined ? "…" : f.min} to ${f.max === "" || f.max === undefined ? "…" : f.max}`;
     chips.push(h("span", { class: "chip" }, text.length > 70 ? text.slice(0, 70) + "…" : text, tipOn(h("button", { type: "button", onclick: () => { delete state.filters[id]; state.saved = "Default"; rerunWithSkeleton(); } }, "✕"), "Remove this filter")));
   }
+  if (state.alerts.count && !state.filters.has_alert) chips.push(tipOn(h("button", { type: "button", class: "chip alertchip", onclick: showAlerts }, `${state.alerts.count} quote ${state.alerts.count === 1 ? "alert" : "alerts"} to look at \u2192`), "Show only the fabrics with a quote alert"));
   if (state.costedOnly) chips.push(h("span", { class: "chip" }, "Costed only", h("button", { type: "button", onclick: () => { state.costedOnly = false; rerunWithSkeleton(); } }, "✕")));
   return chips.length ? h("div", { class: "chips" }, chips) : h("div");
 }
@@ -586,6 +591,8 @@ function renderSelbar() {
         { label: "Download selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
         { label: picked.length === 1 ? "Open in Create cost" : "Open in Create cost (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
         { label: "Negotiation pack for the ticked rows", run: () => moreAction("Negotiation pack", picked) },
+        { label: "Mark quote alerts seen (for everyone)", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Yes").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has a quote alert to look at", false); markSeen(ids); } },
+        { label: "Bring back quote alerts marked seen", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Seen").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has an alert marked seen", false); markSeen(ids, true); } },
       ], { right: true }))] : null);
 }
 
@@ -641,8 +648,12 @@ function renderDetail(main) {
     else { content = h("div", { class: "buckets" }, "Working it out…"); liveCosting(r, content); }
   } else if (d.tab === "negotiation") {
     const brief = h("div", { class: "brief" }, "Working it out\u2026"), slot = h("div", {}, trackerCard(r));
+    const al = r.source === "Fabric list" ? (state.alerts.all || {})[r.id] : null;
+    const flagged = al ? h("div", { class: "brief flagged" }, h("h3", { style: "margin:0 0 6px;font-size:15px" }, "Flagged on this quote" + (al.state === "seen" ? " (marked seen)" : al.state === "agreed" ? " (agreed since)" : "")),
+      h("ul", {}, al.flags.map(f => h("li", {}, h("b", {}, ((state.alerts.kinds || {})[f.kind] || f.kind) + ": "), f.text))),
+      al.state === "live" ? h("button", { type: "button", class: "btn line", onclick: () => markSeen([r.id]) }, "Mark seen (for everyone)") : al.state === "seen" ? h("button", { type: "button", class: "btn line", onclick: () => markSeen([r.id], true) }, "Bring the alert back") : null) : null;
     const was = briefShould[k]; negotiationTab(r, brief).then(() => { if (briefShould[k] !== was && slot.isConnected) fill(slot, trackerCard(r)); });        // the tracker measures against the brief's should-cost
-    content = [brief, slot];
+    content = [flagged, brief, slot];
   } else {
     const mine = state.log.filter(x => x.text.startsWith(r.code + ":")).map(x => ({ at: x.at, text: x.text.slice(r.code.length + 2) + " (this browser)" }));
     const ng = state.negos[k] || {}, who = x => x ? ` (${x})` : "", stepText = e => `${e.kind} Rs ${n2(e.price)}, dated ${dayOf(e.date)}${e.note ? ` \u2013 ${e.note}` : ""}`;
@@ -747,7 +758,7 @@ function trackerCard(r) {
         key: k, kind: kind.value, price: price.value, date: date.value, note: note.value, code: r.code, supplier: r.supplier, description: r.description, source: r.source, metres: r.metres, should, row_price: r.price, seen: steps.length }) });
       if (res.status === 409) { const t = (await res.json()).detail; await loadNegos(true); toast(t, false); return; }
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-      state.negos[k] = await res.json(); delete drafts[k]; if (state.detail) state.detail.further = false; toast("Recorded"); render();
+      state.negos[k] = await res.json(); delete drafts[k]; if (state.detail) state.detail.further = false; toast("Recorded"); render(); loadAlerts();
     } catch (e) { say(e.message); toast(e.message, false); } finally { busy = false; btn.disabled = false; }
   };
   const words = rec ? negoWords(rec, should) : null;
@@ -760,7 +771,7 @@ function trackerCard(r) {
       h("td", { class: "note" }, e.note || ""),
       h("td", { class: "x" }, h("button", { type: "button", class: "btn rm", "aria-label": `Remove this step: ${e.kind} Rs ${n2(e.price)}`, title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
         try { const res = await fetch("/api/negotiations/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k, id: e.id }) }); if (!res.ok) throw new Error((await res.json()).detail || res.statusText); toast("Removed (the Log tab keeps a record)"); } catch (err) { toast(err.message, false); }
-        await loadNegos(true); } }, "Remove")))))) : null,
+        await loadNegos(true); loadAlerts(); } }, "Remove")))))) : null,
     r.duplicate_of && !rec ? h("p", { style: "margin:4px 0 0" }, `This row repeats the order of ${r.duplicate_of}, so its negotiation is kept there and the order is counted once. `,
         otherN ? h("b", {}, `On ${r.duplicate_of}: ${val(other, "nego")}. `) : `Nothing is recorded on ${r.duplicate_of} yet. `, other ? h("button", { type: "button", class: "code", onclick: () => { openDetail(other); state.detail.tab = "negotiation"; tabMemo(keyOf(other), "negotiation"); } }, `Open ${r.duplicate_of}`) : null)
       : s_ && s_.status === "Agreed" && !(state.detail && state.detail.further) && !drafts[k] ? h("div", {}, h("button", { type: "button", class: "btn line", onclick: () => { state.detail.further = true; render(); } }, "The price was reopened: record a further step"))
@@ -773,6 +784,29 @@ function trackerCard(r) {
 }
 /* The steps are shared, so another person (or another tab) may have added one: read them again when the
    Negotiation tab or the list opens and when the window is looked at again. Only a change redraws the page. */
+// ------------------------------------------------------------------ quote alerts: the count on the rail, the column and the filter
+function showAlerts() { state.cls = "Fabric list"; store.set("cls", state.cls); state.filters = { has_alert: ["Yes"] }; state.saved = "Default"; state.tab = "items"; state.search.active = null; state.search.text = ""; if (decodeURIComponent(location.hash.slice(1)).split("?")[0] !== "rightcost") location.hash = "#rightcost"; else rerunWithSkeleton(); }
+function paintBadge() {
+  const b = document.querySelector('.rail .item[data-id="costs"]'); if (!b) return;
+  b.querySelectorAll(".badge").forEach(e => e.remove());
+  const n = state.alerts.count;
+  b.setAttribute("aria-label", n ? `Right cost, ${n} quote ${n === 1 ? "alert" : "alerts"} to look at` : "Right cost");
+  if (n) b.append(h("span", { class: "badge", title: `${n} newly quoted ${n === 1 ? "fabric needs" : "fabrics need"} a look: above the usual range, sums off, a repeated order, or far below should-cost` }, n > 99 ? "99+" : String(n)));
+}
+async function loadAlerts() {
+  try {
+    const a = await (await fetch("/api/alerts")).json(), wasAll = JSON.stringify(state.alerts.all);
+    state.alerts = a; paintBadge();
+    if (wasAll !== JSON.stringify(a.all) && !state.frame && !state.library && !state.supplier && !document.querySelector(".grid td.edit select, .grid td.edit input")) render();
+  } catch (e) { /* the next look will try again */ }
+}
+async function markSeen(ids, undo) {
+  try {
+    const res = await fetch("/api/alerts/seen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, undo: !!undo }) });
+    if (!res.ok) throw new Error(res.statusText);
+    state.alerts = await res.json(); paintBadge(); toast(`${undo ? "Brought back" : "Marked seen"}: ${ids.length}`); state.selection.clear(); render();
+  } catch (e) { toast(e.message, false); }
+}
 async function loadNegos(always) {
   try {
     const ng = await (await fetch("/api/negotiations")).json(), was = JSON.stringify(state.negos);
@@ -1017,7 +1051,9 @@ addEventListener("keydown", e => {
 addEventListener("hashchange", route);
 addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data) return;
-  if (e.data.rp === "listChanged") load();
+  if (e.data.rp === "listChanged") { load(); loadAlerts(); }
+  if (e.data.rp === "alertsChanged") loadAlerts();
+  if (e.data.rp === "showAlerts" && e.source === (($("#main iframe.frame") || {}).contentWindow)) showAlerts();
   if (e.data.rp === "go" && /^(supplier|item)\/[^?]+$/.test(e.data.hash || "") && e.source === (($("#main iframe.frame") || {}).contentWindow)) location.hash = "#" + e.data.hash;
   if (e.data.rp === "close") { const pop = document.querySelector(".scrim[data-popup]"); if (pop) pop.close(); }
   if (e.data.rp === "nav" && e.data.hash) {
@@ -1031,6 +1067,8 @@ addEventListener("message", e => {
   if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
 });
 const catchUp = () => { if (!document.hidden && !state.frame && !state.library && !state.supplier && state.rows.length && !document.querySelector(".scrim")) loadNegos(); };
+const alertsUp = () => { if (!document.hidden) loadAlerts(); };
+addEventListener("focus", alertsUp); setInterval(alertsUp, 30000);
 addEventListener("focus", catchUp); document.addEventListener("visibilitychange", catchUp); setInterval(catchUp, 30000);
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
@@ -1045,4 +1083,4 @@ async function load() {
     if (state.supplier && !d.ready) loadSupplier();
   } catch (err) { fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
-renderRail(); route(); load(); whoAmI();
+renderRail(); route(); load(); loadAlerts(); whoAmI();

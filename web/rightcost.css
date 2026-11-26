@@ -368,3 +368,9 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
   .gridscroll.sup table.grid { min-width: 0 !important; table-layout: auto; }
   .muted, .sec h3, .stile .sl, .stile .ss { color: #333 !important; } .stile.red .sb, .gridscroll.sup td.loss { color: #a00 !important; }
 }
+
+/* ---------- quote alerts */
+.rail .item { position: relative; }
+.rail .item .badge { position: absolute; top: 2px; right: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #E5484D; color: #fff; font-size: 10.5px; font-weight: 800; line-height: 18px; text-align: center; }
+.chip.alertchip { background: #E5484D22; border: 1px solid #E5484D66; font-weight: 700; cursor: pointer; color: var(--text); font: inherit; font-weight: 700; }
+.brief.flagged { border-left: 4px solid #E5484D; margin-bottom: 12px; } .brief.flagged ul { margin: 0 0 8px; }
