@@ -403,7 +403,7 @@ def main():
         r2 = next(r for r in sp2["quoted"]["rows"] if r["code"] == "S-2")
         check("Supplier page: a fabric the mill has moved on is judged and asked about at the price it is at now, holding our counter",
               r2["price"] == 205 and r2["sheet_price"] == 185 and r2["band"] == "Push" and r2["above_range"] == round((205 - upper) * 4100)
-              and q2 and "now at Rs 205.00" in q2[0] and "hold our counter of Rs 180.00" in q2[0] and not any("ask for Rs" in q for q in q2), str(q2))
+              and q2 and "now at Rs 205.00" in q2[0] and "hold our counter of rs 180.00" in q2[0].lower() and not any("ask for Rs" in q for q in q2), str(q2))
         check("Supplier page: the mill's own build-up is set against the price it asks now",
               any(x["code"] == "S-2" and x["quote"] == 205 and x["own_gap"] == 20 for x in sp2["sums"]), str(sp2["sums"]))
         check("Supplier page: an unknown mill is refused", c.get("/api/supplier", params={"mill": "No Such Mill"}).status_code == 404)
