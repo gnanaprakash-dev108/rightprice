@@ -564,3 +564,7 @@ html.embed .side, html.embed .top, html.embed .skip { display: none !important; 
 html.embed .shell { display: block; }
 html.embed main { padding-top: 12px !important; }
 .list-hint { display: none; font-size: 12px; color: var(--muted); margin: 4px 0; }
+
+/* won in negotiation: a loss is said in words and in red */
+.loss { color: var(--red); }
+.wontable { width: 100%; } .wontable td, .wontable th { white-space: normal; overflow-wrap: anywhere; padding: 9px 8px; }

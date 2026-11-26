@@ -1083,22 +1083,49 @@ def _save_negos(d):
     os.replace(tmp, NEGO_PATH)
 
 
+MILL_WORDS = {"ltd", "limited", "mills", "mill", "pvt", "private", "co", "company", "the", "textiles", "textile", "p", "india"}
+
+
+def mill_key(name):
+    """One key for a mill however its name is written: "Arvind", "Arvind Ltd" and "ARVIND LIMITED" are one mill.
+    Purchase-order names are cut short ("Rajapalayam Mills Limite"), so a cut-off Limited or Private goes too."""
+    words = re.sub(r"[^a-z0-9 ]+", " ", str(name or "").lower()).split()
+    keep = [w for w in words if w not in MILL_WORDS and not (len(w) >= 3 and ("limited".startswith(w) or "private".startswith(w)))]
+    return " ".join(keep or words)
+
+
 def nego_summary(rec):
-    """Where one fabric's negotiation stands: first and latest mill price, the agreed price, and what was won."""
+    """Where one fabric's negotiation stands: the mill's first and latest price, the agreed price, what was won.
+    The first quote is the first step the mill quoted in (never our counter, never the agreed price). It is
+    agreed only while the agreed step is the last one: a step dated after it opens the negotiation again."""
     ev = sorted(rec.get("events", []), key=lambda e: (e["date"], e.get("at", "")))
-    mill = [e for e in ev if e["kind"] in ("Mill's quote", "Mill's revised quote", "Agreed")]
-    agreed = next((e for e in reversed(ev) if e["kind"] == "Agreed"), None)
-    first = mill[0]["price"] if mill else None
-    latest = mill[-1]["price"] if mill else None
+    quotes = [e for e in ev if e["kind"] in ("Mill's quote", "Mill's revised quote")]
+    last_agreed = next((e for e in reversed(ev) if e["kind"] == "Agreed"), None)
+    agreed = last_agreed if ev and ev[-1]["kind"] == "Agreed" else None
+    first = quotes[0]["price"] if quotes else None
+    latest_q = quotes[-1]["price"] if quotes else None
     metres = rec.get("metres") or 0
     should = rec.get("should")
-    out = {"status": "Agreed" if agreed else ("Open" if ev else "Not started"), "first": first, "latest": latest,
+    out = {"status": "Agreed" if agreed else ("Open" if ev else "Not started"), "first": first, "latest": latest_q,
            "agreed": agreed["price"] if agreed else None, "counter": next((e["price"] for e in reversed(ev) if e["kind"] == "Our counter"), None),
+           "reopened": last_agreed["price"] if last_agreed and not agreed else None,
            "steps": len(ev), "last_date": ev[-1]["date"] if ev else None}
-    ref = out["agreed"] if agreed else latest
+    ref = out["agreed"] if agreed else latest_q
     out["won_per_m"] = None if first is None or ref is None else round(first - ref, 2)
     out["won"] = None if out["won_per_m"] is None or not metres else round(out["won_per_m"] * metres)
     out["above_should_per_m"] = None if ref is None or should is None else round(ref - should, 2)
+    warn = []
+    if agreed and first is None:
+        warn.append("No mill quote is recorded, so there is nothing to measure the agreed price against. Record the mill's first quote, with its date.")
+    if agreed and quotes and (agreed["date"], agreed.get("at", "")) < (quotes[0]["date"], quotes[0].get("at", "")):
+        warn.append("The agreed price is dated before the mill's first quote. Check the dates.")
+    if last_agreed and quotes and last_agreed["date"] < quotes[0]["date"] and not agreed:
+        warn.append("An agreed price is dated before the mill's first quote. Check the dates.")
+    if first:
+        for e in ev:
+            if e["price"] > 3 * first or e["price"] < first / 3:
+                warn.append(f"Rs {e['price']:,.2f} ({e['kind']}, {e['date']}) is far from the first quote of Rs {first:,.2f}. Check it is per metre and typed right.")
+    out["warnings"] = warn
     return out
 
 
@@ -1154,22 +1181,31 @@ def negotiation_remove(payload: dict = Body(...)):
 
 @app.get("/api/negotiations/summary")
 def negotiations_summary():
-    """What negotiation has won, overall and by mill: against the first quote, and where prices ended against should-cost."""
+    """What negotiation has won, overall and by mill: against the first quote. A mill written two ways is one mill."""
     items = [dict(v, summary=nego_summary(v)) for v in _negos().values()]
     by = {}
     for it in items:
         s_ = it["summary"]
-        b = by.setdefault(it.get("supplier") or "No supplier", {"supplier": it.get("supplier") or "No supplier", "fabrics": 0, "agreed": 0, "open": 0, "won": 0.0, "metres": 0.0})
+        name = it.get("supplier") or "No supplier"
+        b = by.setdefault(mill_key(name) or "no supplier", {"names": {}, "fabrics": 0, "agreed": 0, "open": 0, "won": 0.0, "metres": 0.0, "not_counted": 0})
+        b["names"][name] = b["names"].get(name, 0) + 1
         b["fabrics"] += 1
         b["agreed" if s_["status"] == "Agreed" else "open"] += 1
         if s_["status"] == "Agreed" and s_["won"] is not None:
             b["won"] += s_["won"]
             b["metres"] += it.get("metres") or 0
+        elif s_["status"] == "Agreed":
+            b["not_counted"] += 1
+    for b in by.values():       # shown under the spelling used most, the longer one on a tie
+        b["supplier"] = sorted(b.pop("names").items(), key=lambda kv: (-kv[1], -len(kv[0])))[0][0]
+        b["won"] = round(b["won"])
     agreed = [it for it in items if it["summary"]["status"] == "Agreed"]
     return {"fabrics": len(items), "agreed": len(agreed), "open": len(items) - len(agreed),
             "won": round(sum(it["summary"]["won"] or 0 for it in agreed)),
-            "no_quantity": sum(1 for it in agreed if not it.get("metres")),
-            "suppliers": sorted(by.values(), key=lambda b: -b["won"])}
+            "no_quantity": sum(1 for it in agreed if not it.get("metres") and it["summary"]["first"] is not None),
+            "no_quote": sum(1 for it in agreed if it["summary"]["first"] is None),
+            "warnings": sum(1 for it in items if it["summary"]["warnings"]),
+            "suppliers": sorted(by.values(), key=lambda b: (-b["won"], b["supplier"]))}
 
 
 @app.post("/api/list/download")

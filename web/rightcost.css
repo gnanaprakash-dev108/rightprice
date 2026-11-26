@@ -295,9 +295,26 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
 /* ---------- negotiation tracker */
 .tracker { margin-top: 12px; }
 .tracker table.steps { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 13px; }
-.tracker table.steps td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.tracker table.steps td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.tracker table.steps td.d, .tracker table.steps td.k { white-space: nowrap; }
 .tracker table.steps td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tracker table.steps td.note { color: var(--text2); }
+.tracker table.steps td.note { color: var(--text2); width: 60%; overflow-wrap: anywhere; }
+.tracker table.steps td.x { text-align: right; width: 1%; }
+.tracker .btn.rm { height: 28px; padding: 0 10px; font-size: 12px; }
+.tracker b.loss { color: #C0362C; }
+:root[data-theme="dark"] .tracker b.loss { color: #F28B82; }
+.tracker ul.warns { margin: 0 0 10px; padding: 8px 12px 8px 28px; border-radius: 10px; background: #F5C54233; font-size: 13px; }
 .stepform { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.stepform input, .stepform select { height: 36px; border: 1px solid var(--border); border-radius: 10px; padding: 0 10px; background: var(--panel2); }
+.stepform input, .stepform select { height: 36px; border: 1px solid var(--border); border-radius: 10px; padding: 0 10px; background: var(--panel2); color: var(--text); }
 .stepform input[type=number] { width: 130px; } .stepform input[type=text] { flex: 1 1 220px; min-width: 0; }
+.card .fig.nego { font-weight: 700; }
+@media (max-width: 900px) {
+  /* a step on a phone: what happened with Remove at the end of the line; the date and the price beneath; then the note */
+  .tracker table.steps, .tracker table.steps tbody { display: block; }
+  .tracker table.steps tr { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "k x" "d n" "note note"; align-items: center; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .tracker table.steps td { display: block; padding: 0; border: 0; width: auto; }
+  .tracker table.steps td.k { grid-area: k; font-weight: 700; } .tracker table.steps td.x { grid-area: x; } .tracker table.steps td.d { grid-area: d; color: var(--text2); }
+  .tracker table.steps td.n { grid-area: n; } .tracker table.steps td.note { grid-area: note; width: auto; }
+  .tracker table.steps td.note:empty { display: none; }
+  .stepform select, .stepform input[type=number], .stepform input[type=date] { flex: 1 1 130px; width: auto; min-width: 0; }
+}

@@ -25,7 +25,7 @@ const CONFIG = {
         { id: "image", header: "Image", width: 60, pinned: true, type: "thumb" },
         { id: "code", header: "Fabric code", width: 130, pinned: true, type: "link" },
         { id: "band", header: "Against range", width: 120, type: "band", help: "The negotiation brief's verdict on today's rates: in the usual range for this fabric type, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates)" },
-        { id: "nego", header: "Negotiation", width: 160, help: "From the tracker on the fabric's Negotiation tab: agreed price, or the latest price while it is open" },
+        { id: "nego", header: "Negotiation", width: 160, help: "From the tracker on the fabric's Negotiation tab: the agreed price, or while it is open the mill's latest price (our counter if the mill has not quoted)" },
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
@@ -159,9 +159,9 @@ const val = (r, id) => {
   if (id === "remarks") return (state.pending[keyOf(r)] || {}).remarks ?? (state.edits[keyOf(r)] || {}).remarks ?? "";
   if (id === "held_back") return r.held_back === null || r.held_back === undefined ? "" : r.held_back ? "Yes" : "No";
   if (id === "placeholder") return r.placeholders ? "Yes" : "No";
-  if (id === "added") return r.id || r.added || "";
+  if (id === "added") return r.id || r.added || "";            // list ids carry the time they were added
   if (id === "nego" || id === "nego_status") { const n = state.negos[keyOf(r)]; if (!n) return id === "nego" ? "" : "Not started"; const s_ = n.summary;
-    return id === "nego_status" ? s_.status : s_.status === "Agreed" ? `Agreed Rs ${n2(s_.agreed)}` : `Open, at Rs ${n2(s_.latest ?? s_.counter)}`; }            // list ids carry the time they were added
+    return id === "nego_status" ? s_.status : s_.status === "Agreed" ? `Agreed Rs ${n2(s_.agreed)}` : s_.latest !== null ? `Open, mill at Rs ${n2(s_.latest)}` : `Open, our counter Rs ${n2(s_.counter)}`; }
   if (id === "band_rank") return { "Push": 0, "Ask break-up, above range": 1, "Check quote": 2, "Ask break-up": 3, "Below": 4, "Fair": 5 }[r.band] ?? 6;
   if (col && col.value) return col.value(r);
   return r[id];
@@ -328,6 +328,7 @@ function route() {
   else if (id !== "rightcost" && id !== "item") { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
   $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library ? " fixed listpage" : "");
   railActive(); render();
+  if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
   document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
 const frameSrc = hsh => `/?embed=1&bare=1&in=page#${hsh}`;
@@ -475,7 +476,8 @@ function cardView(rows) {
     return h("div", { class: "card" + (state.selection.has(k) ? " picked" : "") },
       h("div", { class: "img", style: { background: (ROUTE_COLOR[r.route] || "#B9BEC7") + "22" }, html: svg("fabric") }), bar,
       h("div", { class: "txt" }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code), h("div", { class: "desc", title: r.description }, r.description || ""),
-        h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Should-cost ${n2(r.should)} \u00B7 ${r.price ? `${r.source === "Purchase orders" ? "paid" : "quoted"} ${n2(r.price)} (${pc(r.gap_pct)})` : "no price"}` : r.band)),
+        h("div", { class: "fig" }, r.should !== null && r.should !== undefined ? `Should-cost ${n2(r.should)} \u00B7 ${r.price ? `${r.source === "Purchase orders" ? "paid" : "quoted"} ${n2(r.price)} (${pc(r.gap_pct)})` : "no price"}` : r.band),
+        val(r, "nego") ? h("div", { class: "fig nego" }, val(r, "nego")) : null),
       ck, h("button", { type: "button", class: "qv", onclick: () => quickView(r) }, "Quick view"));
   }));
   grid.addEventListener("scroll", () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 80 && state.shown < rows.length) { const t = grid.scrollTop; state.shown += CONFIG.pageSize; render(); const g = $(".cards"); if (g) g.scrollTop = t; } });
@@ -542,7 +544,7 @@ function renderDetail(main) {
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
     ib("open", "Open in Create cost", () => openCostPopup(r)));
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
-  const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; render(); } }, l)));
+  const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; render(); if (t === "negotiation" || t === "log") loadNegos(); } }, l)));
   let content;
   if (d.tab === "item") {
     const edit = state.edits[k] || {};
@@ -556,11 +558,14 @@ function renderDetail(main) {
     else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost")));
     else { content = h("div", { class: "buckets" }, "Working it out…"); liveCosting(r, content); }
   } else if (d.tab === "negotiation") {
-    const brief = h("div", { class: "brief" }, "Working it out\u2026"); negotiationTab(r, brief);
-    content = [brief, trackerCard(r)];
+    const brief = h("div", { class: "brief" }, "Working it out\u2026"), slot = h("div", {}, trackerCard(r));
+    const was = briefShould[k]; negotiationTab(r, brief).then(() => { if (briefShould[k] !== was && slot.isConnected) fill(slot, trackerCard(r)); });        // the tracker measures against the brief's should-cost
+    content = [brief, slot];
   } else {
-    const mine = state.log.filter(x => x.text.startsWith(r.code + ":"));
-    content = h("div", { class: "log" }, mine.length ? mine.map(x => h("div", {}, `${new Date(x.at).toLocaleString("en-IN")} · ${x.text.slice(r.code.length + 2)}`)) : h("div", { class: "empty" }, "No changes recorded in this browser."));
+    const mine = state.log.filter(x => x.text.startsWith(r.code + ":")).map(x => ({ at: x.at, text: x.text.slice(r.code.length + 2) + " (this browser)" }));
+    const steps = ((state.negos[k] || {}).events || []).map(e => ({ at: e.at, text: `Negotiation: ${e.kind} Rs ${n2(e.price)}, dated ${dayOf(e.date)}${e.note ? ` \u2013 ${e.note}` : ""}` }));
+    const all = [...mine, ...steps].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    content = h("div", { class: "log" }, all.length ? all.map(x => h("div", {}, `${new Date(x.at).toLocaleString("en-IN")} · ${x.text}`)) : h("div", { class: "empty" }, "Nothing recorded yet: no negotiation steps, and no changes in this browser."));
   }
   fill(main, crumbs, head, tabs, content);
   renderSelbar();
@@ -586,6 +591,7 @@ async function negotiationTab(r, box) {
   if (!r.choices || !r.price) { box.textContent = "No price on this row, so there is nothing to negotiate yet."; return; }
   try {
     const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(r.choices) })).json();
+    if (res.total_per_m) briefShould[keyOf(r)] = res.total_per_m;
     const b = res.brief; if (!b) { box.textContent = "No brief: the price is not usable."; return; }
     const label = { push: ["Push", "#E5484D"], fair: ["Fair", "#2E9E5B"], below: ["Below", "#3D8BFD"], ask: ["Ask for the break-up", "#B98900"] }[b.stance];
     fill(box, h("div", {}, h("span", { class: "st", style: { background: label[1] + "22", color: label[1] } }, b.implausible ? "Check the quote first" : label[0]), ` On today's rates the should-cost is Rs ${n2(b.should)}; the price is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`),
@@ -599,35 +605,69 @@ async function negotiationTab(r, box) {
 // ------------------------------------------------------------------ negotiation tracker
 /* Each step with the mill, in order: its quote, our counter, a revised quote, the agreed price. What was
    won is the first quote less the agreed price, times the metres. Kept on the server for everyone. */
+const briefShould = {}, drafts = {};
+const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const dayOf = iso => new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+function negoWords(rec, should) {
+  const s_ = rec.summary, ref = s_.status === "Agreed" ? s_.agreed : s_.latest, out = [];
+  let head = s_.status === "Agreed" ? `Agreed at Rs ${n2(s_.agreed)}` : s_.latest !== null ? `Open: the mill is at Rs ${n2(s_.latest)}` + (s_.counter !== null ? `, our counter Rs ${n2(s_.counter)}` : "")
+    : `Open: our counter is Rs ${n2(s_.counter)}; no mill quote recorded yet`;
+  if (s_.reopened !== null && s_.reopened !== undefined) head += ` (open again after an agreement at Rs ${n2(s_.reopened)})`;
+  if (s_.won_per_m !== null && (s_.status === "Agreed" || s_.won_per_m !== 0)) {
+    const d = s_.won_per_m, money = s_.won === null ? " (no metres on this fabric, so no rupee total)"
+      : d === 0 ? "" : s_.status === "Agreed" ? ` (Rs ${n0(Math.abs(s_.won))} ${d > 0 ? "saved" : "more"} on ${n0(rec.metres)} m${d > 0 ? "" : ": a loss"})` : ` (Rs ${n0(Math.abs(s_.won))} ${d > 0 ? "less" : "more"} on ${n0(rec.metres)} m if agreed there)`;
+    out.push(d === 0 ? `the same as the first quote of Rs ${n2(s_.first)}` : `Rs ${n2(Math.abs(d))} a metre ${d > 0 ? "below" : "above"} the first quote of Rs ${n2(s_.first)}${money}`);
+  }
+  if (ref !== null && should) { const g = ref - should; out.push(Math.abs(g) < 0.005 ? `at today's should-cost of Rs ${n2(should)}` : `Rs ${n2(Math.abs(g))} a metre ${g > 0 ? "above" : "below"} today's should-cost of Rs ${n2(should)}`); }
+  return [head, out];
+}
 function trackerCard(r) {
-  const k = keyOf(r), rec = state.negos[k], s_ = rec && rec.summary;
+  const k = keyOf(r), rec = state.negos[k], s_ = rec && rec.summary, should = briefShould[k] || r.should;
   const box = h("div", { class: "brief tracker" });
+  const steps = rec ? [...rec.events].sort((a, b) => (a.date + a.at).localeCompare(b.date + b.at)) : [];
+  const lastKind = steps.length ? steps[steps.length - 1].kind : null, dr = drafts[k] || {};
   const kind = h("select", { "aria-label": "What happened" }, state.negoKinds.map(x => h("option", {}, x)));
-  if (!rec) kind.value = "Mill's quote"; else kind.value = s_.status === "Agreed" ? "Agreed" : rec.events.length % 2 ? "Our counter" : "Mill's revised quote";
-  const price = h("input", { type: "number", step: "0.01", min: "0", placeholder: "Rs per metre", "aria-label": "Price, Rs per metre", value: !rec && r.price ? r.price : "" });
-  const date = h("input", { type: "date", value: new Date().toISOString().slice(0, 10), max: new Date().toISOString().slice(0, 10), "aria-label": "Date" });
-  const note = h("input", { type: "text", placeholder: "Note (optional): what was said", "aria-label": "Note" });
+  kind.value = dr.kind || (!lastKind ? "Mill's quote" : lastKind === "Our counter" || lastKind === "Agreed" ? "Mill's revised quote" : "Our counter");
+  const price = h("input", { type: "number", step: "0.01", min: "0", inputmode: "decimal", placeholder: "Rs per metre", "aria-label": "Price, Rs per metre", value: dr.price ?? (!rec && r.price ? r.price : "") });
+  const date = h("input", { type: "date", value: dr.date || today(), max: today(), "aria-label": "Date" });
+  const note = h("input", { type: "text", maxlength: "500", placeholder: "Note (optional): what was said", "aria-label": "Note", value: dr.note || "" });
+  const keep = () => { drafts[k] = { kind: kind.value, price: price.value, date: date.value, note: note.value }; };
+  [kind, price, date, note].forEach(el => { el.addEventListener("input", keep); el.addEventListener("change", keep); });
   const add = async () => {
+    const p = Number(price.value);
+    if (!price.value || !(p > 0)) { toast("Type the price in rupees per metre", false); price.focus(); return; }
+    if (!date.value) { toast("Choose the date", false); date.focus(); return; }
+    if (date.value > today()) { toast("The date is in the future", false); date.focus(); return; }
     try {
       const res = await fetch("/api/negotiations/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        key: k, kind: kind.value, price: price.value, date: date.value, note: note.value, code: r.code, supplier: r.supplier, description: r.description, source: r.source, metres: r.metres, should: r.should }) });
+        key: k, kind: kind.value, price: price.value, date: date.value, note: note.value, code: r.code, supplier: r.supplier, description: r.description, source: r.source, metres: r.metres, should }) });
       if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
-      state.negos[k] = await res.json(); toast("Recorded"); render();
+      state.negos[k] = await res.json(); delete drafts[k]; toast("Recorded"); render();
     } catch (e) { toast(e.message, false); }
   };
-  const steps = rec ? [...rec.events].sort((a, b) => (a.date + a.at).localeCompare(b.date + b.at)) : [];
-  fill(box, h("h3", { style: "margin:0 0 6px;font-size:15px" }, "Where it stands"),
+  const words = rec ? negoWords(rec, should) : null;
+  fill(box, h("h3", { style: "margin:0 0 6px;font-size:15px" }, "Where it stands with the mill"),
     !rec ? h("p", { style: "margin:4px 0 10px;color:var(--text2)" }, "Nothing recorded yet. Record the mill's quote, then each counter and revision, and the agreed price.")
-      : h("p", { style: "margin:4px 0 10px" }, h("b", {}, s_.status === "Agreed" ? `Agreed at Rs ${n2(s_.agreed)}` : `Open: the mill is at Rs ${n2(s_.latest)}` + (s_.counter ? `, our counter Rs ${n2(s_.counter)}` : "")),
-        s_.won_per_m !== null ? ` \u00B7 ${s_.won_per_m >= 0 ? "down" : "up"} Rs ${n2(Math.abs(s_.won_per_m))} a metre from the first quote of Rs ${n2(s_.first)}` + (s_.won !== null ? ` (Rs ${n0(Math.abs(s_.won))} on ${n0(rec.metres)} m)` : " (no metres recorded, so no rupee total)") : "",
-        s_.above_should_per_m !== null ? ` \u00B7 Rs ${n2(Math.abs(s_.above_should_per_m))} a metre ${s_.above_should_per_m >= 0 ? "above" : "below"} should-cost` : ""),
-    steps.length ? h("table", { class: "steps" }, h("tbody", {}, steps.map(e => h("tr", {}, h("td", {}, new Date(e.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })), h("td", {}, e.kind), h("td", { class: "n" }, "Rs " + n2(e.price)), h("td", { class: "note" }, e.note || ""),
-      h("td", {}, h("button", { type: "button", class: "btn", title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Remove: sure?"; return; }
-        await fetch("/api/negotiations/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k, id: e.id }) }); await load(); toast("Removed"); } }, "Remove")))))) : null,
+      : h("p", { style: "margin:4px 0 10px" }, h("b", { class: s_.status === "Agreed" && s_.won_per_m < 0 ? "loss" : null }, words[0]), words[1].map(w => " · " + w)),
+    rec && s_.warnings.length ? h("ul", { class: "warns" }, s_.warnings.map(w => h("li", {}, w))) : null,
+    steps.length ? h("table", { class: "steps" }, h("tbody", {}, steps.map(e => h("tr", {}, h("td", { class: "d" }, dayOf(e.date)), h("td", { class: "k" }, e.kind), h("td", { class: "n" }, "Rs " + n2(e.price)),
+      h("td", { class: "note" }, e.note || ""),
+      h("td", { class: "x" }, h("button", { type: "button", class: "btn rm", "aria-label": `Remove this step: ${e.kind} Rs ${n2(e.price)}`, title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
+        try { const res = await fetch("/api/negotiations/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k, id: e.id }) }); if (!res.ok) throw new Error((await res.json()).detail || res.statusText); toast("Removed"); } catch (err) { toast(err.message, false); }
+        await loadNegos(true); } }, "Remove")))))) : null,
     h("div", { class: "stepform" }, kind, price, date, note, h("button", { type: "button", class: "btn fill", onclick: add }, "Record")),
-    h("p", { style: "margin:8px 0 0;font-size:12px;color:var(--text2)" }, "Kept on the server: everyone using RightPrice sees the same steps."));
-  price.addEventListener("keydown", e => { if (e.key === "Enter") add(); });
+    h("p", { style: "margin:8px 0 0;font-size:12px;color:var(--text2)" }, "Kept on the server: everyone using RightPrice sees the same steps. What was won is the mill's first quote less the agreed price, times the metres."));
+  [price, note].forEach(el => el.addEventListener("keydown", e => { if (e.key === "Enter") add(); }));
   return box;
+}
+/* The steps are shared, so another person (or another tab) may have added one: read them again when the
+   Negotiation tab or the list opens and when the window is looked at again. Only a change redraws the page. */
+async function loadNegos(always) {
+  try {
+    const ng = await (await fetch("/api/negotiations")).json(), was = JSON.stringify(state.negos);
+    state.negos = ng.items || {}; state.negoKinds = ng.kinds || state.negoKinds;
+    if ((always || was !== JSON.stringify(state.negos)) && !state.frame && !state.library && !document.querySelector(".grid td.edit select, .grid td.edit input")) render();
+  } catch (e) { /* the next look will try again */ }
 }
 
 // ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
@@ -878,6 +918,7 @@ addEventListener("message", e => {
   if (e.data.rp === "popup" && e.data.move) { try { sessionStorage.setItem("rp-list-move", JSON.stringify(e.data.move)); } catch (err) { /* no handover */ } }
   if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
 });
+addEventListener("focus", () => { if (!state.frame && !state.library && state.rows.length) loadNegos(); });
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {

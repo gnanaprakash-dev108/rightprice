@@ -305,6 +305,27 @@ def main():
         ev = last["events"][-1]["id"]
         c.post("/api/negotiations/remove", json={"key": base["key"], "id": ev})
         check("Tracker: removing the agreed step reopens it", c.get("/api/negotiations").json()["items"][base["key"]]["summary"]["status"] == "Open")
+        # the first quote is a quote: never our counter, never the agreed price
+        k2 = dict(base, key="Fabric list|T-10", code="T-10", supplier="Arvind Ltd")
+        only = c.post("/api/negotiations/event", json=dict(k2, kind="Agreed", price=180, date="2026-11-10")).json()["summary"]
+        check("Tracker: an agreed price with no mill quote wins nothing and says why", only["first"] is None and only["won"] is None and only["warnings"])
+        late = c.post("/api/negotiations/event", json=dict(k2, kind="Mill's quote", price=200, date="2026-11-12")).json()["summary"]
+        check("Tracker: an agreed price dated before the first quote is not counted as agreed, and is flagged",
+              late["status"] == "Open" and late["first"] == 200 and late["reopened"] == 180 and any("dated before" in w for w in late["warnings"]))
+        again = c.post("/api/negotiations/event", json=dict(k2, kind="Agreed", price=210, date="2026-11-14")).json()["summary"]
+        check("Tracker: agreeing above the first quote is a loss", again["status"] == "Agreed" and again["won_per_m"] == -10 and again["won"] == -10000)
+        far = c.post("/api/negotiations/event", json=dict(k2, kind="Our counter", price=19, date="2026-11-13")).json()["summary"]
+        check("Tracker: a price far from the first quote is flagged", any("far from the first quote" in w for w in far["warnings"]))
+        c.post("/api/negotiations/event", json=dict(base, kind="Agreed", price=182.5, date="2026-11-22"))
+        tot = c.get("/api/negotiations/summary").json()
+        check("Tracker: a mill written two ways is one mill, and losses are netted",
+              len(tot["suppliers"]) == 1 and tot["suppliers"][0]["fabrics"] == 2 and tot["won"] == -2500)
+        check("Mill names: Ltd, Limited, Mills and a cut-off Limited are dropped",
+              server.mill_key("Rajapalayam Mills Limite") == server.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and server.mill_key("Arvind") == server.mill_key("Arvind Limited"))
+        for key in (base["key"], k2["key"]):
+            for e in c.get("/api/negotiations").json()["items"][key]["events"]:
+                c.post("/api/negotiations/remove", json={"key": key, "id": e["id"]})
+        check("Tracker: with every step removed nothing is left", c.get("/api/negotiations").json()["items"] == {})
 
         # yarn price intake
         csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
