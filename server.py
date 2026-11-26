@@ -837,7 +837,8 @@ def _pilot_briefs(rows, key):
     return None
 
 
-STANCE_BAND = {"push": "Above range", "fair": "In range", "below": "Below range", "ask": "Ask break-up", "error": "Not costed"}
+# the words of the negotiation brief, so a row reads the same in Right cost, the list and the pack
+STANCE_BAND = {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask break-up", "error": "Not costed"}
 
 
 @app.get("/api/costs")
@@ -901,10 +902,10 @@ def costs():
             "range": None if b is None else [b["band"]["lo"] * 100, b["band"]["hi"] * 100], "buckets": None,
             "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"]})
     # an unsure verdict on a price above the top of its usual range is still money above should-cost:
-    # it is marked "Above, ask break-up" so it is not lost among the unsure rows
+    # it is marked "Ask break-up, above range" so it is not lost among the unsure rows
     for r in out:
         if r["band"] == "Ask break-up" and r.get("range") and r.get("gap_pct") is not None and r["gap_pct"] > r["range"][1]:
-            r["band"] = "Above, ask break-up"
+            r["band"] = "Ask break-up, above range"
     # the same order twice in the fabric list (as the negotiation pack decides it)
     seen = {}
     for r, i in zip([x for x in out if x["source"] == "Fabric list"], listed):

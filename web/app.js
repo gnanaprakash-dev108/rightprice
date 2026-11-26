@@ -104,6 +104,7 @@ function route() {
     return;
   }
   route.last = location.hash.slice(1) || "dashboard";
+  if (IN_PAGE) parent.postMessage({ rp: "nav", hash: decodeURIComponent(route.last) }, location.origin);   // the shell's heading and address follow
   const page = PAGES[id] ? id : "dashboard";
   document.querySelectorAll(".nav-link").forEach(a => a.dataset.page === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
   closeMenu(); hideTip();
@@ -284,7 +285,7 @@ PAGES.dashboard = async () => {
     const top = Math.max(...p.categories.map(c => Math.max(c.paid, c.should)));
     const rows = p.categories.map(c => h("tr", {}, h("td", {}, h("b", {}, c.route), " · ", c.weave), h("td", { class: "cmp-cell" }, h("div", { class: "cmp-bars", "aria-hidden": "true" }, h("div", { class: "cmp-bar", style: `width:${c.paid / top * 100}%;background:var(--total)` }), h("div", { class: "cmp-bar", style: `width:${c.should / top * 100}%;background:var(--g1)` }))),
       h("td", { class: "n" }, fmt(c.paid, 0)), h("td", { class: "n" }, fmt(c.should, 0)), h("td", { class: "n" }, gapTag(c.gap, c.trust)), h("td", { class: "n" }, c.p25 === undefined ? "" : `${pctSigned(c.p25)} to ${pctSigned(c.p75)}`), h("td", { class: "n" }, pct(c.within10, 0)), h("td", { class: "n" }, fmt(c.fabrics, 0))));
-    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} 100% cotton fabrics bought Aug to Nov 2026, averaged over the metres bought; fabric types with fewer than 20 fabrics are left out, so the rows add up to less. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Paid above should-cost is the average over the metres; the middle half is by fabric, half of them priced between the two figures. The average can sit outside the middle half when a few large orders were priced far from should-cost. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
+    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "1. Cost per metre by fabric type"), h("div", { class: "sub", style: "margin:2px 0 0" }, `${fmt(p.fabrics, 0)} fabrics in 100% cotton, bought Aug to Nov 2026, averaged over the metres bought; fabric types with fewer than 20 fabrics are left out, so the rows add up to less. Dark bar: price paid. Blue bar: should-cost. Plus means you paid above should-cost. Paid above should-cost is the average over the metres; the middle half is by fabric, half of them priced between the two figures. The average can sit outside the middle half when a few large orders were priced far from should-cost. Where the tool fits past prices poorly the gap is marked \u201Ctool unsure\u201D: it says more about the tool than about the price.`))),
       h("div", { class: "table-wrap tall" }, h("table", { class: "cmp" }, h("thead", {}, h("tr", {}, h("th", {}, "Fabric type"), h("th", { class: "cmp-cell" }, ""), h("th", { class: "n" }, "Paid Rs/m"), h("th", { class: "n" }, "Should-cost Rs/m"), h("th", { class: "n" }, "Paid above should-cost"), h("th", { class: "n", title: "Half of these fabrics were priced between these two figures against should-cost; one in four above the higher, one in four below the lower. The negotiation brief treats this range (at least 5% and at most 10% either way) as in line" }, "Middle half of fabrics"), h("th", { class: "n", title: "Share of these fabrics where the should-cost is within 10% of the price paid" }, "Tool within 10%"), h("th", { class: "n" }, "Fabrics"))), h("tbody", {}, rows))),
       h("p", { class: "sub", style: "margin:10px 0 0" }, "Poly cotton and linen are not here: there are no costed purchases of them yet.")));
 
@@ -631,7 +632,8 @@ function costView(res, sel) {
   let quote = null;
   if (res.quote !== null) {
     const above = res.gap >= 0;
-    quote = h("div", { class: "quote" }, h("span", { class: "tag " + (above ? "down" : "up") }, `${above ? "▲" : "▼"} Quote ${rs(res.quote)}/m is ${rs(Math.abs(res.gap))} (${pct(Math.abs(res.gap_pct))}) ${above ? "above" : "below"} should-cost`));
+    const verdict = res.brief ? (res.brief.implausible ? "warn" : STANCE[res.brief.stance][0]) : (above ? "down" : "up");
+    quote = h("div", { class: "quote" }, h("span", { class: "tag " + verdict }, `${above ? "▲" : "▼"} Quote ${rs(res.quote)}/m is ${rs(Math.abs(res.gap))} (${pct(Math.abs(res.gap_pct))}) ${above ? "above" : "below"} should-cost`));
   }
   const hero = h("div", { class: "card hero" },
     h("div", { class: "hero-row" },
@@ -881,12 +883,13 @@ function waterfall(res) {
 PAGES.compare = async () => {
   const list = state.list = await (await postJSON("/api/list", {})).json();
   const sources = [];
-  if (state.sel && ready(state.sel)) sources.push({ id: "now", label: "On the Cost a fabric page now" + (state.sel["Fabric code"] ? ": " + state.sel["Fabric code"] : ""), inputs: payload(state.sel) });
+  if (state.sel && ready(state.sel)) sources.push({ id: "now", label: (EMBED ? "Open in Create cost now" : "On the Cost a fabric page now") + (state.sel["Fabric code"] ? ": " + state.sel["Fabric code"] : ""), inputs: payload(state.sel) });
   for (const r of list.rows) if (r.inputs && !r.problems.length) sources.push({ id: r.id, label: [r.mill["Fab Code"], r.supplier, r.description, "added " + day(r.added)].filter(v => !blank(v)).join(" \u00B7 "), inputs: r.inputs });
   const head = pageHead("Compare", "Two fabrics from the list side by side, both on today's rates: two suppliers' quotes for one fabric, or one fabric built two ways.");
   if (sources.length < 2) return [...head, h("div", { class: "card" }, h("p", { class: "empty" }, "Comparing needs two costed fabrics in the list. Upload a sheet under Bulk upload, or cost a fabric and press Add to list; a fabric open on Cost a fabric counts as one."), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric"))];
   const pickBox = (id, label, start) => { const sel = h("select", { id }, sources.map(s => h("option", { value: s.id }, s.label))); sel.value = sources[start].id; return [h("div", { class: "field" }, h("label", { for: id }, label), sel), sel]; };
   state.cmp = state.cmp || {};
+  try { const ids = JSON.parse(sessionStorage.getItem("rp-compare-ids") || "null"); sessionStorage.removeItem("rp-compare-ids"); if (ids && ids.length === 2) state.cmp = { a: ids[0], b: ids[1] }; } catch (e) { /* none handed over */ }
   const startA = Math.max(0, sources.findIndex(s => s.id === state.cmp.a)), startB = sources.findIndex(s => s.id === state.cmp.b);
   const [fa, sa] = pickBox("cmp-a", "A", startA), [fb, sb] = pickBox("cmp-b", "B", startB >= 0 ? startB : (startA === 0 ? 1 : 0));
   const out = h("div", { "aria-live": "polite", style: "margin-top:16px" });
@@ -1117,7 +1120,7 @@ function packView(p, move, scopeNote) {
     tile("Mill's sums off", t.sums_money ? R(t.sums_money) : plural(t.sums_off, "row"), t.sums_off ? (t.sums_money ? `charged above what the sheet's own sums give, on ${plural(t.sums_off, "row")}` : "check them; none charges more than its own sums give") : "every row's sums add up", t.sums_off ? "sums" : ""),
     tile(`In line: ${t.count.fair} \u00B7 below: ${t.count.below}`, t.savings ? R(t.savings) : "\u2014", t.savings ? "below should-cost on the rows marked Below: a saving, if the specification holds" : "no row is below its usual range"));
   const byCode = Object.fromEntries(p.rows.map(r => [r.code, r]));
-  const lead = p.lead.length ? h("div", { class: "pack-lead" }, h("b", {}, "Lead with: "), p.lead.map((c, i) => { const r = byCode[c]; return h("span", {}, `${i ? "; " : ""}${c}, ${R(r.above_range_money)} above the usual range on ${fmt(r.quantity, 0)} m (quote ${rs(r.quote)}; open at ${rs(r.open_at)}, aim for ${rs(r.upper)})`); }), ".") : h("div", { class: "pack-lead" }, h("b", {}, "No row to push on. "), "Every costed row is inside its usual range, below it, or on a fabric type the tool is unsure of.");
+  const lead = p.lead.length ? h("div", { class: "pack-lead" }, h("b", {}, "Lead with: "), p.lead.map((c, i) => { const r = byCode[c]; return h("span", {}, `${i ? "; " : ""}${c}, ${R(r.above_range_money)} above the usual range on ${fmt(r.quantity, 0)} m (quote ${rs(r.quote)}; open at ${rs(r.open_at)}, aim for ${rs(r.upper)})`); }), ".") : (t.count.push ? h("div", { class: "pack-lead" }, h("b", {}, "Nothing large to lead with. "), `The ${plural(t.count.push, "Push row")} ${t.count.push === 1 ? "is" : "are"} only paise above the usual range: ask for the top of the range (the questions below).`) : h("div", { class: "pack-lead" }, h("b", {}, "No row to push on. "), "Every costed row is inside its usual range, below it, or on a fabric type the tool is unsure of."));
   const tag = st => h("span", { class: "tag " + STANCE[st][0] }, { push: "Push", fair: "Fair", below: "Below", ask: "Ask break-up", check: "Check quote" }[st]);
   const table = h("div", { class: "table-wrap pack-table" }, h("table", {},
     h("thead", {}, h("tr", {}, h("th", {}, "Fabric"), h("th", { class: "n" }, "Metres"), h("th", { class: "n" }, "Mill price"), h("th", { class: "n" }, "Should-cost"), h("th", { class: "n" }, "Mill above should-cost"), h("th", { class: "n" }, "At stake"), h("th", {}, "What to do"), h("th", {}, "Mill's sums"))),
@@ -1320,7 +1323,7 @@ function displayCard() {
       h("div", { style: "grid-column:span 2" }, h("h3", {}, "Use it like an app on a phone"),
         h("p", { class: "sub", style: "margin:0" }, h("b", {}, "Android (Chrome): "), "open the site, tap the three dots, then \u201CAdd to Home screen\u201D or \u201CInstall app\u201D. ", h("b", {}, "iPhone (Safari): "), "tap Share, then \u201CAdd to Home Screen\u201D. It then opens full screen from its own icon. It still needs the internet and your sign-in; nothing is stored on the phone."))));
 }
-PAGES.settings = async (w) => { const nodes = await settingsTables(w); nodes.splice(2, 0, displayCard()); return nodes; };
+PAGES.settings = async (w) => { const nodes = await settingsTables(w); if (!EMBED) nodes.splice(2, 0, displayCard()); return nodes; };
 const settingsTables = (w) => tabbed("Settings", "Calculation settings, mill tiers and order size slabs. Method: the corrected method of the V1 workbook; price basis ex-mill, so freight is left out.",
   ["Settings", "Mill_Tier", "Order_Slab", "Supplier_Benchmarks"])(w);
 

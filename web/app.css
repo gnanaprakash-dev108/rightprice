@@ -553,6 +553,12 @@ html.embed .btn.primary { background: #F2B23E; border-color: #F2B23E; color: #2A
 html.embed h1 { font-weight: 800; letter-spacing: -.02em; }
 html.bare #main > h1:first-child { display: none; }
 html.bare .pane-head h1 { display: none; }
+html.bare .pack-tools h1 { display: none; }
+/* the browser's own controls, in the shell's look */
+html.embed select { background-color: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; font: inherit; }
+html.embed input[type=file] { font: inherit; color: var(--muted); }
+html.embed input[type=file]::file-selector-button { font: inherit; font-weight: 700; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 10px; padding: 7px 14px; margin-right: 10px; cursor: pointer; }
+html.embed input[type=file]::file-selector-button:hover { background: var(--panel2); }
 /* inside Right cost's popup: Cost a fabric alone */
 html.embed .side, html.embed .top, html.embed .skip { display: none !important; }
 html.embed .shell { display: block; }

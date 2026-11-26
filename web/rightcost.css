@@ -253,3 +253,32 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; ta
   .toast { left: 70px; }
   .frame { height: calc(100vh - 170px); }
 }
+
+/* ---------- one scroll area per page: the list and the screens shown inside keep the header still */
+.main.fixed { height: 100vh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding-bottom: 14px; }
+.main.fixed > * { flex: none; }
+.main.framepage .frame { flex: 1 1 auto; height: auto; min-height: 0; }
+.main.listpage .gridwrap, .main.listpage .cards, .main.listpage > .gridscroll { flex: 1 1 auto; min-height: 0; }
+.main.listpage .gridscroll, .main.listpage .cards { max-height: none; }
+.pill { max-width: 100%; overflow: hidden; }
+.pill .pt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popup .ph { flex-wrap: nowrap; }
+.popup .ph h2 { flex: none; }
+.popup .ptabwrap { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
+.popup .pnote { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34%; }
+.tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { white-space: nowrap; flex: none; }
+@media (max-width: 900px) {
+  .rail { width: 56px; padding-top: 10px; } .rail .logo { width: 34px; height: 34px; margin-bottom: 8px; }
+  .rail .item { width: 50px; font-size: 9px; } .rail .avatar { width: 34px; height: 34px; }
+  .main { margin-left: 56px; }
+  .flyout { left: 62px; } .selbar { left: 62px; } .toast { left: 62px; }
+  .main.fixed { height: 100dvh; }
+  .fab { height: 38px; padding: 0 12px; }
+  .popup { width: 100vw; height: 100dvh; border-radius: 0; }
+  .popup .ph { padding: 8px 10px; gap: 8px; }
+  .popup .ph h2, .popup .pnote { display: none; }
+}
+.tabsrow > div { min-width: 0; max-width: 100%; }
+.framehead { flex: none; }
