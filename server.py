@@ -25,6 +25,7 @@ from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile, Web
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import draft
 import masters
 import mill_sheet
 import price_import as pi
@@ -1770,6 +1771,62 @@ def alerts_seen(payload: dict = Body(...)):
         json.dump(sorted(seen), f)
     os.replace(tmp, SEEN_PATH)
     return alerts()
+
+
+# ------------------------------------------------------------------ e-mail drafts to a mill
+def _draft_facts(payload):
+    """The figures a draft may use: only the fabrics asked about, from one mill, with the points the supplier page
+    would raise on them (so they follow the tracker). scope: {type: fabric, key} | {type: rows, keys} | {type: supplier, mill}."""
+    scope = payload.get("scope") or {}
+    rows = costs()["rows"]
+    key_of = lambda r: f"{r['source']}|{r.get('id') or r['code']}"
+    if scope.get("type") == "supplier":
+        mill, want = mill_key(scope.get("mill")), None
+    else:
+        keys = {str(k) for k in ([scope.get("key")] if scope.get("type") == "fabric" else scope.get("keys") or []) if k}
+        picked = [r for r in rows if key_of(r) in keys]
+        if not picked:
+            raise HTTPException(400, "Choose the fabric or fabrics the message is about")
+        mills = {r["mill"] for r in picked}
+        if len(mills) > 1:
+            raise HTTPException(400, "The ticked fabrics are from more than one mill. A message goes to one mill: tick fabrics of one mill.")
+        mill, want = mills.pop(), {(r["source"], r["code"]) for r in picked}
+        if not mill:
+            raise HTTPException(400, "This fabric has no supplier on it, so there is no mill to write to")
+    sp = supplier(mill)
+    items = []
+    for side, qkey, src in (("quoted", "quoted", "Fabric list"), ("bought", "bought", "Purchase orders")):
+        for r in sp[side]["rows"]:
+            if (want is not None and (src, r["code"]) not in want) or r.get("duplicate_of"):
+                continue
+            pts = [q["text"] for q in sp["questions"][qkey] if q["code"] == r["code"]]
+            if not pts or any(i["code"] == r["code"] for i in items):
+                continue
+            high = r["band"] in ("Push", "Ask break-up, above range")
+            target = round(round(r["should"], 2) * (1 + r["range"][1] / 100), 2) if r["band"] == "Push" and r.get("range") else None
+            counter = next((t["counter"] for t in sp["tracker"]["items"] if t["code"] == r["code"] and t["status"] != "Agreed"), None) if src == "Fabric list" else None
+            if counter is not None:         # a counter already made is the price to name: never a higher one
+                target = counter if target is None else min(target, counter)
+            items.append({"code": r["code"], "description": r.get("description") or "", "quantity": _inr(r["metres"], 0) if r.get("metres") else None,
+                          "price": None if r.get("price") is None else round(r["price"], 2), "already_bought": src == "Purchase orders",
+                          "target": target, "our_counter": counter, "high": high, "points": pts})
+    if want is None:        # a whole mill: the quotes in hand first, then at most three past purchases
+        items = [i for i in items if not i["already_bought"]] + [i for i in items if i["already_bought"]][:3]
+    if not items:
+        raise HTTPException(400, "There is nothing to ask this mill about " + ("these fabrics" if want else "right now")
+                            + ": a fabric in its usual range, already agreed, or that the tool has no point to raise on, needs no message.")
+    ask = payload.get("ask") if payload.get("ask") in draft.ASKS else "both"
+    clip = lambda v, d: (str(v or "").strip()[:60] or d)
+    return {"writer": clip(payload.get("writer"), "[Your name]"), "contact": clip(payload.get("contact"), "[Name]"), "mill": sp["name"],
+            "ask": ask, "wants": draft.ASKS[ask], "items": items[:12], "left_out": max(0, len(items) - 12)}
+
+
+@app.post("/api/draft")
+def draft_message(payload: dict = Body(...)):
+    """A fresh e-mail and WhatsApp draft to one mill, on the fabrics asked about. Editable, copied by the buyer, never sent."""
+    facts = _draft_facts(payload)
+    out = draft.write(facts)
+    return dict(out, mill=facts["mill"], fabrics=[i["code"] for i in facts["items"]], left_out=facts["left_out"], key_set=draft.available())
 
 
 @app.post("/api/list/download")

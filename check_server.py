@@ -408,6 +408,48 @@ def main():
               any(x["code"] == "S-2" and x["quote"] == 205 and x["own_gap"] == 20 for x in sp2["sums"]), str(sp2["sums"]))
         check("Supplier page: an unknown mill is refused", c.get("/api/supplier", params={"mill": "No Such Mill"}).status_code == 404)
         check("Suppliers: one line a mill", any(x["key"] == mill for x in c.get("/api/suppliers").json()["suppliers"]))
+        # drafts to a mill: only the fabrics asked about, and always something to edit
+        import draft
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        k_d2 = k_s2["key"]
+        d0 = c.post("/api/draft", json={"scope": {"type": "fabric", "key": k_d2}, "ask": "price", "writer": "GP", "contact": "Mr Shah"}).json()
+        check("Draft: with no API key a fixed template is filled from the fabric's own figures, and says so",
+              d0["source"] == "template" and "no Claude API key" in d0["note"] and d0["fabrics"] == ["S-2"] and "205.00" in d0["email"]
+              and "Mr Shah" in d0["email"] and "GP" in d0["email"] and "S-1" not in d0["email"] and "a revised price" in d0["subject"], str(d0)[:400])
+        check("Draft: a fabric already agreed needs no message", c.post("/api/draft", json={"scope": {"type": "fabric", "key": k_s1["key"]}}).status_code == 400)
+        other = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r["mill"] != mill)
+        check("Draft: fabrics of two mills are refused", c.post("/api/draft", json={"scope": {"type": "rows", "keys": [k_d2, "Purchase orders|" + other["code"]]}}).status_code == 400)
+        facts = server._draft_facts({"scope": {"type": "fabric", "key": k_d2}, "ask": "breakup"})
+        check("Draft: what goes to the API is this fabric's figures and nothing else",
+              [i["code"] for i in facts["items"]] == ["S-2"] and set(facts) == {"writer", "contact", "mill", "ask", "wants", "items", "left_out"}
+              and facts["writer"] == "[Your name]" and facts["items"][0]["price"] == 205 and facts["items"][0]["target"] == 180)
+        check("Draft: with a counter recorded, the price named is the counter, never the higher figure",
+              "our counter is Rs 180.00" in d0["email"].split("YOUR NOTES")[0] and f"{upper:.2f}" not in d0["email"].split("YOUR NOTES")[0] and f"{upper:.2f}" not in d0["whatsapp"])
+
+        class _Block:
+            type = "text"
+            def __init__(self, t): self.text = t
+        class _Res:
+            def __init__(self, t, stop="end_turn"): self.content, self.stop_reason = [_Block(t)], stop
+        class _Fake:           # stands in for the SDK client, to check what is sent and how a reply is read
+            def __init__(self, res): self.res, self.sent = res, None; self.beta = self; self.messages = self
+            def create(self, **kw):
+                self.sent = kw
+                if isinstance(self.res, Exception): raise self.res
+                return self.res
+        fk = _Fake(_Res("SUBJECT: S-2 price\nEMAIL:\nDear [Name],\nPlease revise.\nGP\nWHATSAPP:\nPlease revise S-2. GP"))
+        d1 = draft.write(facts, client=fk)
+        check("Draft: the request names the model, low effort and the default fallback, and sends only the facts",
+              fk.sent["model"] == "claude-opus-5-5" and fk.sent["output_config"] == {"effort": "low"} and fk.sent["fallbacks"] == "default"
+              and fk.sent["betas"] == ["server-side-fallback-2026-07-01"] and "thinking" not in fk.sent and "S-2" in fk.sent["messages"][0]["content"]
+              and "S-1" not in fk.sent["messages"][0]["content"] and "Rate_Master" not in fk.sent["messages"][0]["content"])
+        check("Draft: a reply in the layout is read into subject, e-mail and WhatsApp", d1["source"] == "claude" and d1["subject"] == "S-2 price" and d1["email"].endswith("GP") and d1["whatsapp"].startswith("Please revise"))
+        d2 = draft.write(facts, client=_Fake(_Res("", stop="refusal")))
+        d3 = draft.write(facts, client=_Fake(_Res("Here is your email!")))
+        d4 = draft.write(facts, client=_Fake(RuntimeError("network down")))
+        check("Draft: a refusal, a reply out of layout or a failed call each fall back to the template and say why",
+              all(d["source"] == "template" and "205.00" in d["email"] for d in (d2, d3, d4)) and "declined" in d2["note"] and "could not be written" in d3["note"] and "network down" in d4["note"])
+
         c.post("/api/list/remove", json={"ids": [r["id"] for r in s_rows]})
         # quote alerts: flagged at once when a sheet is uploaded
         hi = dict(base_row, **{"Price": 240, "Ex mill price": 240, "Total price with qnty disc/upcharge": 240, "Total order qnty": 5000})

@@ -374,3 +374,12 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
 .rail .item .badge { position: absolute; top: 2px; right: 6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #E5484D; color: #fff; font-size: 10.5px; font-weight: 800; line-height: 18px; text-align: center; }
 .chip.alertchip { background: #E5484D22; border: 1px solid #E5484D66; font-weight: 700; cursor: pointer; color: var(--text); font: inherit; font-weight: 700; }
 .brief.flagged { border-left: 4px solid #E5484D; margin-bottom: 12px; } .brief.flagged ul { margin: 0 0 8px; }
+
+/* ---------- draft to the mill */
+.dialog.wide { width: min(760px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow-y: auto; }
+.draftform { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 10px; }
+.draftform select, .draftform input { height: 36px; border: 1px solid var(--border); border-radius: 10px; padding: 0 10px; background: var(--panel2); color: var(--text); flex: 1 1 170px; min-width: 0; }
+.draftout label { display: block; font-size: 12px; font-weight: 700; color: var(--text2); margin-top: 10px; }
+.draftout input, .draftout textarea { display: block; width: 100%; margin-top: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel2); color: var(--text); font: inherit; font-weight: 400; line-height: 1.45; }
+.draftout .acts2 { display: flex; gap: 8px; margin-top: 6px; }
+.draftnote { font-size: 12.5px; margin: 0 0 6px; } .draftnote.warn { padding: 8px 12px; border-radius: 10px; background: #F5C54233; font-weight: 600; }

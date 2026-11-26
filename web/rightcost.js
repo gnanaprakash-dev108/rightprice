@@ -550,7 +550,7 @@ function renderSupplier(main) {
     : (t.reopened !== null ? "Open again: " : "Open: ") + (t.latest !== null ? `mill at Rs ${n2(t.latest)}` : "no mill quote yet") + (t.counter !== null ? `, our counter Rs ${n2(t.counter)}` : ""));
   fill(main, crumbs,
     h("div", { class: "dhead" }, h("div", {}, h("div", { class: "small" }, "Supplier" + (d.names.length > 1 ? " \u00B7 also written " + d.names.slice(1).join(", ") : "")), h("h1", {}, d.name), h("div", { class: "muted" }, `As of ${d.today}, on that day's rates.`)),
-      h("div", { class: "dicons noprint" }, ib("pdf", "Print this page", () => print()), ib("pin", "Show this mill's fabrics in the list", () => { state.filters.mill = [d.key]; state.cls = "*"; store.set("cls", "*"); state.tab = "items"; location.hash = "#rightcost"; }))),
+      h("div", { class: "dicons noprint" }, h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "supplier", mill: d.key }, d.name) }, "Draft a message to the mill"), ib("pdf", "Print this page", () => print()), ib("pin", "Show this mill's fabrics in the list", () => { state.filters.mill = [d.key]; state.cls = "*"; store.set("cls", "*"); state.tab = "items"; location.hash = "#rightcost"; }))),
     !d.ready ? h("p", { class: "muted" }, "The verdicts on the purchase orders are still being worked out; this page fills in when they are ready (about 20 seconds).") : null,
     h("div", { class: "stiles" },
       tile("Bought (purchase orders)", `${n0(B.fabrics)} ${B.fabrics === 1 ? "fabric" : "fabrics"}`, B.fabrics ? `${n0(B.metres)} m · Rs ${n0(B.value)} paid` : "none on record"),
@@ -591,6 +591,7 @@ function renderSelbar() {
         { label: "Download selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
         { label: picked.length === 1 ? "Open in Create cost" : "Open in Create cost (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
         { label: "Negotiation pack for the ticked rows", run: () => moreAction("Negotiation pack", picked) },
+        { label: "Draft a message to the mill on the ticked rows", run: () => draftDialog({ type: "rows", keys: picked.map(keyOf) }, [...new Set(picked.map(r => r.supplier).filter(Boolean))][0] || "the mill") },
         { label: "Mark quote alerts seen (for everyone)", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Yes").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has a quote alert to look at", false); markSeen(ids); } },
         { label: "Bring back quote alerts marked seen", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Seen").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has an alert marked seen", false); markSeen(ids, true); } },
       ], { right: true }))] : null);
@@ -699,7 +700,8 @@ async function negotiationTab(r, box) {
       h("ul", {}, h("li", {}, `Usual range for this fabric: Rs ${n2(b.lower)} to Rs ${n2(b.settle_up_to)} (${b.band.why}).`), b.stance === "push" && !done ? h("li", {}, s_ && s_.counter !== null ? `You have countered at Rs ${n2(s_.counter)}` + (s_.counter <= b.settle_up_to ? `: do not open above it. Aim for Rs ${n2(s_.counter)} to Rs ${n2(b.settle_up_to)}, the top of the usual range.` : `, which is above the top of the usual range (Rs ${n2(b.settle_up_to)}).`) : `Open at Rs ${n2(b.open_at)}; aim for Rs ${n2(b.settle_up_to)}.`) : null,
         b.weak.length ? h("li", {}, "Why no target: " + b.weak.join("; ") + ".") : null, (b.caveats || []).map(c => h("li", {}, c)),
         b.at_stake !== null && b.quantity ? h("li", {}, `On ${n0(b.quantity)} m that is Rs ${n0(Math.abs(b.at_stake))} ${b.gap >= 0 ? "above" : "below"} should-cost.`) : null),
-      h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, tracked !== null && r.price && Math.abs(tracked - r.price) >= 0.005 ? "Open in Create cost (on the row's own price)" : "Full brief in Create cost"));
+      h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, tracked !== null && r.price && Math.abs(tracked - r.price) >= 0.005 ? "Open in Create cost (on the row's own price)" : "Full brief in Create cost"),
+        r.supplier && !done ? h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "fabric", key: keyOf(r) }, r.supplier) }, "Draft a message to the mill") : null));
   } catch (e) { box.textContent = "Could not work it out: " + e.message; }
 }
 
@@ -784,6 +786,39 @@ function trackerCard(r) {
 }
 /* The steps are shared, so another person (or another tab) may have added one: read them again when the
    Negotiation tab or the list opens and when the window is looked at again. Only a change redraws the page. */
+// ------------------------------------------------------------------ a draft to the mill: e-mail and WhatsApp, edited and copied here, never sent
+/* scope: {type: "fabric", key} | {type: "rows", keys} | {type: "supplier", mill}. Each press of Draft writes a fresh one. */
+function draftDialog(scope, title) {
+  const me = store.get("draftMe", { writer: "", contact: {} }), millId = scope.mill || title;
+  const ask = h("select", { "aria-label": "What to ask for" }, [["both", "The break-up and a revised price"], ["breakup", "The cost break-up"], ["price", "A revised price"]].map(([v, l]) => h("option", { value: v }, l)));
+  const writer = h("input", { type: "text", maxlength: "60", placeholder: "Your name, as you sign", value: me.writer || "", "aria-label": "Your name" });
+  const contact = h("input", { type: "text", maxlength: "60", placeholder: "Who it goes to at the mill", value: (me.contact || {})[millId] || "", "aria-label": "Contact at the mill" });
+  const out = h("div", { class: "draftout" }), go = h("button", { type: "button", class: "btn fill" }, "Write the draft");
+  const copy = (el, what) => h("button", { type: "button", class: "btn line", onclick: async () => { try { await navigator.clipboard.writeText(el.value); toast(what + " copied"); } catch (e) { el.select(); document.execCommand("copy"); toast(what + " copied"); } } }, "Copy " + what.toLowerCase());
+  const run = async () => {
+    store.set("draftMe", { writer: writer.value, contact: Object.assign({}, me.contact, { [millId]: contact.value }) });
+    go.disabled = true; go.textContent = "Writing…"; fill(out, h("p", { class: "muted" }, "Writing a fresh draft: this can take up to half a minute."));
+    try {
+      const res = await fetch("/api/draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope, ask: ask.value, writer: writer.value, contact: contact.value }) });
+      const d = await res.json(); if (!res.ok) throw new Error(d.detail || res.statusText);
+      const subj = h("input", { type: "text", value: d.subject, "aria-label": "Subject" }), mail = h("textarea", { rows: "13", "aria-label": "E-mail" }), wa = h("textarea", { rows: "4", "aria-label": "WhatsApp message" });
+      mail.value = d.email; wa.value = d.whatsapp;
+      fill(out, h("p", { class: "draftnote" + (d.source === "claude" ? "" : " warn") }, d.note),
+        h("p", { class: "muted" }, `To ${d.mill}, about ${d.fabrics.join(", ")}` + (d.left_out ? ` (${d.left_out} more fabrics were left out: a message stays readable with at most 12; draft the rest separately).` : ".")),
+        h("label", {}, "Subject", subj), h("label", {}, "E-mail (edit it here before copying)", mail), h("div", { class: "acts2" }, copy(mail, "E-mail"), copy(subj, "Subject")),
+        h("label", {}, "WhatsApp", wa), h("div", { class: "acts2" }, copy(wa, "WhatsApp")));
+      go.textContent = "Write another (a fresh draft)";
+    } catch (e) { fill(out, h("p", { class: "draftnote warn" }, e.message)); go.textContent = "Write the draft"; }
+    go.disabled = false;
+  };
+  go.addEventListener("click", run);
+  const s = dialog("Draft a message to " + title, h("div", { class: "draftbox" },
+    h("p", { class: "muted" }, "An e-mail and a WhatsApp-length message asking the mill for the break-up or a better price, with this fabric's figures. You edit and copy it; RightPrice sends nothing. Only these fabrics' figures are used."),
+    h("div", { class: "draftform" }, ask, writer, contact, go), out),
+    [h("button", { type: "button", class: "btn", onclick: () => s.remove() }, "Close")]);
+  s.querySelector(".dialog").classList.add("wide");
+}
+
 // ------------------------------------------------------------------ quote alerts: the count on the rail, the column and the filter
 function showAlerts() { state.cls = "Fabric list"; store.set("cls", state.cls); state.filters = { has_alert: ["Yes"] }; state.saved = "Default"; state.tab = "items"; state.search.active = null; state.search.text = ""; if (decodeURIComponent(location.hash.slice(1)).split("?")[0] !== "rightcost") location.hash = "#rightcost"; else rerunWithSkeleton(); }
 function paintBadge() {
@@ -1053,6 +1088,7 @@ addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data) return;
   if (e.data.rp === "listChanged") { load(); loadAlerts(); }
   if (e.data.rp === "alertsChanged") loadAlerts();
+  if (e.data.rp === "draft" && Array.isArray(e.data.ids) && e.data.ids.length) draftDialog({ type: "rows", keys: e.data.ids.map(i => "Fabric list|" + i) }, e.data.mill || "the mill");
   if (e.data.rp === "showAlerts" && e.source === (($("#main iframe.frame") || {}).contentWindow)) showAlerts();
   if (e.data.rp === "go" && /^(supplier|item)\/[^?]+$/.test(e.data.hash || "") && e.source === (($("#main iframe.frame") || {}).contentWindow)) location.hash = "#" + e.data.hash;
   if (e.data.rp === "close") { const pop = document.querySelector(".scrim[data-popup]"); if (pop) pop.close(); }
