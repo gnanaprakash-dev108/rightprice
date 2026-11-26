@@ -340,7 +340,9 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
 .gridscroll.sup td.loss { color: #C0362C; }
 :root[data-theme="dark"] .gridscroll.sup td.loss { color: #F28B82; }
 .gridscroll.sup .pill { max-width: none; overflow: visible; } .gridscroll.sup .pill .pt { white-space: normal; overflow: visible; }
-.gridscroll.sup td .muted { font-size: 11px; }
+.gridscroll.sup td .muted { font-size: 11px; white-space: nowrap; }
+.gridscroll.sup table.grid { table-layout: auto; } .gridscroll.sup table.grid th { white-space: normal; overflow: visible; text-overflow: clip; } .gridscroll.sup table.grid td { overflow: visible; text-overflow: clip; }
+.stile.amber .sb { color: #9A6B00; } :root[data-theme="dark"] .stile.amber .sb { color: #F5C542; }
 .swipe { display: none; margin: 0 0 4px; }
 .printonly { display: none; }
 @media (max-width: 900px) {

@@ -51,6 +51,29 @@ list view (cards show it); the Log timestamps are in the browser's format.
 - `python check_engine.py` and `python check_server.py` both print ALL OK; Qlty-1 = Rs 181.40.
 - GP confirmed the live site by eye after pull request 15 ("looking fine"). **Not confirmed by eye since.**
 
+### Supplier page (26 Nov, pull request 18)
+
+`#supplier/<mill>`, from Right cost's Suppliers tab and the mill names on the Dashboard; printable. One mill for
+the meeting with it: every fabric bought and quoted with its verdict; the money above the top of the usual range
+(Push rows only; "looks high but the tool is unsure", below-range and check-quote money each shown apart, never
+netted); the mill's sheets' sums that are off; where each tracked negotiation stands; and one question list
+(`/api/supplier`, `/api/suppliers` in `server.py`).
+
+- A quoted fabric with a mill price in the tracker is judged on that price: an agreed one is closed and counted
+  apart; an open one is asked about at the price the mill is at now, and with a counter recorded the question
+  is "hold our counter", never a higher figure.
+- Purchase questions: the five cloths (same price and should-cost, whatever the code) with the most money above
+  the range. They are paid; the page says so and that the rates are today's.
+- Mill identity (`mill_key`, `_learn_mill_names`): Ltd, Limited, Mills, Pvt and a final s are dropped; a
+  purchase-order name cut at 24 characters joins the one fuller name it is the start of.
+- Two cold reviews. The second confirmed 7 of 10 fixes and found more; the money ones were fixed after it and
+  checked by `check_server.py` and through the API by the build session, not by a third reviewer.
+
+Left as they are: a tracker kept on a purchase-order fabric shows as "won" while the Bought table still shows the
+price paid; misspelt or abbreviated mill names stay apart ("Jain Cord Industires", "Reliance Inds"); the list's
+verdict for a fabric is on its row price, the supplier page's on the tracker's price; the first load of a
+supplier page waits about 20 seconds for the purchase-order verdicts after a server start.
+
 ### Rules (unchanged; all nine hold)
 
 1. Work on a branch (`claude/sleepy-dirac-dknzrp`) and open a pull request. Never push to `main`:
@@ -71,14 +94,14 @@ list view (cards show it); the Log timestamps are in the browser's format.
    are his (use the select-an-option question form; GP prefers that). The build session cannot sign in
    to the live site: ask GP to confirm by eye.
 
-### What GP asked for on 26 Nov: five builds, one by one (1 is done)
+### What GP asked for on 26 Nov: five builds, one by one (1 and 2 are done)
 
 1. **Negotiation tracker** (pull request 17, done). On each fabric's Negotiation tab in Right
    cost: record the mill's quote, our counter, revised quotes and the agreed price (date, note); what
    was won against the first quote and against should-cost; Negotiation column and filter in Right
    cost; "Won in negotiation" panel by mill on the Dashboard. Stored in `negotiations.json` beside the
    rate master. Endpoints `/api/negotiations*`.
-2. **Supplier page.** One page per mill: every fabric bought (purchase orders) and quoted (fabric list),
+2. **Supplier page** (pull request 18, done). One page per mill: every fabric bought (purchase orders) and quoted (fabric list),
    its verdict (Push / Fair / Below / Ask break-up), money above should-cost, mill sums that were off,
    tracker status and money won, and a combined question list for the next meeting with that mill
    (reuse the pack's question logic in `server.py` `_questions`). Reach it from Right cost's Suppliers

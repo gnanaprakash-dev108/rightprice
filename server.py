@@ -1334,7 +1334,13 @@ def _mill_names(rows):
     for r in rows:
         if r["supplier"]:
             n[r["supplier"]] = n.get(r["supplier"], 0) + 1
-    return [k for k, _ in sorted(n.items(), key=lambda kv: (-kv[1], -len(kv[0])))]
+    names = [k for k, _ in sorted(n.items(), key=lambda kv: (-kv[1], -len(kv[0])))]
+    if names and len(names[0]) >= 23 and not re.search(r"(ltd|limited)\.?$", names[0].lower()):      # cut at 24 characters in the purchase orders
+        fuller = [x for x in names if len(x) > len(names[0])] or [x for x in names if re.search(r"(ltd|limited)\.?$", x.lower())]
+        if fuller:
+            names.remove(fuller[0])
+            names.insert(0, fuller[0])
+    return names
 
 
 @app.get("/api/suppliers")
@@ -1369,6 +1375,16 @@ def _above_range(r):
     return max(0.0, round(round(r["price"], 2) - upper, 2)) * r["metres"]
 
 
+def _hold_counter(questions, ng, b, code):
+    """A counter already made is the figure to hold: never ask for more than it."""
+    c = ng.get("counter") if ng else None
+    if c is None or b["stance"] != "push" or c >= b["settle_up_to"]:
+        return questions
+    first = (f"{code}: hold our counter of Rs {_inr(c)}. The mill's Rs {_inr(b['quote'])} is still Rs {_inr(b['above_band'])} a metre above the top of "
+             f"the usual range (Rs {_inr(b['settle_up_to'])}): what explains the difference? Do not go above Rs {_inr(b['settle_up_to'])}.")
+    return [first] + list(questions[1:])
+
+
 def _side(rows):
     """The figures of one side of the page (bought, or quoted): verdict counts and the money, each kind apart and
     never netted. A fabric agreed in the tracker is closed: it is counted apart, not as money to push on."""
@@ -1389,6 +1405,7 @@ def _side(rows):
             "unsure_high": cnt.get("Ask break-up, above range", 0), "unsure_high_excess": ex(("Ask break-up, above range",), 1),
             "unsure_other": cnt.get("Ask break-up", 0), "check_excess": ex(("Check quote",)),
             "agreed": len(closed), "agreed_above_range": round(sum(r["above_range"] for r in closed)),
+            "agreed_unsure": sum(1 for r in closed if str(r["band"]).startswith("Ask break-up")),
             "moved": sum(1 for r in live if r.get("tracked") == "Open"),
             "no_metres": sum(1 for r in live if r.get("price") and not r.get("metres"))}
 
@@ -1454,14 +1471,20 @@ def supplier(mill: str):
                     lead = f"{r['code']}: the mill is now at Rs {_inr(b['quote'])}" + (
                         f", up from its first quote of Rs {_inr(first)}" if first is not None and b["quote"] > first + 0.005 else
                         f", down from its first quote of Rs {_inr(first)}" if first is not None and b["quote"] < first - 0.005 else "") + (
+                        f" (its sheet said Rs {_inr(row['sheet_price'])})" if row.get("sheet_price") else "") + (
                         f"; our counter is Rs {_inr(ng['counter'])}" if ng["counter"] is not None else "") + ". "
                     q_row = {"code": r["code"], "stance": "check" if b["implausible"] else b["stance"], "quote": b["quote"], "should": b["should"],
                              "gap": b["gap"], "gap_pct": b["gap_pct"], "upper": b["settle_up_to"], "above_band": b["above_band"], "sums": [],
                              "own_gap": None, "own_price": None, "quantity": row["metres"], "mill": {}, "from_mill": False, "inputs": row["choices"], "notes": []}
                     qs_ = _questions(q_row, b, m) if b["stance"] != "fair" else [f"{r['code']} is now inside its usual range (up to Rs {_inr(b['settle_up_to'])}): close it" + (f" at or near our counter of Rs {_inr(ng['counter'])}." if ng["counter"] is not None else ".")]
-                    quoted_q += [{"code": r["code"], "text": (lead if n == 0 else "") + q} for n, q in enumerate(qs_)]
+                    quoted_q += [{"code": r["code"], "text": (lead if n == 0 else "") + q} for n, q in enumerate(x.replace(f"{r['code']}: hold our", "Hold our") for x in _hold_counter(qs_, ng, b, r["code"]))]
+                    if r["own_price"] is not None and b["quote"] - r["own_price"] >= 0.01:      # its own build-up is below what it now asks
+                        gap_ = round(b["quote"] - r["own_price"], 2)
+                        sums.append({"code": r["code"], "sums": [f"its sheet priced it at Rs {_inr(r['quote'])}; it now asks Rs {_inr(b['quote'])}"], "quote": b["quote"],
+                                     "own_price": r["own_price"], "own_gap": gap_, "own_at_stake": round(gap_ * row["metres"]) if row.get("metres") else None})
+                    continue
                 else:
-                    quoted_q += [{"code": r["code"], "text": q} for q in r["questions"]]
+                    quoted_q += [{"code": r["code"], "text": q} for q in (_hold_counter(r["questions"], ng, {"stance": r["stance"], "settle_up_to": r["upper"], "quote": r["quote"], "above_band": r["above_band"]}, r["code"]) if ng else r["questions"])]
                 if r["sums"]:
                     sums.append({"code": r["code"], "sums": r["sums"], "quote": r["quote"], "own_price": r["own_price"],
                                  "own_gap": r["own_gap"], "own_at_stake": r["own_at_stake"]})
@@ -1482,9 +1505,13 @@ def supplier(mill: str):
     quoted_q = [{"code": q["code"], "text": q["text"] + (f" (The same holds for {', '.join(dict.fromkeys(q['also']))}.)" if q["also"] else "")} for q in merged]
 
     # the purchases to ask about: the largest sums paid above the usual range, with what would have to be true
-    bought_q, same = [], {}
-    for r in sorted([r for r in po if r["above_range"] > 0], key=lambda r: -r["above_range"]):
-        if len(bought_q) >= PO_QUESTIONS and (r["price"], round(r["should"], 2)) not in same:
+    bought_q, same, cloth = [], {}, {}
+    for r in po:
+        if r["above_range"] > 0:
+            cloth[(r["price"], round(r["should"], 2))] = cloth.get((r["price"], round(r["should"], 2)), 0) + r["above_range"]
+    asked = set(sorted(cloth, key=lambda k: -cloth[k])[:PO_QUESTIONS])       # the same cloth at the same price under several codes is one question
+    for r in sorted([r for r in po if r["above_range"] > 0], key=lambda r: (-cloth[(r["price"], round(r["should"], 2))], -r["above_range"])):
+        if (r["price"], round(r["should"], 2)) not in asked:
             break
         try:
             res = masters.cost(r["choices"], m)
@@ -1548,9 +1575,9 @@ def supplier(mill: str):
                 t = f"{(r.get('route') or '').lower()} {(r.get('weave_group') or '').lower()}".strip() or "other"
                 types[t] = types.get(t, 0) + 1
         top = sorted(types.items(), key=lambda kv: -kv[1])[:3]
-        general.append(f"Please fill one cost sheet for each of these kinds of cloth: {', '.join(t for t, _ in top)}. "
+        general.append(f"Please fill one cost sheet for each of these kinds of cloth: {', '.join(t for t, _ in top)}{' (and the others we buy from you, if you can)' if len(types) > 3 else ''}. "
                        "It should show the yarn, wastage, weaving per pick, dyeing, finish, overhead and margin.")
-        hint = (f"The tool cannot judge {unsure} of this mill's fabrics yet ({', '.join(f'{t}: {n}' for t, n in top)}). "
+        hint = (f"The tool cannot judge {unsure} of this mill's fabrics yet ({', '.join(f'{t}: {n}' for t, n in top)}{', and others' if len(types) > 3 else ''}). "
                 "The cost sheet template is on Prices > Mill cost sheets; a filled sheet from the mill firms up the rates.")
     for t in track:
         if t["status"] != "Agreed":
