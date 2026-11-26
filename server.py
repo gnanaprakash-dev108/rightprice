@@ -290,7 +290,7 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         band_why = "5% either side of should-cost" + ("" if ins and ins[1] else " (there is no purchase history on this server to set it from)")
     else:
         fit = (f"half of the {cat['fabrics']} {typ} fabrics you bought were priced between {cat['p25']:+.1f}% and "
-               f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)").replace("-", "\u2212")
+               f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)").replace("-", "\u2212").replace("should\u2212cost", "should-cost")
         adjusted = (lo, hi) != (cat["p25"], cat["p75"])
         band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%".replace("-", "\u2212") if adjusted else "")
 
@@ -1111,11 +1111,12 @@ def _day(iso):
 
 
 def _nego_order(events):
-    """By date; on one day the agreed price comes last (a quote entered after it the same day came before it)."""
-    return sorted(events, key=lambda e: (e["date"], e["kind"] == "Agreed", e.get("at", "")))
+    """By date; on one day the mill's (first) quote comes first and the agreed price last, whatever order they were typed in."""
+    rank = {"Mill's quote": 0, "Agreed": 2}
+    return sorted(events, key=lambda e: (e["date"], rank.get(e["kind"], 1), e.get("at", "")))
 
 
-FAR = 3.0           # a price more than 3 times, or under a third of, what it is compared with is queried
+FAR = 2.0           # a price more than twice, or under half of, what it is compared with is flagged
 
 
 def nego_summary(rec):
@@ -1130,7 +1131,7 @@ def nego_summary(rec):
     first = quotes[0]["price"] if quotes else None
     latest_q = quotes[-1]["price"] if quotes else None
     metres = rec.get("metres") or 0
-    should = rec.get("should")
+    should = rec.get("should") or rec.get("row_price")          # a fabric not costed is checked against the price on its row
     counter = next((e["price"] for e in reversed(ev) if e["kind"] == "Our counter"), None)
     out = {"status": "Agreed" if agreed else ("Open" if ev else "Not tracked"), "first": first, "latest": latest_q,
            "agreed": agreed["price"] if agreed else None, "counter": counter,
@@ -1139,7 +1140,7 @@ def nego_summary(rec):
     ref = out["agreed"] if agreed else latest_q
     out["won_per_m"] = None if first is None or ref is None else round(first - ref, 2)
     out["won"] = None if out["won_per_m"] is None or not metres else round(out["won_per_m"] * metres)
-    out["above_should_per_m"] = None if ref is None or should is None else round(ref - should, 2)
+    out["above_should_per_m"] = None if ref is None or rec.get("should") is None else round(ref - rec["should"], 2)
     warn = []
     far = lambda a, b: bool(a and b) and (a > FAR * b or a < b / FAR)
     said = lambda e: f"Rs {_inr(e['price'])} ({e['kind']}, {_day(e['date'])})"
@@ -1147,16 +1148,21 @@ def nego_summary(rec):
         warn.append(f"The agreed price is dated {_day(last_agreed['date'])}, before the mill's first quote ({_day(quotes[0]['date'])}). Check the dates.")
     first_off = bool(quotes) and far(first, should)
     if first_off:
-        warn.append(f"The mill's first quote, {said(quotes[0])}, is far from the should-cost of Rs {_inr(should)}. "
+        warn.append(f"The mill's first quote, {said(quotes[0])}, is far from {'the should-cost' if rec.get('should') else 'the price on the row'} of Rs {_inr(should)}. "
                     "Check it is per metre and typed right: what was won is measured from it.")
     for e in ev:
         if quotes and e is quotes[0]:
             continue
-        base, name = (should, "the should-cost") if first_off or first is None else (first, "the first quote")
+        base, name = (should, "the should-cost" if rec.get("should") else "the price on the row") if first_off or first is None else (first, "the first quote")
         if far(e["price"], base):
             warn.append(f"{said(e)} is far from {name} of Rs {_inr(base)}. Check it is per metre and typed right.")
-    if not agreed and counter is not None and latest_q is not None and ev[-1]["kind"] == "Our counter" and counter > latest_q:
-        warn.append(f"Our counter of Rs {_inr(counter)} is above the mill's price of Rs {_inr(latest_q)}. Check which is which.")
+    standing = None             # a counter above the mill's price at the time stays flagged, whatever came after
+    for e in ev:
+        if e["kind"] in ("Mill's quote", "Mill's revised quote"):
+            standing = e["price"]
+        elif e["kind"] == "Our counter" and standing is not None and e["price"] > standing:
+            warn.append(f"Our counter of Rs {_inr(e['price'])} ({_day(e['date'])}) is above the mill's price then, Rs {_inr(standing)}. "
+                        "Check which is which, and remove and re-enter the wrong step.")
     out["warnings"] = warn
     out["no_quote"] = bool(agreed and first is None)
     out["counted"] = bool(agreed and out["won"] is not None and not warn)
@@ -1211,11 +1217,15 @@ def negotiation_event(payload: dict = Body(...), request: Request = None):
         if dup:
             raise HTTPException(400, f"This row repeats the order of {dup}: record the negotiation on {dup}, so it is counted once")
     d = _negos()
+    seen = payload.get("seen")
+    if seen is not None and int(seen) != len(d.get(key, {}).get("events", [])):
+        raise HTTPException(409, "Someone else has recorded or removed a step on this fabric since this page read it. "
+                                 "The page now shows the steps as they are: check them, then record again if it is still right.")
     rec = d.setdefault(key, {"key": key, "events": []})
     for f in ("code", "supplier", "description", "source"):
         if payload.get(f):
             rec[f] = payload[f]
-    for f in ("metres", "should"):
+    for f in ("metres", "should", "row_price"):
         v = _num_or_none(payload.get(f))
         if v is not None:
             rec[f] = v

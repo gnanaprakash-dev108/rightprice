@@ -341,6 +341,20 @@ def main():
         over = ev(dict(dict(base, key="Fabric list|T-13", code="T-13"), kind="Mill's quote", price=185, date="2026-11-20")).json()
         over = ev(dict(dict(base, key="Fabric list|T-13", code="T-13"), kind="Our counter", price=190, date="2026-11-21")).json()["summary"]
         check("Tracker: a counter above the mill's price is queried", any("above the mill's price" in w for w in over["warnings"]))
+        k13 = dict(base, key="Fabric list|T-13", code="T-13")
+        stale = ev(dict(k13, kind="Agreed", price=180, date="2026-11-22", seen=1))
+        check("Tracker: a page that has not seen the latest step cannot record over it", stale.status_code == 409)
+        still = ev(dict(k13, kind="Agreed", price=180, date="2026-11-22", seen=2)).json()["summary"]
+        check("Tracker: the counter stays flagged after a later step, and the fabric stays out of what was won",
+              any("above the mill's price" in w for w in still["warnings"]) and not still["counted"])
+        k14 = dict(base, key="Fabric list|T-14", code="T-14")
+        ev(dict(k14, kind="Mill's revised quote", price=190, date="2026-11-20"))
+        o14 = ev(dict(k14, kind="Mill's quote", price=200, date="2026-11-20")).json()["summary"]
+        check("Tracker: on one day the mill's quote comes before its revised quote", o14["first"] == 200 and o14["latest"] == 190)
+        half = ev(dict(k14, kind="Agreed", price=95, date="2026-11-21")).json()["summary"]
+        check("Tracker: an agreed price under half the first quote is flagged and not counted", half["warnings"] and not half["counted"])
+        nc = ev({"key": "Fabric list|T-15", "code": "T-15", "kind": "Mill's quote", "price": 2150, "row_price": 185, "date": "2026-11-20"}).json()["summary"]
+        check("Tracker: a fabric not costed is checked against the price on its row", any("price on the row" in w for w in nc["warnings"]))
         check("Mill names: Ltd, Limited, Mills and a cut-off Limited are dropped",
               server.mill_key("Rajapalayam Mills Limite") == server.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and server.mill_key("Arvind") == server.mill_key("Arvind Limited"))
         check("Rupees in Indian grouping", server._inr(99999999) == "9,99,99,999.00" and server._inr(1234.5) == "1,234.50")

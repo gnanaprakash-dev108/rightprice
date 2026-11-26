@@ -18,47 +18,38 @@ helps a fabric buyer walk into a meeting with a mill better prepared. The owner 
   - 14: should-cost pinned beside the fabric code on a phone.
   - 15: **one shell for every screen, in RightPrice's own look** (see Architecture below).
   - 16: mill cost sheets (Prices > Mill cost sheets; drafts GP applies).
-- **In flight: pull request 17, the negotiation tracker**, branch `claude/sleepy-dirac-dknzrp`. Built,
-  checks ALL OK, pushed. Its first cold review reported on 26 Nov; **none of its findings is fixed
-  yet** (list below). Next session: fix them, have a fresh reviewer confirm, merge when the "checks"
-  job passes, confirm the deploy.
+- **Pull request 17, the negotiation tracker: reviewed and merged (26 Nov, second session).** The ten findings of
+  its first cold review were fixed, a fresh cold review found 18 more (three on money), a second reviewer
+  confirmed 13 of the fixes and found 15 further points; those were fixed too and checked by `check_server.py`
+  and by the build session in the browser, not by a third reviewer.
 
-### Tracker cold review, 26 Nov (findings in, NOT yet fixed), most serious first
+### Negotiation tracker: how it behaves now
 
-1. The "first quote" is the earliest-dated mill price of any kind, so an Agreed step dated before the
-   quote (a date typo) becomes the first quote and the gain or loss shows as zero; an Agreed price with
-   no quote at all is called "the first quote". Use the first "Mill's quote" (or revised quote) only;
-   warn when an Agreed step is dated before the first quote, or a price is wildly off (for example more
-   than 3 times or under a third of the first quote).
-2. Dashboard: a net loss reads "Rs −29,26,120 below the first quotes" under "Won in negotiation";
-   losses carry no word or colour; the table uses a hyphen. Say "above the first quotes (a loss)" and mark
-   negative rows.
-3. The same mill appears twice ("Arvind" from fabric-list rows, "Arvind Ltd" from purchase orders).
-   Group by a normalised mill name (drop Ltd, Limited, Mills, Pvt, punctuation; case).
-4. The Negotiation tab shows two should-costs: the brief above uses today's rates, the tracker uses the
-   pilot figure stored on the row (F524VXSH3914: 213.47 against 208.22). Use the brief's figure for both.
-5. Stale pages: the list and the tab refresh only on a full reload, though steps are shared. Reload the
-   negotiations when the Negotiation tab opens and when returning to the list.
-6. A counter with no mill quote shows "the mill is at Rs ," and the list column calls our counter the
-   mill's price.
-7. The rupee figure in brackets has no direction ("Rs 73,140 on 4,876 m" when the price went up); a
-   single quote shows "down Rs 0.00".
-8. Phone: the step table's Remove buttons are cut off; the Dashboard panel's table needs a sideways
-   scroll; cards show no negotiation state.
-9. The browser-only Status column can say "Not started" beside "Agreed"; the Log tab ignores tracker
-   steps. Consider dropping Status in favour of the tracker, or setting it from the tracker.
-10. Smaller: a refused entry also logs a 400 in the console; after Agreed the step type stays on
-    Agreed; a revised quote dated after the agreement still reads "Agreed at".
+- The **first quote** is the mill's first "Mill's quote" or revised quote, never our counter or the agreed price.
+  Steps run by date; on one day the mill's quote comes first and the agreed price last. A step after an
+  agreement opens it again ("Open again").
+- **Not counted as won**: open negotiations; an agreed price with no mill quote, or no metres; a fabric with a
+  step to check (a price more than twice or under half the should-cost or the first quote, `FAR` in `server.py`;
+  a counter above the mill's price; an agreed price dated before the first quote); a list row that repeats
+  another order (its tracker sends the buyer to the other row). The Dashboard names the fabrics to check.
+- Entry: prices outside Rs 1 to 50,000 and dates in the future or more than two years back are refused; a
+  price more than 1.5 times or under two thirds of the should-cost, or a quarter away from the first quote, is
+  asked about once ("press Record again"). A page that has not seen the latest step cannot record over it (409).
+- A mill written two ways is one mill (`mill_key`). Losses inside a net gain are shown apart.
+- The brief on the Negotiation tab follows the tracker's price (agreed, or the mill's latest) and says so; with
+  a counter recorded it says "do not open above it". Removed steps are kept for the Log tab; on Azure each step
+  carries the signed-in person's name.
+- Pages re-read the shared steps every half minute and when the window is looked at again.
+- GP's decision, 26 Nov: the per-browser Status column stays as it is (a personal label), though it can disagree
+  with the tracker.
 
-What the review confirmed: every normal sequence's per-metre and total gain is right (for example
-290 to 255 on 26,584 m = Rs 9,30,440), open negotiations are never counted as won, removal asks and
-recalculates everywhere, the column, sort and filter agree with the tab and Dashboard, a fabric with no
-metres is left out and said so, notes with HTML show as text, dark mode is right.
-
-Test data the reviewer left on its local test server only (not the live site): several tracked fabrics
-and a note containing an HTML string.
+Left as they are (told to GP): the list's "Against range" verdict is on the row's own price, so a fabric agreed
+lower still shows Push there (the Negotiation column beside it shows the agreement); the mirror rule for the
+opening price can give an opening figure only paise below a quote that is just above the range; a plausible
+typo inside the thresholds above is not caught; the Negotiation column needs a sideways scroll in the phone's
+list view (cards show it); the Log timestamps are in the browser's format.
 - `python check_engine.py` and `python check_server.py` both print ALL OK; Qlty-1 = Rs 181.40.
-- GP confirmed the live site by eye after pull request 15 ("looking fine").
+- GP confirmed the live site by eye after pull request 15 ("looking fine"). **Not confirmed by eye since.**
 
 ### Rules (unchanged; all nine hold)
 
@@ -80,9 +71,9 @@ and a note containing an HTML string.
    are his (use the select-an-option question form; GP prefers that). The build session cannot sign in
    to the live site: ask GP to confirm by eye.
 
-### What GP asked for on 26 Nov: five builds, one by one (1 is in flight)
+### What GP asked for on 26 Nov: five builds, one by one (1 is done)
 
-1. **Negotiation tracker** (pull request 17, in flight). On each fabric's Negotiation tab in Right
+1. **Negotiation tracker** (pull request 17, done). On each fabric's Negotiation tab in Right
    cost: record the mill's quote, our counter, revised quotes and the agreed price (date, note); what
    was won against the first quote and against should-cost; Negotiation column and filter in Right
    cost; "Won in negotiation" panel by mill on the Dashboard. Stored in `negotiations.json` beside the
@@ -125,8 +116,8 @@ and a note containing an HTML string.
 4. A current quote for Amsler 24s yarn (yarn-dyed plain is over-costed by about 10%).
 5. A decision on the calibration draft; print method and a mill cost sheet for one print.
 6. Price sheets from mills other than Arvind (add a row to `Mill_Sheet_Terms` for each mill).
-7. For build 4: the Anthropic API key (secure form; app setting on Azure). For build 5: how an
-   assistant should sign in to the live site.
+7. For build 4: the Anthropic API key (secure form; app setting on Azure). For build 5 GP chose, on 26 Nov,
+   **a secret token on the live site** (so `/mcp` must be let through Microsoft sign-in and checked by the app).
 
 ### Decisions GP has made (26 Nov)
 
