@@ -159,9 +159,10 @@ through the sign-in, and is then protected by the token alone: every request mus
   call `/mcp/health`, which reports which code is running.
 
 What the assistant can do: cost a fabric, find costings, read a fabric's brief, a supplier's page, a negotiation
-pack, the quote alerts and a fabric's negotiation steps, and **record a negotiation step** (the one tool that
-changes anything; the step is marked "AI assistant", and the tracker's refusals apply). It cannot change rates,
-upload or remove rows, or mark alerts seen.
+pack, the quote alerts and a fabric's negotiation steps, and **record a negotiation step** (marked "AI assistant"; the tracker's refusals apply, and it must record the
+mill's first quote before a revised quote or an agreement). It can undo a step it recorded itself, but not one a
+person recorded. It cannot change rates, upload or remove rows, or mark alerts seen. Every step it records carries
+the same name, "AI assistant": there is one token, so the tool cannot tell which person was behind it.
 
 ## If the page does not load
 

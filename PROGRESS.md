@@ -144,9 +144,9 @@ of the mill; agreed fabrics show no draft button and do not say why.
 
 ### MCP server (26 Nov, pull request 21)
 
-`mcp_server.py`: nine tools over the same functions the screens use (list_choices, cost_fabric, find_fabrics,
-fabric_brief, supplier_summary, negotiation_pack, tracker_steps, record_tracker_step, quote_alerts). One writes:
-record_tracker_step (marked "AI assistant"; the tracker's refusals apply). Two ways in:
+`mcp_server.py`: ten tools over the same functions the screens use (list_choices, cost_fabric, find_fabrics,
+fabric_brief, supplier_summary, negotiation_pack, tracker_steps, record_tracker_step, remove_my_tracker_step, quote_alerts). Two write:
+record_tracker_step (marked "AI assistant"; the tracker's refusals apply, plus: the first quote must be recorded first, no step twice, no counter on an agreed fabric) and remove_my_tracker_step (only a step the assistant itself recorded). Tools say whether a figure is on the sheet's price or the tracker's; cost_fabric refuses a field it does not know. Two ways in:
 
 - `/mcp` on the web app (`McpGate` in `server.py`): 404 unless the app setting `RIGHTPRICE_MCP_TOKEN` (24
   characters or more) is set; then every request needs `Authorization: Bearer <token>` (401 otherwise).
