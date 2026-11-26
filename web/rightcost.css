@@ -383,3 +383,6 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
 .draftout input, .draftout textarea { display: block; width: 100%; margin-top: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; background: var(--panel2); color: var(--text); font: inherit; font-weight: 400; line-height: 1.45; }
 .draftout .acts2 { display: flex; gap: 8px; margin-top: 6px; }
 .draftnote { font-size: 12.5px; margin: 0 0 6px; } .draftnote.warn { padding: 8px 12px; border-radius: 10px; background: #F5C54233; font-weight: 600; }
+.draftout .mynotes { margin-top: 14px; padding: 10px 12px; border-radius: 10px; border: 1px dashed var(--border); background: var(--panel2); font-size: 12.5px; }
+.draftout .mynotes ul { margin: 0; padding-left: 18px; } .draftout .mynotes li { margin-bottom: 5px; }
+@media (max-width: 900px) { .draftout input, .draftout textarea { font-size: 14px; } }
