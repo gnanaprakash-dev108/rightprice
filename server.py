@@ -921,6 +921,8 @@ def costs():
         if r["metres"] is None:
             q = mill_sheet._num(i["mill"].get("Total order qnty")) if i["mill"] else None
             r["metres"] = q if q and q > 0 else None
+    for r in out:
+        r["mill"] = mill_key(r["supplier"])
     return {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                      "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
 
@@ -1090,7 +1092,10 @@ def mill_key(name):
     """One key for a mill however its name is written: "Arvind", "Arvind Ltd" and "ARVIND LIMITED" are one mill.
     Purchase-order names are cut short ("Rajapalayam Mills Limite"), so a cut-off Limited or Private goes too."""
     words = re.sub(r"[^a-z0-9 ]+", " ", str(name or "").lower()).split()
-    keep = [w for w in words if w not in MILL_WORDS and not (len(w) >= 3 and ("limited".startswith(w) or "private".startswith(w)))]
+    cut = lambda w: len(w) >= 3 and ("limited".startswith(w) or "private".startswith(w))
+    keep = [w for w in words if w not in MILL_WORDS and not cut(w)]
+    if len(keep) > 1 and keep[-1] in ("l", "li", "lt"):          # "Raymond Luxury Cottons L": the name was cut off inside Ltd or Limited
+        keep = keep[:-1]
     return " ".join(keep or words)
 
 
@@ -1290,9 +1295,187 @@ def negotiations_summary():
                 count["no_quantity"] += 1
     for b in by.values():       # shown under the spelling used most, the longer one on a tie
         b["supplier"] = sorted(b.pop("names").items(), key=lambda kv: (-kv[1], -len(kv[0])))[0][0]
+        b["key"] = mill_key(b["supplier"])
     agreed = sum(1 for it in items if it["summary"]["status"] == "Agreed")
     return dict(count, fabrics=len(items), agreed=agreed, open=len(items) - agreed, won=round(total), lost=round(lost), lost_fabrics=lost_n,
                 to_check=check, suppliers=sorted(by.values(), key=lambda b: (-b["won"], b["supplier"])))
+
+
+# ------------------------------------------------------------------ supplier page
+PO_QUESTIONS = 5        # the purchases to ask about: the largest sums paid above the usual range
+
+
+def _mill_names(rows):
+    """One mill's spellings, the one used most first."""
+    n = {}
+    for r in rows:
+        if r["supplier"]:
+            n[r["supplier"]] = n.get(r["supplier"], 0) + 1
+    return [k for k, _ in sorted(n.items(), key=lambda kv: (-kv[1], -len(kv[0])))]
+
+
+@app.get("/api/suppliers")
+def suppliers():
+    """Every mill bought from or quoted by, one line each (a mill written two ways is one mill)."""
+    d = costs()
+    by = {}
+    for r in d["rows"]:
+        k = mill_key(r["supplier"])
+        if not k:
+            continue
+        by.setdefault(k, []).append(r)
+    won = {mill_key(b["supplier"]): b for b in negotiations_summary()["suppliers"]}
+    out = []
+    for k, rows in by.items():
+        po = [r for r in rows if r["source"] == "Purchase orders"]
+        fl = [r for r in rows if r["source"] == "Fabric list" and not r.get("duplicate_of")]
+        t = won.get(k) or {}
+        out.append({"key": k, "name": _mill_names(rows)[0], "bought": len(po), "quoted": len(fl),
+                    "push": sum(1 for r in rows if r["band"] == "Push" and not r.get("duplicate_of")),
+                    "above_range": round(sum(_above_range(r) for r in po + fl)),
+                    "open": t.get("open", 0), "agreed": t.get("agreed", 0), "won": t.get("won", 0)})
+    return {"ready": d["ready"], "suppliers": sorted(out, key=lambda s: (-s["above_range"], -s["bought"] - s["quoted"], s["name"]))}
+
+
+def _above_range(r):
+    """Rupees above the top of the usual range on a Push row (price less the top of the range, times the metres)."""
+    if r["band"] != "Push" or not r.get("range") or not r.get("metres") or r.get("should") is None or r.get("price") is None:
+        return 0.0
+    return max(0.0, r["price"] - round(r["should"] * (1 + r["range"][1] / 100), 2)) * r["metres"]
+
+
+def _side(rows):
+    """The figures of one side of the page (bought, or quoted): verdict counts and the money, each kind apart."""
+    live = [r for r in rows if not r.get("duplicate_of")]
+    cnt = {}
+    for r in live:
+        cnt[r["band"]] = cnt.get(r["band"], 0) + 1
+    ex = lambda bands: round(sum(r["excess"] or 0 for r in live if r["band"] in bands))
+    with_m = [r for r in live if r.get("metres") and r.get("price") and r.get("should") is not None]
+    metres = sum(r["metres"] for r in with_m)
+    return {"fabrics": len(live), "duplicates": len(rows) - len(live), "counts": cnt, "metres": round(metres),
+            "value": round(sum(r["price"] * r["metres"] for r in with_m)),
+            "should_value": round(sum(r["should"] * r["metres"] for r in with_m)),
+            "above_range": round(sum(_above_range(r) for r in live)),
+            "push_excess": ex(("Push",)), "fair_excess": ex(("Fair",)), "below_saving": -ex(("Below",)),
+            "unsure_excess": ex(("Ask break-up", "Ask break-up, above range")), "check_excess": ex(("Check quote",)),
+            "no_metres": sum(1 for r in live if r.get("price") and not r.get("metres"))}
+
+
+@app.get("/api/supplier")
+def supplier(mill: str):
+    """One mill, for the meeting with it: what was bought and what is quoted, each fabric's verdict, the money above
+    the usual range, its sheets' sums that are off, where each negotiation stands, and the questions to take along."""
+    key = mill_key(mill)
+    d = costs()
+    rows = [r for r in d["rows"] if mill_key(r["supplier"]) == key]
+    if not key or not rows:
+        raise HTTPException(404, "No fabric bought from or quoted by that mill")
+    m = get_masters()
+    po = [r for r in rows if r["source"] == "Purchase orders"]
+    fl = [r for r in rows if r["source"] == "Fabric list"]
+    slim = lambda r: {k: r.get(k) for k in ("source", "id", "code", "description", "route", "weave_group", "should", "price", "gap", "gap_pct",
+                                              "metres", "excess", "band", "range", "duplicate_of", "problems", "why_unsure", "placeholders")}
+    for r in rows:
+        r["above_range"] = 0 if r.get("duplicate_of") else round(_above_range(r))
+    negos = {k: nego_summary(v) for k, v in _negos().items() if v.get("events")}
+
+    # the quoted side comes from the negotiation pack of this mill's list rows: sums, questions and all
+    quoted_q, sums, lead, not_costed = [], [], [], []
+    if fl:
+        try:
+            p = pack({"ids": [r["id"] for r in fl]})
+            lead = p["lead"]
+            not_costed = [{"code": n["code"], "why": n["why"]} for n in p["not_costed"]]
+            for r in p["rows"]:
+                if r["duplicate_of"]:
+                    continue
+                ng = negos.get(f"Fabric list|{r['id']}")
+                if ng and ng["status"] == "Agreed":
+                    continue            # agreed: nothing left to ask (it is in the negotiations table below)
+                moved = ng and ng["latest"] is not None and abs(ng["latest"] - r["quote"]) >= 0.005
+                tail = f" (Since the sheet, the mill has moved to Rs {_inr(ng['latest'])}: see the fabric's Negotiation tab.)" if moved else ""
+                quoted_q += [{"code": r["code"], "text": q + (tail if n == 0 else "")} for n, q in enumerate(r["questions"])]
+                if r["sums"]:
+                    sums.append({"code": r["code"], "sums": r["sums"], "quote": r["quote"], "own_price": r["own_price"],
+                                 "own_gap": r["own_gap"], "own_at_stake": r["own_at_stake"]})
+            for n in p["not_costed"]:
+                if n["sums"]:
+                    sums.append({"code": n["code"], "sums": n["sums"], "quote": None, "own_price": n["own_price"], "own_gap": n["own_gap"], "own_at_stake": None})
+        except HTTPException:
+            pass
+
+    # the purchases to ask about: the largest sums paid above the usual range, with what would have to be true
+    bought_q, same = [], {}
+    for r in sorted([r for r in po if r["above_range"] > 0], key=lambda r: -r["above_range"]):
+        if len(bought_q) >= PO_QUESTIONS and (r["price"], round(r["should"], 2)) not in same:
+            break
+        try:
+            res = masters.cost(r["choices"], m)
+            b = brief(res, m, r["metres"], (), r["choices"])
+            if b is None or b["stance"] != "push":
+                continue
+            row = {"code": r["code"], "stance": "push", "quote": b["quote"], "should": b["should"], "gap": b["gap"], "gap_pct": b["gap_pct"],
+                   "upper": b["settle_up_to"], "above_band": b["above_band"], "sums": [], "own_gap": None, "own_price": None,
+                   "quantity": r["metres"], "mill": {}, "from_mill": False, "inputs": r["choices"], "notes": []}
+            twin = same.get((r["price"], round(r["should"], 2)))
+            if twin is not None:        # the same cloth at the same price under another code: one question, the codes named
+                twin["also"].append(r["code"])
+                twin["above_range"] += r["above_range"]
+                continue
+            for n, q in enumerate(_questions(row, b, m)):
+                item = {"code": r["code"], "text": f"Bought at Rs {_inr(b['quote'])} a metre ({_inr(r['metres'], 0)} m). " + q,
+                        "above_range": r["above_range"], "also": []}
+                bought_q.append(item)
+                if n == 0:
+                    same[(r["price"], round(r["should"], 2))] = item
+        except Exception:
+            continue
+
+    for q in bought_q:
+        if q["also"]:
+            q["text"] += f" The same cloth at the same price was bought as {', '.join(q['also'])}; Rs {_inr(q['above_range'], 0)} above the range on all of them."
+
+    # the tracker: where each negotiation with this mill stands
+    dups = _list_duplicates()
+    track, won, lost, agreed, open_ = [], 0, 0, 0, 0
+    for k, v in _negos().items():
+        if not v.get("events") or mill_key(v.get("supplier")) != key:
+            continue
+        s_ = nego_summary(v)
+        counted = s_["counted"] and k not in dups
+        track.append({"key": k, "code": v.get("code") or k, "status": s_["status"], "first": s_["first"], "latest": s_["latest"], "agreed": s_["agreed"],
+                      "counter": s_["counter"], "reopened": s_["reopened"], "won_per_m": s_["won_per_m"], "won": s_["won"] if counted else None,
+                      "counted": counted, "warnings": s_["warnings"], "last_date": s_["last_date"], "metres": v.get("metres")})
+        agreed += s_["status"] == "Agreed"
+        open_ += s_["status"] != "Agreed"
+        if counted:
+            won += s_["won"]
+            lost -= min(0, s_["won"])
+    track.sort(key=lambda t: (t["status"] == "Agreed", t["last_date"] or ""), reverse=False)
+
+    general = []
+    b_side, q_side = _side(po), _side(fl)
+    unsure = sum(n for band, n in {**b_side["counts"]}.items() if band.startswith("Ask break-up")) + sum(n for band, n in q_side["counts"].items() if band.startswith("Ask break-up"))
+    if unsure:
+        types = {}
+        for r in rows:
+            if str(r["band"]).startswith("Ask break-up") and not r.get("duplicate_of"):
+                t = f"{(r.get('route') or '').lower()} {(r.get('weave_group') or '').lower()}".strip() or "other"
+                types[t] = types.get(t, 0) + 1
+        top = sorted(types.items(), key=lambda kv: -kv[1])[:3]
+        general.append(f"The tool cannot judge {unsure} of this mill's fabrics yet (mostly {', '.join(f'{t} ({n})' for t, n in top)}). Ask for one filled mill cost sheet "
+                       "(Prices > Mill cost sheets has the template) for each of those types: yarn, wastage, weaving per pick, dyeing, finish, overhead and margin.")
+    for t in track:
+        if t["status"] != "Agreed":
+            where = f"the mill is at Rs {_inr(t['latest'])}" if t["latest"] is not None else "the mill has not quoted"
+            general.append(f"{t['code']} is still open: {where}" + (f", our counter is Rs {_inr(t['counter'])}" if t["counter"] is not None else "") + ". Close it or agree the next step.")
+    return {"key": key, "name": _mill_names(rows)[0], "names": _mill_names(rows), "ready": d["ready"],
+            "bought": dict(b_side, rows=[slim(r) | {"above_range": r["above_range"]} for r in sorted(po, key=lambda r: (-r["above_range"], -(r["excess"] or 0)))]),
+            "quoted": dict(q_side, rows=[slim(r) | {"above_range": r["above_range"]} for r in fl], lead=lead, not_costed=not_costed),
+            "sums": sums,
+            "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},
+            "questions": {"quoted": quoted_q, "bought": bought_q, "general": general}}
 
 
 @app.post("/api/list/download")
@@ -1415,7 +1598,7 @@ def insights():
             if len(d) >= 15:
                 within = float((d[gap].abs() <= 10).mean())
                 mix = d.groupby(["Route", "Weave group"]).size().sort_values(ascending=False)
-                sup.append({"supplier": re.sub(r"^\d+\s+", "", str(name)).title(), "fabrics": len(d), "gap": float(d[gap].median()),
+                sup.append({"supplier": re.sub(r"^\d+\s+", "", str(name)).title(), "key": mill_key(re.sub(r"^\d+\s+", "", str(name))), "fabrics": len(d), "gap": float(d[gap].median()),
                             "within10": within, "trust": trust(within, float(d[gap].median())),
                             "mostly": f"{mix.index[0][0]} {mix.index[0][1].lower()}", "mostly_share": float(mix.iloc[0] / len(d))})
         sup.sort(key=lambda c: -c["fabrics"])

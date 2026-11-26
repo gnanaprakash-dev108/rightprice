@@ -368,6 +368,29 @@ def main():
         r_ = ev({"key": f"Fabric list|{dup['id']}", "code": dup["code"], "kind": "Mill's quote", "price": 185}) if dup else None
         check("Tracker: a row repeating another order is sent to that order", bool(dup) and r_.status_code == 400 and dup["duplicate_of"] in r_.json()["detail"])
         c.post("/api/list/remove", json={"ids": [r["id"] for r in lst_rows]})
+        # supplier page: one mill, however it is written
+        buf = io.BytesIO()
+        pd.DataFrame([dict(base_row, **{"Fab Code": "S-1", "Price": 240, "Ex mill price": 240, "Total price with qnty disc/upcharge": 240, "Total order qnty": 5000}),
+                      dict(base_row, **{"Fab Code": "S-2", "Total order qnty": 4100})], columns=mill_sheet.COLUMNS).to_excel(buf, index=False)
+        c.post("/api/list/upload", files={"file": ("sup.xlsx", io.BytesIO(buf.getvalue()))})
+        s_rows = [r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Fabric list" and r["code"] in ("S-1", "S-2")]
+        mill = s_rows[0]["mill"]
+        sp = c.get("/api/supplier", params={"mill": s_rows[0]["supplier"] + " Limited"}).json()
+        s1 = next(r for r in sp["quoted"]["rows"] if r["code"] == "S-1")
+        upper = round(s1["should"] * (1 + s1["range"][1] / 100), 2)
+        check("Supplier page: found under any spelling; money above the range is price less the top of the range, times metres",
+              sp["key"] == mill and s1["band"] == "Push" and s1["above_range"] == round((240 - upper) * 5000), str(s1))
+        check("Supplier page: questions on the quotes in hand, and the sheet's sums that are off",
+              any(q["code"] == "S-1" and "above should-cost" in q["text"] for q in sp["questions"]["quoted"]) and any(x["code"] == "S-1" for x in sp["sums"]))
+        k_s1 = {"key": f"Fabric list|{s_rows[0]['id'] if s_rows[0]['code'] == 'S-1' else s_rows[1]['id']}", "code": "S-1", "supplier": s_rows[0]["supplier"], "metres": 5000, "should": s1["should"]}
+        ev(dict(k_s1, kind="Mill's quote", price=240, date="2026-11-20"))
+        ev(dict(k_s1, kind="Agreed", price=230, date="2026-11-21"))
+        sp2 = c.get("/api/supplier", params={"mill": mill}).json()
+        check("Supplier page: an agreed fabric has no question left, and its gain is in the mill's tracker figures",
+              not any(q["code"] == "S-1" for q in sp2["questions"]["quoted"]) and any(t["code"] == "S-1" and t["won"] == 50000 for t in sp2["tracker"]["items"]))
+        check("Supplier page: an unknown mill is refused", c.get("/api/supplier", params={"mill": "No Such Mill"}).status_code == 404)
+        check("Suppliers: one line a mill", any(x["key"] == mill for x in c.get("/api/suppliers").json()["suppliers"]))
+        c.post("/api/list/remove", json={"ids": [r["id"] for r in s_rows]})
         for key, it in c.get("/api/negotiations").json()["items"].items():
             for e in it["events"]:
                 c.post("/api/negotiations/remove", json={"key": key, "id": e["id"]})
