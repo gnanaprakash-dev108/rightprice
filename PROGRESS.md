@@ -142,6 +142,24 @@ Left as they are: the Negotiation pack screen has no draft button (use the ticke
 with one code share their notes; closing the dialog discards the draft; the dialog's title uses the row's spelling
 of the mill; agreed fabrics show no draft button and do not say why.
 
+### MCP server (26 Nov, pull request 21)
+
+`mcp_server.py`: nine tools over the same functions the screens use (list_choices, cost_fabric, find_fabrics,
+fabric_brief, supplier_summary, negotiation_pack, tracker_steps, record_tracker_step, quote_alerts). One writes:
+record_tracker_step (marked "AI assistant"; the tracker's refusals apply). Two ways in:
+
+- `/mcp` on the web app (`McpGate` in `server.py`): 404 unless the app setting `RIGHTPRICE_MCP_TOKEN` (24
+  characters or more) is set; then every request needs `Authorization: Bearer <token>` (401 otherwise).
+  `/mcp/health` tells a caller holding the token that the site is up and which code runs. One JSON answer per
+  request, no sessions. If the `mcp` package cannot be loaded the site still starts, with MCP off.
+- `python mcp_server.py` (stdio) on a laptop, on that machine's own data.
+- **GP still has to do the Azure part** (docs/AZURE_DEPLOY.md, "Letting an AI assistant in"): add the token and
+  let `/mcp` through Microsoft sign-in with `globalValidation.excludedPaths`. **The build session could not try
+  those Azure commands, nor Claude Desktop through `mcp-remote`.** Tried here: the endpoint with the `mcp` package's
+  own client over HTTP and over stdio, and a wrong token refused. `mcp` is 2.x (`MCPServer`, not `FastMCP`).
+- Until GP does the Azure part nothing new is reachable: `/mcp` sits behind Microsoft sign-in like every other
+  address, and answers 404 without the token setting anyway.
+
 ### Rules (unchanged; all nine hold)
 
 1. Work on a branch (`claude/sleepy-dirac-dknzrp`) and open a pull request. Never push to `main`:
@@ -162,7 +180,7 @@ of the mill; agreed fabrics show no draft button and do not say why.
    are his (use the select-an-option question form; GP prefers that). The build session cannot sign in
    to the live site: ask GP to confirm by eye.
 
-### What GP asked for on 26 Nov: five builds, one by one (1 to 4 are done; 5 is next)
+### What GP asked for on 26 Nov: five builds, one by one (all five are built)
 
 1. **Negotiation tracker** (pull request 17, done). On each fabric's Negotiation tab in Right
    cost: record the mill's quote, our counter, revised quotes and the agreed price (date, note); what
@@ -198,7 +216,7 @@ of the mill; agreed fabrics show no draft button and do not say why.
      and offers a plain template instead.
    - The `anthropic` package is not installed in the build container (the `mcp` package is, 2.3.0).
    - Send only the figures needed; no supplier price lists beyond the fabric in question.
-5. **MCP server**, so an AI assistant (for example Claude Desktop) can use RightPrice: tools to cost a
+5. **MCP server** (pull request 21, done; the Azure part is GP's to do), so an AI assistant (for example Claude Desktop) can use RightPrice: tools to cost a
    fabric, read Right cost rows, read a brief, make a negotiation pack, read and record tracker steps.
    Python `mcp` package; streamable HTTP mounted on the app (for example `/mcp`) plus a stdio entry
    for local use. **GP's decision, 26 Nov: a secret token on the live site.** So: `/mcp` (and a small read-only

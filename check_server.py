@@ -3,6 +3,7 @@
 Run: python check_server.py     It must print ALL OK. It does not start the classic screens.
 """
 import io
+import json
 import os
 import tempfile
 
@@ -508,6 +509,42 @@ def main():
         check("Quantities as mills type them", server._qty("5000 mtr") == 5000 and server._qty("3,333") == 3333 and server._qty(4200) == 4200 and server._qty("about 5") is None)
         tot_q = c.get("/api/negotiations/summary").json()
         check("Tracker: a fabric agreed before a re-quote arrived keeps its gain", any(t for t in [tot_q] if t["duplicates"] == 0))
+        # MCP: an assistant's way in, behind a secret token
+        os.environ.pop("RIGHTPRICE_MCP_TOKEN", None)
+        check("MCP: switched off unless the token setting exists, and the site is untouched",
+              c.get("/mcp/health").status_code == 404 and c.post("/mcp", json={}).status_code == 404 and c.get("/api/meta").status_code == 200)
+        os.environ["RIGHTPRICE_MCP_TOKEN"] = "short"
+        check("MCP: a token too short to be a secret keeps it off", c.get("/mcp/health", headers={"Authorization": "Bearer short"}).status_code == 404)
+        tok = "k" * 40
+        os.environ["RIGHTPRICE_MCP_TOKEN"] = tok
+        hd = {"Authorization": "Bearer " + tok, "Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+        check("MCP: no token, a wrong token or a token in the address are refused",
+              c.get("/mcp/health").status_code == 401 and c.post("/mcp", json={}, headers={"Authorization": "Bearer " + "x" * 40}).status_code == 401
+              and c.get("/mcp/health?token=" + tok).status_code == 401 and c.get("/mcp/anything", headers={"Authorization": tok}).status_code == 401)
+        hl = c.get("/mcp/health", headers=hd).json()
+        check("MCP: the health check answers a caller holding the token", hl["ok"] is True and hl["tools"] == 9)
+        rpc = lambda method, params, i=1: c.post("/mcp", headers=hd, json={"jsonrpc": "2.0", "id": i, "method": method, "params": params}).json()
+        call = lambda name, **args: json.loads(rpc("tools/call", {"name": name, "arguments": args})["result"]["content"][0]["text"])
+        names = [t["name"] for t in rpc("tools/list", {})["result"]["tools"]]
+        check("MCP: the nine tools are offered", set(names) == {"list_choices", "cost_fabric", "find_fabrics", "fabric_brief", "supplier_summary", "negotiation_pack",
+                                                                "tracker_steps", "record_tracker_step", "quote_alerts"}, str(names))
+        ex = call("list_choices")["example"]
+        check("MCP: a fabric costed through the assistant gives the engine's figure", call("cost_fabric", choices=ex)["should_cost_per_m"] == round(c.post("/api/cost", json=ex).json()["total_per_m"], 2))
+        found = call("find_fabrics", search="Q-4", source="Fabric list")
+        qk = found["fabrics"][0]["key"] if found["fabrics"] else None
+        check("MCP: a fabric is found with its key and the verdict the screens show", bool(qk) and found["fabrics"][0]["code"] == "Q-4" and found["fabrics"][0]["price_is"].startswith("quoted"), str(found)[:300])
+        bad = call("record_tracker_step", key=qk, kind="Agreed", price_per_m=0.5)
+        wrong = call("record_tracker_step", key=qk, kind="Settled", price_per_m=185)
+        ok_ = call("record_tracker_step", key=qk, kind="Mill's quote", price_per_m=185, date="2026-11-20", note="by phone")
+        check("MCP: recording a step keeps the tracker's refusals, and the step is marked as the assistant's",
+              "error" in bad and "error" in wrong and ok_.get("recorded") is True and ok_["now"]["steps"][0]["by"] == "AI assistant"
+              and "recorded through the AI assistant" in ok_["now"]["steps"][0]["note"], str(ok_)[:300])
+        check("MCP: the brief and the tracker read back what the screens hold",
+              call("fabric_brief", key=qk)["negotiation"]["mill_latest"] == 185 and call("tracker_steps", key=qk)["status"] == "Open" and "error" in call("fabric_brief", key="nope"))
+        web_by = c.post("/api/negotiations/event", json={"key": qk, "kind": "Our counter", "price": 180, "date": "2026-11-21", "by": "the owner", "seen": 1}).json()
+        check("MCP: a web request cannot name who recorded a step", web_by["events"][-1]["by"] == "")
+        os.environ.pop("RIGHTPRICE_MCP_TOKEN", None)
+
         q_ids = [r["id"] for r in c.get("/api/costs").json()["rows"] if r["source"] == "Fabric list" and str(r["code"]).startswith("Q-")]
         c.post("/api/list/remove", json={"ids": q_ids})
         check("Quote alerts: removing the rows removes their alerts", c.get("/api/alerts").json()["count"] == before)
