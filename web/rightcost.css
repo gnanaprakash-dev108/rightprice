@@ -316,5 +316,6 @@ select { appearance: none; -webkit-appearance: none; background: var(--panel2) u
   .tracker table.steps td.k { grid-area: k; font-weight: 700; } .tracker table.steps td.x { grid-area: x; } .tracker table.steps td.d { grid-area: d; color: var(--text2); }
   .tracker table.steps td.n { grid-area: n; } .tracker table.steps td.note { grid-area: note; width: auto; }
   .tracker table.steps td.note:empty { display: none; }
-  .stepform select, .stepform input[type=number], .stepform input[type=date] { flex: 1 1 130px; width: auto; min-width: 0; }
+  .stepform select { flex: 1 1 100%; }
+  .stepform input[type=number], .stepform input[type=date] { flex: 1 1 130px; width: auto; min-width: 0; }
 }

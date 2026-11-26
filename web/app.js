@@ -311,17 +311,25 @@ PAGES.dashboard = async () => {
 
   // what negotiation has won, from the tracker on each fabric in Right cost
   try {
-    const w = await getJSON("/api/negotiations/summary");
-    nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Won in negotiation"),
+    const box = h("div", { class: "card" });
+    const paint = w => box.replaceChildren(...[h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "Won in negotiation"),
       h("div", { class: "sub", style: "margin:2px 0 0" }, "From the tracker on each fabric's Negotiation tab in Right cost: the mill's first quote less the agreed price, times the metres. Open negotiations are not counted."))),
-      w.fabrics ? [h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `${plural(w.agreed, "fabric")} agreed, ${w.open} still open`),
-          w.agreed ? [h("b", { class: "num" + (w.won < 0 ? " loss" : "") }, `Rs ${fmt(Math.abs(w.won), 0)}`), h("span", { class: "sub", style: "margin:0" }, w.won < 0 ? "above the mills' first quotes: a net loss" : w.won > 0 ? "below the mills' first quotes" : "against the mills' first quotes")] : h("span", { class: "sub", style: "margin:0" }, "Nothing agreed yet, so nothing is counted as won.")),
-        w.no_quantity || w.no_quote ? h("p", { class: "sub" }, "Not counted: " + [w.no_quantity ? `${plural(w.no_quantity, "agreed fabric")} with no metres` : null, w.no_quote ? `${plural(w.no_quote, "agreed fabric")} with no mill quote recorded` : null].filter(Boolean).join("; ") + ".") : null,
-        w.warnings ? h("p", { class: "sub" }, `${plural(w.warnings, "fabric")} with a step to check (a date out of order, or a price far from the first quote): see the Negotiation tab of each.`) : null,
+      ...(w.fabrics ? [h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `${plural(w.agreed, "fabric")} agreed, ${w.open} still open`),
+          ...(w.agreed ? [h("b", { class: "num" + (w.won < 0 ? " loss" : "") }, `Rs ${fmt(Math.abs(w.won), 0)}`), h("span", { class: "sub", style: "margin:0" }, (w.won < 0 ? "above the mills' first quotes: a net loss" : w.won > 0 ? "below the mills' first quotes" : "against the mills' first quotes")
+            + (w.lost && w.won >= 0 ? `, after Rs ${fmt(w.lost, 0)} lost on ${plural(w.lost_fabrics, "fabric")} agreed above the first quote` : ""))] : [h("span", { class: "sub", style: "margin:0" }, "Nothing agreed yet, so nothing is counted as won.")])),
+        w.no_quantity || w.no_quote || w.duplicates ? h("p", { class: "sub" }, "Agreed but not counted: " + [w.no_quantity ? `${plural(w.no_quantity, "fabric")} with no metres` : null, w.no_quote ? `${plural(w.no_quote, "fabric")} with no mill quote recorded` : null, w.duplicates ? `${plural(w.duplicates, "row")} repeating another order` : null].filter(Boolean).join("; ") + ".") : null,
+        w.to_check.length ? h("div", { class: "notice warn", style: "margin:8px 0" }, h("b", {}, `${plural(w.to_check.length, "fabric")} with a step to check, left out of the total until put right: `),
+          h("ul", { style: "margin:4px 0 0;padding-left:18px" }, ...w.to_check.slice(0, 6).map(c => h("li", {}, h("b", {}, c.code), ": " + c.why)), w.to_check.length > 6 ? h("li", {}, `and ${w.to_check.length - 6} more: filter Right cost by Negotiation and look for "check a step"`) : null)) : null,
         h("div", { class: "table-wrap" }, h("table", { class: "wontable" }, h("thead", {}, h("tr", {}, h("th", {}, "Mill"), h("th", { class: "n" }, "Agreed / open"), h("th", { class: "n" }, "Won, Rs"))),
-          h("tbody", {}, w.suppliers.map(b => h("tr", {}, h("td", {}, b.supplier), h("td", { class: "n" }, `${b.agreed} / ${b.open}`),
-            h("td", { class: "n" + (b.won < 0 ? " loss" : "") }, !b.agreed ? "nothing agreed yet" : b.won < 0 ? `${fmt(Math.abs(b.won), 0)} lost` : fmt(b.won, 0) + (b.not_counted ? ` (${b.not_counted} not counted)` : "")))))))]
-        : h("p", { class: "empty" }, "Nothing tracked yet. Open a fabric in Right cost, go to its Negotiation tab and record the mill's quote, your counter and the agreed price.")));
+          h("tbody", {}, ...w.suppliers.map(b => h("tr", {}, h("td", {}, b.supplier), h("td", { class: "n" }, `${b.agreed} / ${b.open}`),
+            h("td", { class: "n" + (b.won < 0 ? " loss" : "") }, !b.agreed ? "nothing agreed yet" : (b.won < 0 ? `${fmt(Math.abs(b.won), 0)} lost` : fmt(b.won, 0)) + (b.lost && b.won >= 0 ? `, after ${fmt(b.lost, 0)} lost on ${plural(b.lost_fabrics, "fabric")}` : "") + (b.not_counted ? ` (${b.not_counted} not counted)` : "")))))))]
+        : [h("p", { class: "empty" }, "Nothing tracked yet. Open a fabric in Right cost, go to its Negotiation tab and record the mill's quote, your counter and the agreed price.")])].filter(Boolean));
+    let last = JSON.stringify(await getJSON("/api/negotiations/summary")); paint(JSON.parse(last));
+    nodes.push(box);
+    // the steps are shared: look again every half minute and when the window is looked at again
+    const again = async () => { if (!box.isConnected) { clearInterval(timer); removeEventListener("focus", again); return; } if (document.hidden) return;
+      try { const now = JSON.stringify(await getJSON("/api/negotiations/summary")); if (now !== last) { last = now; paint(JSON.parse(now)); } } catch (e) { /* next time */ } };
+    const timer = setInterval(again, 30000); addEventListener("focus", again);
   } catch (e) { /* the tracker is not on this server yet */ }
 
   // 5. supplier cost ratios, and suppliers against should-cost

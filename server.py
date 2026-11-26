@@ -1094,11 +1094,36 @@ def mill_key(name):
     return " ".join(keep or words)
 
 
+def _inr(v, d=2):
+    """Rupees with Indian grouping: 9,99,99,999.00."""
+    neg, v = v < 0, abs(float(v))
+    whole, frac = f"{v:.{d}f}".split(".") if d else (f"{v:.0f}", "")
+    head, tail = whole[:-3], whole[-3:]
+    head = re.sub(r"(\d)(?=(\d\d)+$)", r"\1,", head)
+    return ("−" if neg else "") + (head + "," if head else "") + tail + ("." + frac if d else "")
+
+
+def _day(iso):
+    try:
+        return f"{dt.date.fromisoformat(str(iso)[:10]):%d %b %Y}".lstrip("0")
+    except ValueError:
+        return str(iso)
+
+
+def _nego_order(events):
+    """By date; on one day the agreed price comes last (a quote entered after it the same day came before it)."""
+    return sorted(events, key=lambda e: (e["date"], e["kind"] == "Agreed", e.get("at", "")))
+
+
+FAR = 3.0           # a price more than 3 times, or under a third of, what it is compared with is queried
+
+
 def nego_summary(rec):
     """Where one fabric's negotiation stands: the mill's first and latest price, the agreed price, what was won.
     The first quote is the first step the mill quoted in (never our counter, never the agreed price). It is
-    agreed only while the agreed step is the last one: a step dated after it opens the negotiation again."""
-    ev = sorted(rec.get("events", []), key=lambda e: (e["date"], e.get("at", "")))
+    agreed only while the agreed step is the last one: a step dated after it opens the negotiation again.
+    A fabric with a warning is not counted in what was won until the step is put right."""
+    ev = _nego_order(rec.get("events", []))
     quotes = [e for e in ev if e["kind"] in ("Mill's quote", "Mill's revised quote")]
     last_agreed = next((e for e in reversed(ev) if e["kind"] == "Agreed"), None)
     agreed = last_agreed if ev and ev[-1]["kind"] == "Agreed" else None
@@ -1106,8 +1131,9 @@ def nego_summary(rec):
     latest_q = quotes[-1]["price"] if quotes else None
     metres = rec.get("metres") or 0
     should = rec.get("should")
-    out = {"status": "Agreed" if agreed else ("Open" if ev else "Not started"), "first": first, "latest": latest_q,
-           "agreed": agreed["price"] if agreed else None, "counter": next((e["price"] for e in reversed(ev) if e["kind"] == "Our counter"), None),
+    counter = next((e["price"] for e in reversed(ev) if e["kind"] == "Our counter"), None)
+    out = {"status": "Agreed" if agreed else ("Open" if ev else "Not tracked"), "first": first, "latest": latest_q,
+           "agreed": agreed["price"] if agreed else None, "counter": counter,
            "reopened": last_agreed["price"] if last_agreed and not agreed else None,
            "steps": len(ev), "last_date": ev[-1]["date"] if ev else None}
     ref = out["agreed"] if agreed else latest_q
@@ -1115,29 +1141,54 @@ def nego_summary(rec):
     out["won"] = None if out["won_per_m"] is None or not metres else round(out["won_per_m"] * metres)
     out["above_should_per_m"] = None if ref is None or should is None else round(ref - should, 2)
     warn = []
-    if agreed and first is None:
-        warn.append("No mill quote is recorded, so there is nothing to measure the agreed price against. Record the mill's first quote, with its date.")
-    if agreed and quotes and (agreed["date"], agreed.get("at", "")) < (quotes[0]["date"], quotes[0].get("at", "")):
-        warn.append("The agreed price is dated before the mill's first quote. Check the dates.")
-    if last_agreed and quotes and last_agreed["date"] < quotes[0]["date"] and not agreed:
-        warn.append("An agreed price is dated before the mill's first quote. Check the dates.")
-    if first:
-        for e in ev:
-            if e["price"] > 3 * first or e["price"] < first / 3:
-                warn.append(f"Rs {e['price']:,.2f} ({e['kind']}, {e['date']}) is far from the first quote of Rs {first:,.2f}. Check it is per metre and typed right.")
+    far = lambda a, b: bool(a and b) and (a > FAR * b or a < b / FAR)
+    said = lambda e: f"Rs {_inr(e['price'])} ({e['kind']}, {_day(e['date'])})"
+    if last_agreed and quotes and last_agreed["date"] < quotes[0]["date"]:
+        warn.append(f"The agreed price is dated {_day(last_agreed['date'])}, before the mill's first quote ({_day(quotes[0]['date'])}). Check the dates.")
+    first_off = bool(quotes) and far(first, should)
+    if first_off:
+        warn.append(f"The mill's first quote, {said(quotes[0])}, is far from the should-cost of Rs {_inr(should)}. "
+                    "Check it is per metre and typed right: what was won is measured from it.")
+    for e in ev:
+        if quotes and e is quotes[0]:
+            continue
+        base, name = (should, "the should-cost") if first_off or first is None else (first, "the first quote")
+        if far(e["price"], base):
+            warn.append(f"{said(e)} is far from {name} of Rs {_inr(base)}. Check it is per metre and typed right.")
+    if not agreed and counter is not None and latest_q is not None and ev[-1]["kind"] == "Our counter" and counter > latest_q:
+        warn.append(f"Our counter of Rs {_inr(counter)} is above the mill's price of Rs {_inr(latest_q)}. Check which is which.")
     out["warnings"] = warn
+    out["no_quote"] = bool(agreed and first is None)
+    out["counted"] = bool(agreed and out["won"] is not None and not warn)
+    return out
+
+
+def _nego_view(rec):
+    return dict(rec, events=_nego_order(rec.get("events", [])), summary=nego_summary(rec))
+
+
+def _list_duplicates():
+    """Fabric-list rows that repeat an order already on the list, as Right cost and the pack decide it: {key: code it repeats}."""
+    out = {}
+    for r in costs()["rows"]:
+        if r["source"] == "Fabric list" and r.get("duplicate_of"):
+            out[f"Fabric list|{r['id']}"] = r["duplicate_of"]
     return out
 
 
 @app.get("/api/negotiations")
 def negotiations():
-    """Every fabric's negotiation: its steps and where it stands."""
-    d = _negos()
-    return {"kinds": NEGO_KINDS, "items": {k: dict(v, summary=nego_summary(v)) for k, v in d.items()}}
+    """Every fabric's negotiation: its steps (and the steps removed, for the log) and where it stands."""
+    return {"kinds": NEGO_KINDS, "items": {k: _nego_view(v) for k, v in _negos().items()}}
+
+
+def _who(request):
+    """The signed-in person, from Azure's sign-in header; nothing off Azure."""
+    return (request.headers.get("x-ms-client-principal-name") or "")[:120] if request is not None else ""
 
 
 @app.post("/api/negotiations/event")
-def negotiation_event(payload: dict = Body(...)):
+def negotiation_event(payload: dict = Body(...), request: Request = None):
     """Record one step: the mill's quote, our counter, a revised quote, or the agreed price."""
     key, kind = str(payload.get("key") or ""), payload.get("kind")
     price = _num_or_none(payload.get("price"))
@@ -1145,12 +1196,20 @@ def negotiation_event(payload: dict = Body(...)):
         raise HTTPException(400, "Choose the fabric and what happened")
     if price is None or price <= 0:
         raise HTTPException(400, "Type the price in rupees per metre")
+    if round(price, 2) < 1 or price > 50000:
+        raise HTTPException(400, "A price per metre is between Rs 1 and Rs 50,000: check what was typed")
     try:
         day_ = dt.date.fromisoformat(str(payload.get("date") or dt.date.today().isoformat()))
     except ValueError:
         raise HTTPException(400, "The date is not a date")
     if day_ > dt.date.today():
         raise HTTPException(400, "The date is in the future")
+    if day_ < dt.date.today() - dt.timedelta(days=730):
+        raise HTTPException(400, f"The date is {_day(day_.isoformat())}, more than two years ago: check the year")
+    if key.startswith("Fabric list|"):
+        dup = _list_duplicates().get(key)
+        if dup:
+            raise HTTPException(400, f"This row repeats the order of {dup}: record the negotiation on {dup}, so it is counted once")
     d = _negos()
     rec = d.setdefault(key, {"key": key, "events": []})
     for f in ("code", "supplier", "description", "source"):
@@ -1161,51 +1220,69 @@ def negotiation_event(payload: dict = Body(...)):
         if v is not None:
             rec[f] = v
     rec["events"].append({"id": f"{dt.datetime.now():%Y%m%d%H%M%S%f}", "at": dt.datetime.now().isoformat(timespec="seconds"),
-                          "date": day_.isoformat(), "kind": kind, "price": round(price, 2), "note": str(payload.get("note") or "")[:500]})
+                          "date": day_.isoformat(), "kind": kind, "price": round(price, 2), "note": str(payload.get("note") or "")[:500],
+                          "by": _who(request)})
     _save_negos(d)
-    return dict(rec, summary=nego_summary(rec))
+    return _nego_view(rec)
 
 
 @app.post("/api/negotiations/remove")
-def negotiation_remove(payload: dict = Body(...)):
+def negotiation_remove(payload: dict = Body(...), request: Request = None):
+    """Take a step out. It is kept, marked removed, so the fabric's log still shows it was there."""
     key, eid = str(payload.get("key") or ""), str(payload.get("id") or "")
     d = _negos()
-    if key not in d:
-        raise HTTPException(404, "No negotiation for that fabric")
+    gone = [e for e in d.get(key, {}).get("events", []) if e["id"] == eid]
+    if not gone:
+        raise HTTPException(404, "That step is no longer there: someone has already removed it")
     d[key]["events"] = [e for e in d[key]["events"] if e["id"] != eid]
-    if not d[key]["events"]:
-        d.pop(key)
+    d[key].setdefault("removed", []).extend(dict(e, removed_at=dt.datetime.now().isoformat(timespec="seconds"), removed_by=_who(request)) for e in gone)
+    d[key]["removed"] = d[key]["removed"][-100:]
     _save_negos(d)
     return {"removed": True}
 
 
 @app.get("/api/negotiations/summary")
 def negotiations_summary():
-    """What negotiation has won, overall and by mill: against the first quote. A mill written two ways is one mill."""
-    items = [dict(v, summary=nego_summary(v)) for v in _negos().values()]
-    by = {}
+    """What negotiation has won, overall and by mill: against the first quote. A mill written two ways is one mill.
+    Counted: agreed, with a mill quote and metres, no step to check, and not a row that repeats another order."""
+    dups = _list_duplicates()
+    items = [_nego_view(v) for v in _negos().values() if v.get("events")]
+    by, check, total, lost, lost_n = {}, [], 0, 0, 0
+    count = {"no_quantity": 0, "no_quote": 0, "duplicates": 0}
     for it in items:
         s_ = it["summary"]
         name = it.get("supplier") or "No supplier"
-        b = by.setdefault(mill_key(name) or "no supplier", {"names": {}, "fabrics": 0, "agreed": 0, "open": 0, "won": 0.0, "metres": 0.0, "not_counted": 0})
+        b = by.setdefault(mill_key(name) or "no supplier", {"names": {}, "fabrics": 0, "agreed": 0, "open": 0, "won": 0, "lost": 0, "lost_fabrics": 0, "metres": 0.0, "not_counted": 0})
         b["names"][name] = b["names"].get(name, 0) + 1
         b["fabrics"] += 1
         b["agreed" if s_["status"] == "Agreed" else "open"] += 1
-        if s_["status"] == "Agreed" and s_["won"] is not None:
+        if s_["warnings"]:
+            check.append({"code": it.get("code") or it["key"], "why": s_["warnings"][0]})
+        if s_["status"] != "Agreed":
+            continue
+        if it["key"] in dups:
+            count["duplicates"] += 1
+            b["not_counted"] += 1
+        elif s_["counted"]:
             b["won"] += s_["won"]
             b["metres"] += it.get("metres") or 0
-        elif s_["status"] == "Agreed":
+            total += s_["won"]
+            if s_["won"] < 0:
+                b["lost"] -= s_["won"]
+                b["lost_fabrics"] += 1
+                lost -= s_["won"]
+                lost_n += 1
+        else:
             b["not_counted"] += 1
+            if s_["no_quote"]:
+                count["no_quote"] += 1
+            elif s_["won"] is None:
+                count["no_quantity"] += 1
     for b in by.values():       # shown under the spelling used most, the longer one on a tie
         b["supplier"] = sorted(b.pop("names").items(), key=lambda kv: (-kv[1], -len(kv[0])))[0][0]
-        b["won"] = round(b["won"])
-    agreed = [it for it in items if it["summary"]["status"] == "Agreed"]
-    return {"fabrics": len(items), "agreed": len(agreed), "open": len(items) - len(agreed),
-            "won": round(sum(it["summary"]["won"] or 0 for it in agreed)),
-            "no_quantity": sum(1 for it in agreed if not it.get("metres") and it["summary"]["first"] is not None),
-            "no_quote": sum(1 for it in agreed if it["summary"]["first"] is None),
-            "warnings": sum(1 for it in items if it["summary"]["warnings"]),
-            "suppliers": sorted(by.values(), key=lambda b: (-b["won"], b["supplier"]))}
+    agreed = sum(1 for it in items if it["summary"]["status"] == "Agreed")
+    return dict(count, fabrics=len(items), agreed=agreed, open=len(items) - agreed, won=round(total), lost=round(lost), lost_fabrics=lost_n,
+                to_check=check, suppliers=sorted(by.values(), key=lambda b: (-b["won"], b["supplier"])))
 
 
 @app.post("/api/list/download")
