@@ -19,9 +19,44 @@ helps a fabric buyer walk into a meeting with a mill better prepared. The owner 
   - 15: **one shell for every screen, in RightPrice's own look** (see Architecture below).
   - 16: mill cost sheets (Prices > Mill cost sheets; drafts GP applies).
 - **In flight: pull request 17, the negotiation tracker**, branch `claude/sleepy-dirac-dknzrp`. Built,
-  checks ALL OK, pushed. A cold review was started on 26 Nov but its result was not acted on before
-  the session ended. **Next session: run a fresh cold review of the tracker, fix, then merge when the
-  "checks" job passes, and confirm the deploy.**
+  checks ALL OK, pushed. Its first cold review reported on 26 Nov; **none of its findings is fixed
+  yet** (list below). Next session: fix them, have a fresh reviewer confirm, merge when the "checks"
+  job passes, confirm the deploy.
+
+### Tracker cold review, 26 Nov (findings in, NOT yet fixed), most serious first
+
+1. The "first quote" is the earliest-dated mill price of any kind, so an Agreed step dated before the
+   quote (a date typo) becomes the first quote and the gain or loss shows as zero; an Agreed price with
+   no quote at all is called "the first quote". Use the first "Mill's quote" (or revised quote) only;
+   warn when an Agreed step is dated before the first quote, or a price is wildly off (for example more
+   than 3 times or under a third of the first quote).
+2. Dashboard: a net loss reads "Rs −29,26,120 below the first quotes" under "Won in negotiation";
+   losses carry no word or colour; the table uses a hyphen. Say "above the first quotes (a loss)" and mark
+   negative rows.
+3. The same mill appears twice ("Arvind" from fabric-list rows, "Arvind Ltd" from purchase orders).
+   Group by a normalised mill name (drop Ltd, Limited, Mills, Pvt, punctuation; case).
+4. The Negotiation tab shows two should-costs: the brief above uses today's rates, the tracker uses the
+   pilot figure stored on the row (F524VXSH3914: 213.47 against 208.22). Use the brief's figure for both.
+5. Stale pages: the list and the tab refresh only on a full reload, though steps are shared. Reload the
+   negotiations when the Negotiation tab opens and when returning to the list.
+6. A counter with no mill quote shows "the mill is at Rs ," and the list column calls our counter the
+   mill's price.
+7. The rupee figure in brackets has no direction ("Rs 73,140 on 4,876 m" when the price went up); a
+   single quote shows "down Rs 0.00".
+8. Phone: the step table's Remove buttons are cut off; the Dashboard panel's table needs a sideways
+   scroll; cards show no negotiation state.
+9. The browser-only Status column can say "Not started" beside "Agreed"; the Log tab ignores tracker
+   steps. Consider dropping Status in favour of the tracker, or setting it from the tracker.
+10. Smaller: a refused entry also logs a 400 in the console; after Agreed the step type stays on
+    Agreed; a revised quote dated after the agreement still reads "Agreed at".
+
+What the review confirmed: every normal sequence's per-metre and total gain is right (for example
+290 to 255 on 26,584 m = Rs 9,30,440), open negotiations are never counted as won, removal asks and
+recalculates everywhere, the column, sort and filter agree with the tab and Dashboard, a fabric with no
+metres is left out and said so, notes with HTML show as text, dark mode is right.
+
+Test data the reviewer left on its local test server only (not the live site): several tracked fabrics
+and a note containing an HTML string.
 - `python check_engine.py` and `python check_server.py` both print ALL OK; Qlty-1 = Rs 181.40.
 - GP confirmed the live site by eye after pull request 15 ("looking fine").
 
