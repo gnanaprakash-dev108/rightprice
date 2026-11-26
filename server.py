@@ -951,10 +951,9 @@ def costs_download(payload: dict = Body(default={})):
 
 @app.get("/rightcost")
 def rightcost_page():
-    html = open(os.path.join(WEB, "rightcost.html"), encoding="utf8").read()
-    for name in ("rightcost.css", "rightcost.js"):
-        html = html.replace(f'"{name}"', f'"{name}?v={int(os.path.getmtime(os.path.join(WEB, name)))}"')
-    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+    """The earlier address of Right cost: it is now a page of the shell."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/#rightcost", status_code=307)
 
 
 @app.post("/api/list/download")
@@ -1413,13 +1412,21 @@ class FreshFiles(StaticFiles):
         return r
 
 
-@app.get("/")
-def index():
+def _page(file, assets):
     # the script and stylesheet addresses carry the time they were last changed: a new deploy is a new address
-    html = open(os.path.join(WEB, "index.html"), encoding="utf8").read()
-    for name in ("app.css", "app.js"):
+    html = open(os.path.join(WEB, file), encoding="utf8").read()
+    for name in assets:
         html = html.replace(f'"{name}"', f'"{name}?v={int(os.path.getmtime(os.path.join(WEB, name)))}"')
     return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/")
+def index(request: Request):
+    """The app's shell (left rail, Right cost, the "+" popup). Every other screen is the earlier front end
+    shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
+    if request.query_params.get("embed") == "1":
+        return _page("index.html", ("app.css", "app.js"))
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js"))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")

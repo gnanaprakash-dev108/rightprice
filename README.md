@@ -32,6 +32,11 @@ survives redeploys.
 
 ## Screens
 
+Since 26 Nov 2026 the app opens in one shell: a left rail with Home (Dashboard and Pilot results),
+Right cost (every costing) and Prices (market prices, the rate master tables and settings, and the
+costing and sourcing setup lists), and a "New cost" button that opens Create cost, Bulk upload,
+Compare and Negotiation pack as tabs in a popup. Light or dark, and settings, are under the user
+icon. The earlier screens are shown inside the shell (`/?embed=1` serves them on their own).
 The left panel groups the pages under Costing, Prices, Rates and Analysis. Light and dark are
 switched in the header; the search box finds yarns, saved costings, rate tables and pages.
 The left panel folds to icons and opens on hover; pin it open, or turn the compact header off, under

@@ -97,6 +97,13 @@ function buildNav() {
 }
 function route() {
   const [id, ...rest] = decodeURIComponent(location.hash.slice(1) || "dashboard").split("/");
+  // a page shown inside the shell does not open the costing screens itself: they live in the shell's popup
+  if (IN_PAGE && POPUP_PAGES.includes(id)) {
+    parent.postMessage({ rp: "popup", tab: id, choices: id === "cost" && state.sel ? payload(state.sel) : null, listId: state.listId }, location.origin);
+    if (route.last) history.replaceState(null, "", "#" + route.last); else history.back();
+    return;
+  }
+  route.last = location.hash.slice(1) || "dashboard";
   const page = PAGES[id] ? id : "dashboard";
   document.querySelectorAll(".nav-link").forEach(a => a.dataset.page === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
   closeMenu(); hideTip();
@@ -1377,8 +1384,11 @@ function setupSearch() {
 
 // ------------------------------------------------------------------ start
 // inside Right cost's popup (/?embed=1): Cost a fabric alone, with no page list or header
-const EMBED = new URLSearchParams(location.search).get("embed") === "1";
+const QS = new URLSearchParams(location.search);
+const EMBED = QS.get("embed") === "1", IN_PAGE = EMBED && QS.get("in") === "page";
 if (EMBED) document.documentElement.classList.add("embed");
+if (QS.get("bare") === "1") document.documentElement.classList.add("bare");      // the shell shows the page's title itself
+const POPUP_PAGES = ["cost", "bulk", "compare", "pack"];
 // Right cost opens a costing here: its choices, and the list row it came from (if any)
 window.rpOpen = (choices, listId) => {
   if (!state.meta) return setTimeout(() => window.rpOpen(choices, listId), 100);

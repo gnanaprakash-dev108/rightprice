@@ -5,7 +5,7 @@
 
 // ================================================================== CONFIG
 const BAND_COLOR = { "In range": "#2E9E5B", "Below range": "#3D8BFD", "Ask break-up": "#F5C542", "Above, ask break-up": "#EF7D32", "Above range": "#E5484D", "Not costed": "#B9BEC7", "No price": "#B9BEC7", "Check quote": "#B98900", "Working it out": "#DADADA" };
-const ROUTE_COLOR = { "Yarn Dyed": "#5C6BC0", "Piece Dyed": "#26A69A", "Printed": "#EF6C00", "RFD / Bleached": "#90A4AE" };
+const ROUTE_COLOR = { "Yarn Dyed": "#3F6E9E", "Piece Dyed": "#2F8F63", "Printed": "#C9772B", "RFD / Bleached": "#8C9A92" };
 const STATUS = ["Not started", "To negotiate", "In negotiation", "Agreed", "Dropped"];
 const n0 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 0 });
 const n2 = v => v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -62,43 +62,33 @@ const CONFIG = {
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
-      moreActions: ["Download Excel", "Download Excel with Images", "Bulk Upload", "Download Templatised Data", "Negotiation Pack", "Reports and Utilities"],
+      moreActions: ["Download Excel", "Create cost", "Bulk upload", "Compare", "Negotiation pack"],
     },
   },
-  rail: {
-    top: [
-      { id: "home", icon: "home", label: "Home (Dashboard)", href: "/#dashboard" },
-      "div",
-      { id: "costs", icon: "list", label: "Right cost", page: true },
-      { id: "costing", icon: "fabric", label: "Costing", fly: "costing" },
-      { id: "prices", icon: "chart", label: "Prices", fly: "prices" },
-      { id: "rates", icon: "table", label: "Rates", fly: "rates" },
-      { id: "library", icon: "box", label: "Library", fly: "library" },
-      { id: "tools", icon: "tools", label: "Tools", fly: "tools" },
-    ],
-    bottom: [
-      { id: "notes", icon: "bell", label: "Notifications", fly: "notes" },
-      { id: "recent", icon: "clock", label: "Recent Visits", fly: "recent" },
-      { id: "bookmarks", icon: "bookmark", label: "Bookmarks", fly: "bookmarks" },
-      { id: "downloads", icon: "download", label: "Downloads", fly: "downloads" },
-      { id: "settings", icon: "gear", label: "Settings", fly: "settings" },
-    ],
-  },
+  // the left rail: Home, Right cost and one Prices menu. Everything about costing a fabric is in the "+" popup.
+  rail: [
+    { id: "home", icon: "home", label: "Home", hash: "dashboard" },
+    { id: "costs", icon: "list", label: "Right cost", hash: "rightcost" },
+    { id: "prices", icon: "chart", label: "Prices", fly: "prices" },
+  ],
   flyouts: {
-    costing: { title: "Costing", icon: "fabric", groups: [["Costing", [["Right cost", "/rightcost"], ["Cost a fabric (popup)", "popup:cost"], ["Bulk upload and list", "/#bulk"], ["Compare", "/#compare"], ["Negotiation pack", "/#pack"]]], ["Analysis", [["Dashboard", "/#dashboard"], ["Pilot results", "/#pilot"]]]] },
-    prices: { title: "Prices", icon: "chart", groups: [["Prices", [["Yarn prices", "/#yarn"], ["Cotton prices", "/#cotton"], ["Bring in prices", "/#intake"]]]] },
-    rates: { title: "Rates", icon: "table", groups: [["Rate master", [["Rate tables", "/#rates"], ["Mill rate card", "/#ratecard"], ["Settings", "/#settings"]]]] },
-    tools: { title: "Tools", icon: "tools", groups: [["Utilities", [["Bulk Uploads", "/#bulk"], ["Earlier screens", "/classic/"]]]] },
-    settings: { title: "Settings", icon: "gear", groups: [["Application", [["Light or dark", "theme:toggle"], ["Settings", "/#settings"], ["Rate tables", "/#rates"]]]] },
-    library: { title: "Library", icon: "box", groups: [
-      ["Relationships", [["Suppliers", "lib:Suppliers"]]],
-      ["Standard Specifications", ["Product Life Cycle Stages", "Color Cards", "Size Cards", "Seasons", "Units of measurement", "Points of Measure", "Body Types", "Approval Forms", "Genders", "BOM Layouts", "Material Contents", "Care Label Instructions", "Constructions", "Made In"].map(n => [n, "lib:" + n])],
-      ["Costing", ["Rating Scale Types", "Rating Scales", "Cost Sheet Types", "Material Cost Configuration", "Seasonal Exchange Rates"].map(n => [n, "lib:" + n])],
-      ["Sourcing", ["Payment Terms", "Delivery Terms", "Sample Type"].map(n => [n, "lib:" + n])],
-      ["Templates", [["Page Templates", "lib:Page Templates"]]]] },
+    prices: { title: "Prices and rates", icon: "chart", groups: [
+      ["Market prices", [["Yarn prices", "#yarn"], ["Cotton prices", "#cotton"], ["Bring in prices", "#intake"]]],
+      ["Rate master", [["Rate tables", "#rates"], ["Mill rate card", "#ratecard"], ["Calculation settings", "#settings"]]],
+      ["Costing setup", ["Rating Scale Types", "Rating Scales", "Cost Sheet Types", "Material Cost Configuration", "Seasonal Exchange Rates"].map(n => [n, "#lib/" + n])],
+      ["Sourcing setup", ["Payment Terms", "Delivery Terms", "Sample Type"].map(n => [n, "#lib/" + n])]] },
   },
+  // the earlier screens shown inside the shell: section, title, and the tabs of that section
+  frames: {
+    dashboard: ["Home", "Dashboard"], pilot: ["Home", "Pilot results"],
+    yarn: ["Prices", "Yarn prices"], cotton: ["Prices", "Cotton prices"], intake: ["Prices", "Bring in prices"],
+    rates: ["Prices", "Rate tables"], ratecard: ["Prices", "Mill rate card"], settings: ["Prices", "Calculation settings"],
+  },
+  sections: { Home: ["dashboard", "pilot"], Prices: ["yarn", "cotton", "intake", "rates", "ratecard", "settings"] },
+  popupTabs: [["cost", "Create cost"], ["bulk", "Bulk upload"], ["compare", "Compare"], ["pack", "Negotiation pack"]],
 };
 const ICONS = {
+  logo: '<path d="M7 19V5h6.5a4.5 4.5 0 0 1 0 9H10m3.5 0 4.5 5"/>',
   home: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-4v-6h-6v6H5a1 1 0 0 1-1-1z"/>',
   list: '<path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
   fabric: '<path d="M4 6c3-2 5 2 8 0s5-2 8 0v12c-3 2-5-2-8 0s-5 2-8 0z"/>',
@@ -265,70 +255,91 @@ function rerunWithSkeleton() { state.loading = true; state.shown = CONFIG.pageSi
 
 // ================================================================== RENDER
 function railActive(id) {
-  document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === (id || "costs")));
+  const first = decodeURIComponent(location.hash.slice(1)).split("/")[0] || "dashboard";
+  const now = id || (first === "rightcost" || first === "item" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
+  document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === now));
 }
 function renderRail() {
-  const item = it => it === "div" ? h("div", { class: "div" }) : tipOn(h("button", { type: "button", class: "item", "data-id": it.id, html: svg(it.icon), onclick: e => {
-    if (it.href) location.href = it.href; else if (it.page) { state.detail = null; state.library = null; closeLayers(); render(); }
+  const item = it => (h("button", { type: "button", class: "item", "data-id": it.id, "aria-label": it.label, onclick: e => {
+    if (it.hash) { closeLayers(); if (location.hash.slice(1) === it.hash) route(); else location.hash = "#" + it.hash; }
     else openFly(it.fly, e.currentTarget);
-  }, onmouseenter: it.fly && ["costing", "prices", "rates", "library", "tools"].includes(it.fly) ? e => openFly(it.fly, e.currentTarget, true) : null, onmouseleave: () => setTimeout(() => { const f = $("#flyout"); if (openFly.hover && !f.matches(":hover") && !document.querySelector(".rail .item:hover")) { f.hidden = true; railActive(); } }, 250) }, it.id === "notes" ? h("span", { class: "badge", id: "notebadge", hidden: true }) : null), it.label);
-  fill($("#rail"), h("div", { class: "grp" }, CONFIG.rail.top.map(item)), h("div", { class: "grp bottom" }, CONFIG.rail.bottom.map(item),
-    tipOn(h("button", { type: "button", class: "avatar", id: "avatar", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials), state.me.name)));
+  }, onmouseenter: it.fly ? e => openFly(it.fly, e.currentTarget, true) : null,
+    onmouseleave: () => setTimeout(() => { const f = $("#flyout"); if (openFly.hover && !f.matches(":hover") && !document.querySelector(".rail .item:hover")) { f.hidden = true; railActive(); } }, 250) },
+    h("span", { html: svg(it.icon) }), h("span", {}, it.label)));
+  fill($("#rail"), h("div", { class: "logo", html: svg("logo"), title: "RightPrice" }), h("div", { class: "grp" }, CONFIG.rail.map(item)),
+    h("div", { class: "grp bottom" }, tipOn(h("button", { type: "button", class: "avatar", id: "avatar", onclick: e => openFly("profile", e.currentTarget) }, state.me.initials), `${state.me.name}: settings`)));
   railActive();
 }
-function bookmarkBtn(label, href) {
-  const on = state.bookmarks.some(b => b.href === href);
-  return tipOn(h("button", { type: "button", class: "bm" + (on ? " on" : ""), html: svg("bookmark"), onclick: e => {
-    e.stopPropagation();
-    state.bookmarks = on ? state.bookmarks.filter(b => b.href !== href) : [...state.bookmarks, { label, href }]; store.set("bookmarks", state.bookmarks);
-    toast(on ? "Bookmark removed" : "Bookmarked"); openFly(openFly.last, null, false, true);
-  } }), on ? "Remove bookmark" : "Bookmark this page");
+function go(href) {
+  closeLayers();
+  if (href === "theme:toggle") return toggleTheme();
+  if (href.startsWith("#")) { if (location.hash === href) route(); else location.hash = href; return; }
+  if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); }
+  location.href = href;
 }
-function go(href) { closeLayers(); if (href === "popup:cost") return openCostPopup(); if (href === "theme:toggle") return toggleTheme(); if (href.startsWith("lib:")) { state.detail = null; state.library = { name: href.slice(4), page: 0, size: 20 }; return render(); } if (href.startsWith("detail:")) { const r = state.rows.find(x => keyOf(x) === href.slice(7)); if (r) return openDetail(r); } location.href = href; }
 function openFly(name, anchor, hover, keep) {
   const fly = $("#flyout");
   if (!keep && !fly.hidden && openFly.last === name && !hover) {
     if (openFly.hover) { openFly.hover = false; return; }         // a click on what the pointer opened: keep it open
     fly.hidden = true; railActive(); return;
   }
-  openFly.last = name; railActive(name === "profile" ? null : { notes: "notes", recent: "recent", bookmarks: "bookmarks", downloads: "downloads" }[name] || name);
-  const cfg = CONFIG.flyouts[name], kids = [];
-  const link = (label, href) => h("div", { class: "lnkrow" }, bookmarkBtn(label, href), h("button", { type: "button", class: "lnk", onclick: () => go(href) }, label));
+  openFly.last = name; railActive(name === "profile" ? null : name);
+  const cfg = CONFIG.flyouts[name], kids = [], here = location.hash;
+  const link = (label, href) => h("button", { type: "button", class: "lnk" + (here === href || here === encodeURI(href) ? " on" : ""), onclick: () => go(href) }, label);
   if (cfg) { kids.push(h("div", { class: "ttl", html: svg(cfg.icon) + `<span>${cfg.title}</span>` })); for (const [g, links] of cfg.groups) kids.push(h("div", { class: "g" }, g), links.map(([l, href]) => link(l, href))); }
-  else if (name === "notes") {
-    const above = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range" && !r.duplicate_of && r.range && r.gap_pct - r.range[1] >= 2);
-    kids.push(h("div", { class: "ttl", html: svg("bell") + "<span>Notifications</span>" }), h("div", { class: "tabs2" }, h("b", {}, "Messages"), h("span", {}, "System Messages")),
-      above.length ? above.map(r => h("button", { type: "button", class: "lnk", onclick: () => go("detail:" + keyOf(r)) }, `${r.code}: the mill's quote is ${pc(r.gap_pct)} against should-cost, above the usual range`)) : h("div", { class: "empty" }, "No Unread Message!"),
-      h("div", { class: "btnrow" }, h("button", { type: "button", onclick: () => toast("Archived") }, "Archive"), h("button", { type: "button", onclick: () => toast("Marked as read") }, "Mark As Read")));
-  } else if (name === "recent") {
-    kids.push(h("div", { class: "ttl", html: svg("clock") + "<span>Recent Visits</span>" }), state.recent.length ? state.recent.map(v => h("button", { type: "button", class: "lnk", onclick: () => go("detail:" + v.key) }, h("span", {}, h("b", {}, v.code), ` · ${ago(v.at)}`))) : h("div", { class: "empty" }, "No visits yet. Open a fabric code from the list."));
-  } else if (name === "bookmarks") {
-    kids.push(h("div", { class: "ttl", html: svg("bookmark") + "<span>Bookmarks</span>" }), state.bookmarks.length ? state.bookmarks.map(b => link(b.label, b.href)) : h("div", { class: "empty" }, "No Bookmarked Pages! Open a flyout, point at a link and click the bookmark mark beside it."));
-  } else if (name === "downloads") {
-    kids.push(h("div", { class: "ttl", html: svg("download") + "<span>Download Center</span>" }), h("div", { class: "note" }, "Files made in this visit. The browser keeps the files themselves."),
-      state.downloads.length ? state.downloads.map(d => h("div", { class: "lnk" }, `${d.name} · ${ago(d.at)}`)) : h("div", { class: "empty", style: "margin-top:8px" }, "No downloads yet."));
-  } else if (name === "profile") {
-    kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), h("div", { class: "note" }, state.me.email || "RightPrice"), h("div", { class: "g" }, "Account"),
-      h("button", { type: "button", class: "lnk", onclick: () => go("/#settings") }, "User Preferences"), h("button", { type: "button", class: "lnk", onclick: () => go("/.auth/logout") }, "Log Out"));
+  else if (name === "profile") {
+    const dark = document.documentElement.dataset.theme === "dark";
+    kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), state.me.email ? h("div", { class: "note" }, state.me.email) : null,
+      h("div", { class: "g" }, "Settings"),
+      h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
+      link("Calculation settings", "#settings"), link("Rate tables", "#rates"),
+      h("div", { class: "g" }, "Account"),
+      h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/classic/"; } }, "Earlier screens (classic)"),
+      h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
   fill(fly, ...kids); fly.hidden = false;
   if (!openFly.bound) { openFly.bound = true; fly.addEventListener("mouseleave", () => { if (openFly.hover) { fly.hidden = true; railActive(); } }); }
   openFly.hover = !!hover;
 }
 
+// ------------------------------------------------------------------ pages: the address decides
+function route() {
+  const hsh = decodeURIComponent(location.hash.slice(1)) || "dashboard", [id, ...rest] = hsh.split("/");
+  document.querySelectorAll(".menu, .side, .colpanel").forEach(e => e.remove()); $("#drawer").hidden = true; $("#flyout").hidden = true;
+  state.frame = null; state.library = null;
+  if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || "item", editing: false }; }
+  else state.detail = null;
+  if (id === "lib") state.library = { name: rest.join("/"), page: 0, size: 20 };
+  else if (CONFIG.frames[id]) state.frame = hsh;
+  else if (id !== "rightcost" && id !== "item") state.frame = "dashboard";
+  railActive(); render();
+  document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
+}
+function renderFrame(main) {
+  const id = state.frame.split("/")[0], [section, title] = CONFIG.frames[id];
+  const tabs = h("div", { class: "tabs", role: "tablist" }, CONFIG.sections[section].map(k => h("button", { type: "button", role: "tab", class: "tab" + (k === id ? " on" : ""), "aria-selected": String(k === id), onclick: () => { location.hash = "#" + k; } }, CONFIG.frames[k][1])));
+  const src = `/?embed=1&bare=1&in=page#${state.frame}`;
+  let frame = main.querySelector("iframe.frame");
+  if (!frame || frame.dataset.src !== src) { frame = h("iframe", { class: "frame", src, title, "data-src": src }); frame.addEventListener("load", () => syncFrameTheme(frame)); }
+  fill(main, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", section, "\u00A0\u203A\u00A0", h("span", {}, title)),
+    h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, title)), tabs), newCostButton()), frame);
+  $("#selbar").hidden = true;
+}
+function syncFrameTheme(frame) { try { frame.contentDocument.documentElement.dataset.theme = document.documentElement.dataset.theme; } catch (e) { /* not loaded */ } }
+const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
+
 function render() {
   const main = $("#main");
+  if (state.frame) return renderFrame(main);
   if (state.library) return renderLibrary(main);
   if (state.detail) return renderDetail(main);
   const mod = CONFIG.modules.costs, rows = filtered(), cls = mod.classes.find(c => c[0] === state.cls) || mod.classes[0];
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", mod.crumbs[0], "›", h("span", {}, cls[1]));
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", CONFIG.appName, "\u00A0\u203A\u00A0", h("span", {}, cls[1]));
   const title = h("button", { type: "button", class: "title", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.classes.map(([k, label]) => ({ label: `${label} (${k === "*" ? state.rows.length : state.counts[k] || 0})`, on: k === state.cls, run: () => { state.cls = k; store.set("cls", k); state.selection.clear(); rerunWithSkeleton(); } }))) },
     CONFIG.appName, h("span", { class: "caret" }, "▾"));
-  const fab = tipOn(h("button", { type: "button", class: "fab", html: svg("plus"), onclick: () => openCostPopup() }), "Create cost: cost a new fabric");
-  const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label, h("span", { class: "dots", "aria-hidden": "true" }, "⋮"))), fab);
-  fill(main, crumbs, h("div", {}, title, h("span", { style: "margin-left:12px;color:var(--text2);font-size:13px" }, cls[1])), tabs, toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
+  const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label)));
+  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1])), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
-  const badge = $("#notebadge"); if (badge) { const n = state.rows.filter(r => r.source === "Fabric list" && r.band === "Above range" && !r.duplicate_of && r.range && r.gap_pct - r.range[1] >= 2).length; badge.hidden = !n; badge.textContent = n; }
 }
 
 function toolbar(rows) {
@@ -471,6 +482,7 @@ function renderSelbar() {
         { label: "Add Items to Save Search", run: () => addToSaved(picked) },
         { label: "Download Selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
         { label: picked.length === 1 ? "Open in Cost a fabric" : "Open in Cost a fabric (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
+        { label: "Negotiation pack for the ticked rows", run: () => moreAction("Negotiation pack", picked) },
       ], { right: true }))] : null);
 }
 
@@ -492,18 +504,18 @@ function quickView(r) {
   document.body.append(p);
 }
 function openDetail(r) {
-  closeLayers(); state.library = null;
+  closeLayers(); state.library = null; state.frame = null;
   state.detail = { key: keyOf(r), tab: "item", editing: false };
-  if (decodeURIComponent(location.hash.slice(1)) !== "item/" + keyOf(r)) history.pushState(null, "", "#item/" + encodeURIComponent(keyOf(r)));
+  if (decodeURIComponent(location.hash.slice(1)) !== "item/" + keyOf(r)) { location.hash = "#item/" + encodeURIComponent(keyOf(r)); return; }
   state.recent = [{ key: keyOf(r), code: r.code, at: new Date().toISOString() }, ...state.recent.filter(v => v.key !== keyOf(r))].slice(0, 12); store.set("recent", state.recent);
   scrollTo(0, 0); render();
 }
 function renderDetail(main) {
   const r = state.rows.find(x => keyOf(x) === state.detail.key);
-  if (!r) { state.detail = null; return render(); }
+  if (!r) { if (!state.rows.length) return fill(main, h("div", { class: "empty" }, "Loading\u2026")); location.hash = "#rightcost"; return; }
   const d = state.detail, k = keyOf(r);
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Costing", "›", h("button", { type: "button", onclick: () => { state.detail = null; history.pushState(null, "", location.pathname); render(); } }, CONFIG.appName), "›", h("span", {}, r.code));
-  const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.detail = null; state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; render(); }),
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", h("button", { type: "button", onclick: () => { location.hash = "#rightcost"; } }, CONFIG.appName), "\u00A0\u203A\u00A0", h("span", {}, r.code));
+  const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; location.hash = "#rightcost"; }),
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
     ib("open", "Open in Cost a fabric", () => openCostPopup(r)));
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
@@ -560,18 +572,32 @@ async function negotiationTab(r, box) {
   } catch (e) { box.textContent = "Could not work it out: " + e.message; }
 }
 
-// ------------------------------------------------------------------ Cost a fabric in a popup
-function openCostPopup(r) {
+// ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
+/* One window over the page with the four costing screens as tabs. They are the earlier screens, in one
+   frame, so a fabric opened from the list in Bulk upload carries on in Create cost. */
+function openPopup(tab = "cost", r = null) {
   closeLayers();
-  const frame = h("iframe", { src: "/?embed=1#cost", title: "Cost a fabric" });
+  document.querySelectorAll(".scrim[data-popup]").forEach(e => e.remove());
+  const frame = h("iframe", { src: `/?embed=1&bare=1#${tab}`, title: "Costing" });
   const close = () => { s.remove(); load(); };
-  const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "Create cost" },
-    h("div", { class: "ph" }, h("h2", {}, r ? `Cost ${r.code}${r.source === "Purchase orders" ? " (a purchase order: Add to list copies it into the fabric list)" : ""}` : "Create cost"), h("div", { style: "display:flex;gap:8px;align-items:center" }, h("span", { style: "color:var(--text2);font-size:11px" }, "Add to list keeps it; it then shows here under Fabric list"), ib("x", "Close", close))), frame);
+  const tabs = h("div", { class: "ptabs", role: "tablist" });
+  const mark = id => tabs.querySelectorAll(".ptab").forEach(b => { const on = b.dataset.tab === id; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); });
+  for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => { try { frame.contentWindow.location.hash = "#" + id; } catch (e) { frame.src = `/?embed=1&bare=1#${id}`; } mark(id); } }, label));
+  mark(tab);
+  const note = r ? h("span", { class: "pnote" }, `${r.code}${r.source === "Purchase orders" ? ": a purchase order (its price was paid); Add to list copies it into the fabric list" : ""}`) : null;
+  const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "Costing" },
+    h("div", { class: "ph" }, h("div", { style: "display:flex;gap:14px;align-items:center;flex-wrap:wrap" }, h("h2", {}, "New cost"), tabs, note), ib("x", "Close", close)), frame);
   const s = h("div", { class: "scrim", onmousedown: e => { if (e.target === s) close(); } }, pop);
   s.dataset.popup = "1";
-  frame.addEventListener("load", () => { const w = frame.contentWindow; const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); });
+  frame.addEventListener("load", () => {
+    syncFrameTheme(frame);
+    const w = frame.contentWindow;
+    w.addEventListener("hashchange", () => mark((w.location.hash.slice(1) || "cost").split("/")[0]));
+    if (tab === "cost" && r !== undefined) { const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); }
+  });
   $("#layer").append(s);
 }
+const openCostPopup = r => openPopup("cost", r || null);
 
 // ------------------------------------------------------------------ Library: setup lists (kept in this browser)
 function libSeed(name) {
@@ -588,7 +614,7 @@ function renderLibrary(main) {
   const shown = rows.slice(L.page * L.size, (L.page + 1) * L.size);
   const clean = x => x.map(r => ({ name: r.name, active: r.active }));
   const changed = JSON.stringify(clean(rows)) !== JSON.stringify(clean(base()));
-  const crumbs = h("div", { class: "crumb" }, h("a", { href: "/#dashboard", html: svg("home", 'width="12" height="12"') }), "›", "Library", "›", h("span", {}, L.name));
+  const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", "Prices", "\u00A0\u203A\u00A0", h("span", {}, L.name));
   const tools = h("div", { class: "toolbar" },
     h("button", { type: "button", class: "btn fill", disabled: !changed || null, onclick: () => { state.libs[L.name] = clean(rows).filter(r => r.name.trim()); store.set("libs", state.libs); L.draft = null; toast("Saved Successfully!"); render(); } }, "Save"),
     h("button", { type: "button", class: "btn line", onclick: () => { rows.push({ name: "", active: true }); L.page = Math.ceil(rows.length / L.size) - 1; render(); const ins = document.querySelectorAll(".libname"); if (ins.length) ins[ins.length - 1].focus(); } }, "Add"),
@@ -604,7 +630,7 @@ function renderLibrary(main) {
   const pager = h("div", { class: "toolbar", style: "justify-content:flex-end" },
     h("button", { type: "button", class: "btn", "aria-label": "Previous page", disabled: L.page === 0 || null, onclick: () => { L.page--; render(); } }, "‹"),
     h("span", { class: "count" }, `Page ${L.page + 1} of ${pages}`),
-    h("button", { type: "button", class: "btn", "aria-label": "Next page", disabled: L.page >= pages - 1 || null, onclick: () => { L.page++; render(); } }, "›"),
+    h("button", { type: "button", class: "btn", "aria-label": "Next page", disabled: L.page >= pages - 1 || null, onclick: () => { L.page++; render(); } }, "\u00A0\u203A\u00A0"),
     [20, 50, 100].map(n => h("button", { type: "button", class: "btn" + (L.size === n ? " fill" : ""), onclick: () => { L.size = n; L.page = 0; render(); } }, String(n))));
   fill(main, crumbs, h("h1", { class: "title", style: "cursor:default" }, L.name),
     h("p", { style: "color:var(--text2);font-size:11px" }, "A setup list kept in this browser. RightPrice's costing does not read it yet."), tools, table, pager);
@@ -613,6 +639,7 @@ function renderLibrary(main) {
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = t; try { localStorage.setItem("rp-theme", t); } catch (e) { /* kept for this visit */ }
+  document.querySelectorAll("iframe").forEach(syncFrameTheme);
   toast(t === "dark" ? "Dark" : "Light");
 }
 async function whoAmI() {
@@ -677,20 +704,15 @@ function saveEdits() {
   store.set("edits", state.edits); state.pending = {}; toast("Saved Successfully!"); render();
 }
 function moreAction(a, rows) {
-  const src = state.cls === "*" ? null : state.cls;
-  if (a === "Download Excel") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("Download Excel ready – see Downloads")).catch(e => toast(e.message, false));
-  else if (a === "Download Excel with Images") download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("RightPrice holds no fabric images, so the file has none – see Downloads")).catch(e => toast(e.message, false));
-  else if (a === "Bulk Upload") location.href = "/#bulk";
-  else if (a === "Download Templatised Data") { location.href = "/api/template"; state.downloads.unshift({ name: "RightPrice template.xlsx", at: new Date().toISOString() }); toast("Template downloading – see Downloads"); }
-  else if (a === "Negotiation Pack") {
-    // the pack is made from the fabric list (mill sheets): ticked fabric-list rows travel with it
+  if (a === "Download Excel") return download("/api/costs/download", { keys: rows.map(keyOf), extra: extras(rows) }, "RightCost.xlsx").then(() => toast("Excel downloaded")).catch(e => toast(e.message, false));
+  const tab = { "Create cost": "cost", "Bulk upload": "bulk", "Compare": "compare", "Negotiation pack": "pack" }[a];
+  if (tab === "pack") {
+    // the pack is made from the fabric list (mill sheets): ticked fabric-list rows go with it
     const ids = state.rows.filter(r => r.source === "Fabric list" && state.selection.has(keyOf(r)) && r.id).map(r => r.id);
     try { if (ids.length) sessionStorage.setItem("rp-pack-ids", JSON.stringify(ids)); else sessionStorage.removeItem("rp-pack-ids"); } catch (e) { /* no handover */ }
-    if (state.cls === "Purchase orders") toast("The pack is made from the fabric list (mill sheets), not from purchase orders", false);
-    setTimeout(() => { location.href = "/#pack"; }, state.cls === "Purchase orders" ? 1200 : 0);
+    if (state.cls === "Purchase orders" && state.selection.size) toast("The pack is made from the fabric list (mill sheets), not from purchase orders", false);
   }
-  else toast(`${a}: the Dashboard and Pilot results hold the reports`, false);
-  void src;
+  if (tab) openPopup(tab);
 }
 function startResize(e, c) {
   e.preventDefault(); e.stopPropagation();
@@ -729,7 +751,7 @@ function openDrawer() {
   const list = h("div", { class: "body" });
   const paintList = q => fill(list, ...attrs.filter(a => !q || a.label.toLowerCase().includes(q)).map(a => {
     const cnt = Array.isArray(draft[a.id]) ? draft[a.id].length : draft[a.id] ? 1 : 0;
-    const box = h("div", { class: "attr" }, h("button", { type: "button", "aria-expanded": String(open.has(a.id)), onclick: () => { open.has(a.id) ? open.delete(a.id) : open.add(a.id); paintList(q); } }, h("span", {}, a.label, cnt ? h("span", { class: "cnt" }, `(${cnt})`) : null), h("span", {}, open.has(a.id) ? "⌄" : "›")));
+    const box = h("div", { class: "attr" }, h("button", { type: "button", "aria-expanded": String(open.has(a.id)), onclick: () => { open.has(a.id) ? open.delete(a.id) : open.add(a.id); paintList(q); } }, h("span", {}, a.label, cnt ? h("span", { class: "cnt" }, `(${cnt})`) : null), h("span", {}, open.has(a.id) ? "⌄" : "\u00A0\u203A\u00A0")));
     if (open.has(a.id)) {
       if (a.num || a.date) {
         const f = draft[a.id] || (a.date ? { date: true, from: "", to: "" } : { min: "", max: "" });
@@ -769,13 +791,13 @@ addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail) { e.preventDefault(); const s = $("#search"); if (s) s.focus(); }
 });
 // the address follows the page: #item/<source|code> is a fabric's detail page; Back returns to the list
-function fromHash() {
-  const hsh = decodeURIComponent(location.hash.slice(1));
-  if (hsh.startsWith("item/")) { const r = state.rows.find(x => keyOf(x) === hsh.slice(5)); if (r) { if (!state.detail || state.detail.key !== keyOf(r)) openDetail(r); return; } }
-  if (state.detail) { state.detail = null; render(); }
-}
-addEventListener("popstate", fromHash);
-addEventListener("message", e => { if (e.origin === location.origin && e.data && e.data.rp === "listChanged") load(); });
+addEventListener("hashchange", route);
+addEventListener("message", e => {
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.rp === "listChanged") load();
+  // a screen shown in the page asked for one of the costing screens: they live in the popup
+  if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
+});
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
@@ -784,7 +806,7 @@ async function load() {
     state.rows = d.rows; state.counts = d.counts;
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
-    render(); fromHash();
+    if (!state.frame) render();
   } catch (err) { fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
-renderRail(); render(); load(); whoAmI();
+renderRail(); route(); load(); whoAmI();

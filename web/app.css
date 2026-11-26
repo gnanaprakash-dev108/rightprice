@@ -538,6 +538,21 @@ table.list td.remarks div + div { margin-top: 3px; }
 }
 @media print { table { width: 100% !important; table-layout: auto; } td, th { overflow-wrap: anywhere; } }
 @media print { .pack-tools { display: none !important; } }
+/* inside the shell: the shell's palette and font, no page list, no header */
+html.embed {
+  --font: Manrope, "Segoe UI", system-ui, sans-serif; --radius: 14px;
+  --bg: #F6F4EE; --panel: #FFFFFF; --panel2: #FBFAF6; --border: #E5E1D6; --text: #1D2521; --muted: #5C665F; --faint: #66706A;
+  --accent: #1F6F4A; --accent-fill: #2F8F63; --accent-soft: #E3F1E8; --on-accent: #FFFFFF; --total: #2B3A33; --track: #ECE8DD;
+  --shadow: 0 1px 2px rgba(29, 37, 33, .06), 0 6px 18px rgba(29, 37, 33, .05);
+}
+html.embed[data-theme="dark"] {
+  --bg: #0F1513; --panel: #161E1B; --panel2: #131A17; --border: #2A3530; --text: #E8EDE9; --muted: #A3AEA7; --faint: #9DA8A1;
+  --accent: #7DD3A8; --accent-fill: #2F8F63; --accent-soft: #173327; --on-accent: #08140E; --total: #C6CEC8; --track: #1C2622; --shadow: none;
+}
+html.embed .btn.primary { background: #F2B23E; border-color: #F2B23E; color: #2A1D05; }
+html.embed h1 { font-weight: 800; letter-spacing: -.02em; }
+html.bare #main > h1:first-child { display: none; }
+html.bare .pane-head h1 { display: none; }
 /* inside Right cost's popup: Cost a fabric alone */
 html.embed .side, html.embed .top, html.embed .skip { display: none !important; }
 html.embed .shell { display: block; }
