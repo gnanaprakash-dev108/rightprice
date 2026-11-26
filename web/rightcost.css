@@ -282,3 +282,12 @@ table.grid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; ta
 }
 .tabsrow > div { min-width: 0; max-width: 100%; }
 .framehead { flex: none; }
+/* cards keep their own height inside the fixed-height page */
+.main.listpage .cards { align-content: start; grid-auto-rows: max-content; }
+.card { min-height: 0; }
+.card .img { min-height: 60px; }
+.code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: middle; }
+/* dropdowns in the shell's own look */
+select { appearance: none; -webkit-appearance: none; background: var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2366706A' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center; border: 1px solid var(--border); border-radius: 10px; padding: 6px 30px 6px 10px; color: var(--text); }
+.grid td select { padding-right: 24px; background-position: right 6px center; }
+.selbar .btn { height: 32px; }

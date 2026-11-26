@@ -79,7 +79,7 @@ const ICON = {
   pack: '<path d="M8 4h8l3 3v13H5V4z"/><path d="M8 10h8M8 14h8M8 18h5"/>',
 };
 const NAV = [
-  ["Costing", [["dashboard", "Dashboard"], ["rightcost", "Right cost"], ["cost", "Cost a fabric"], ["bulk", "Bulk upload and list"], ["compare", "Compare"], ["pack", "Negotiation pack"]]],
+  ["Costing", [["dashboard", "Dashboard"], ["rightcost", "Right cost"], ["cost", "Create cost"], ["bulk", "Bulk upload and list"], ["compare", "Compare"], ["pack", "Negotiation pack"]]],
   ["Prices", [["yarn", "Yarn prices"], ["cotton", "Cotton prices"], ["intake", "Bring in prices"]]],
   ["Rates", [["rates", "Rate tables"], ["ratecard", "Mill rate card"], ["settings", "Settings"]]],
   ["Analysis", [["pilot", "Pilot results"]]],
@@ -99,7 +99,8 @@ function route() {
   const [id, ...rest] = decodeURIComponent(location.hash.slice(1) || "dashboard").split("/");
   // a page shown inside the shell does not open the costing screens itself: they live in the shell's popup
   if (IN_PAGE && POPUP_PAGES.includes(id)) {
-    parent.postMessage({ rp: "popup", tab: id, choices: id === "cost" && state.sel ? payload(state.sel) : null, listId: state.listId }, location.origin);
+    const move = id === "bulk" && state.listUI && state.listUI.pct !== "" && Number(state.listUI.pct) ? { yarn: state.listUI.yarn, pct: state.listUI.pct } : null;
+    parent.postMessage({ rp: "popup", tab: id, choices: id === "cost" && state.sel ? payload(state.sel) : null, listId: state.listId, move }, location.origin);
     if (route.last) history.replaceState(null, "", "#" + route.last); else history.back();
     return;
   }
@@ -303,7 +304,7 @@ PAGES.dashboard = async () => {
   const yrs = ins.cotton_years.filter(y => y.year >= 2022), ytop = Math.max(...yrs.map(y => y.average), 1), last = yrs[yrs.length - 1];
   nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "3. Cost trend, 2022 to 2026: cotton"), h("div", { class: "sub", style: "margin:2px 0 0" }, "Shankar-6 cotton, average of the year, rupees per candy. Cotton is the trend the tool has data for; the yarn rates are of one date (Nov 2026), so a fabric cost per metre for earlier years cannot be drawn yet."))),
     h("div", { class: "bars" }, yrs.map((y, i) => { const prev = yrs[i - 1]; const chg = prev ? y.average / prev.average - 1 : null; const el = h("div", { class: "bar-row grp", tabindex: "0" }, h("span", { class: "year num" }, String(y.year)), h("div", { class: "bar", style: `width:${y.average / ytop * 56}%;background:var(--g1)` }), h("span", { class: "bar-text" }, h("span", { class: "bar-amt num" }, `Rs ${fmt(y.average, 0)}`), chg === null ? null : h("span", { class: "bar-pct num" }, `${pctSigned(chg * 100)} on ${prev.year}`), y === last ? h("span", { class: "bar-pct" }, `to ${day(y.to)}`) : null)); withTip(el, () => `<b>${y.year}</b>average Rs ${fmt(y.average, 0)} per candy<br>low Rs ${fmt(y.low, 0)}, high Rs ${fmt(y.high, 0)}`); return el; })),
-    h("p", { class: "sub", style: "margin:10px 0 0" }, "To see what a yarn move does to a fabric, use “If yarn prices move” above, or on Cost a fabric. ", h("a", { href: "#cotton" }, "Cotton prices in full"))));
+    h("p", { class: "sub", style: "margin:10px 0 0" }, "To see what a yarn move does to a fabric, use “If yarn prices move” above, or on Create cost. ", h("a", { href: "#cotton" }, "Cotton prices in full"))));
 
   nodes.push(askCard(ins));
 
@@ -328,7 +329,7 @@ function askCard(ins) {
   const above = firm.map(s => `${s.supplier} ${pctSigned(s.gap)} on ${s.fabrics} fabrics`).join(", ");
   const qty = p ? p.quantity.filter(x => x.paid).map(x => `${x.band}: Rs ${fmt(x.paid, 0)}`).join("; ") : "";
   const items = [
-    ["What should this fabric cost, and how sure is the figure?", `Cost it on Cost a fabric, or load the mill's sheet under Bulk upload. ${p ? `Across ${fmt(p.fabrics, 0)} of your cotton purchases the should-cost lands within 10% of the price paid for ${pct(p.within10, 0)} of fabrics, with a median gap of ${pctSigned(p.median_gap)}.` : ""} What counts as in line depends on the fabric type: the negotiation brief uses the range where half your past purchases of that type were priced (panel 1, middle half), kept between 5% and 10% either way.`],
+    ["What should this fabric cost, and how sure is the figure?", `Cost it on Create cost, or load the mill's sheet under Bulk upload. ${p ? `Across ${fmt(p.fabrics, 0)} of your cotton purchases the should-cost lands within 10% of the price paid for ${pct(p.within10, 0)} of fabrics, with a median gap of ${pctSigned(p.median_gap)}.` : ""} What counts as in line depends on the fabric type: the negotiation brief uses the range where half your past purchases of that type were priced (panel 1, middle half), kept between 5% and 10% either way.`],
     ["The mill says yarn has gone up. How much should the fabric go up?", `Not by the same percentage. On the reference shirting 5% on yarn is about ${(share * 5).toFixed(1)}% on the fabric, and each Rs 10 a kilo is ${rs(ref.warp_per_10 + ref.weft_per_10)} a metre for warp and weft together. Ask which count went up, from what rate to what, and on what date; then move that yarn in “If yarn prices move”.`],
     ["What is the base price, for which construction, and what do I pay for each extra end and pick?", "Ask for the standard EPI and PPI behind the base price. On Arvind's rate card an extra end is Rs 0.60 and an extra pick Rs 0.90 (Rs 1.00 above 90 picks); on their sheet the base for 40s yarn dyed twill is Rs 164 at 122 \u00D7 76. Other mills will have their own figures: ask for them in the same form. The list under Bulk upload checks every row of a mill's sheet: base plus upcharges must equal the price."],
     ["Am I paying for a small order, or missing a volume discount?", `Arvind's rate card adds ${small || "a percentage"} for yarn dyed lots below 800 m, and takes off ${disc || "a few rupees"} a metre for volume. The card gives no volume discount on its basic 40s quality, split deliveries or end-of-season orders. ${qty ? `Your median price paid by order size: ${qty}.` : ""} Ask whether lots of the same fabric code can be clubbed to reach the next band.`],
@@ -518,7 +519,7 @@ PAGES.cost = async () => {
   const split = h("div", { class: "cost-split" }, h("div", { class: "pane pane-in", role: "form", "aria-label": "Fabric inputs" }, flow), h("div", { class: "pane pane-out" }, out));
   const fit = () => { if (!split.isConnected) return removeEventListener("resize", fit); split.style.height = innerWidth > 1000 ? Math.max(420, innerHeight - split.getBoundingClientRect().top - scrollY - 14) + "px" : ""; };
   addEventListener("resize", fit); requestAnimationFrame(fit); setTimeout(fit, 300);
-  split.firstChild.prepend(h("div", { class: "pane-head" }, h("h1", {}, "Cost a fabric"), actions));
+  split.firstChild.prepend(h("div", { class: "pane-head" }, h("h1", {}, "Create cost"), actions));
   return [h("p", { class: "sub cost-intro" }, "Work down the steps on the left; each choice decides what the next step asks. The cost on the right updates as you go."), split];
 };
 
@@ -621,7 +622,7 @@ function movedCard(res, re) {
 function waiting(sel) {
   const todo = STEPS.filter(st => st.need);
   let reached = true;
-  return h("div", { class: "card waiting" }, h("h2", {}, "The cost appears here"), h("p", { class: "sub" }, "Finish these steps on the left. Everything after them has a default you can change."),
+  return h("div", { class: "card waiting" }, h("h2", {}, "The cost appears here"), h("p", { class: "sub" }, "Finish these steps. Everything after them has a default you can change."),
     h("ol", { class: "todo" }, todo.map(st => { const ok = reached && st.done(sel); if (!ok) reached = false; return h("li", { class: ok ? "ok" : "" }, h("span", { "aria-hidden": "true" }, ok ? "✓" : "○"), " ", st.need, ok ? h("span", { class: "visually-hidden" }, " (done)") : null); })));
 }
 
@@ -886,7 +887,7 @@ PAGES.compare = async () => {
   if (state.sel && ready(state.sel)) sources.push({ id: "now", label: (EMBED ? "Open in Create cost now" : "On the Cost a fabric page now") + (state.sel["Fabric code"] ? ": " + state.sel["Fabric code"] : ""), inputs: payload(state.sel) });
   for (const r of list.rows) if (r.inputs && !r.problems.length) sources.push({ id: r.id, label: [r.mill["Fab Code"], r.supplier, r.description, "added " + day(r.added)].filter(v => !blank(v)).join(" \u00B7 "), inputs: r.inputs });
   const head = pageHead("Compare", "Two fabrics from the list side by side, both on today's rates: two suppliers' quotes for one fabric, or one fabric built two ways.");
-  if (sources.length < 2) return [...head, h("div", { class: "card" }, h("p", { class: "empty" }, "Comparing needs two costed fabrics in the list. Upload a sheet under Bulk upload, or cost a fabric and press Add to list; a fabric open on Cost a fabric counts as one."), h("a", { class: "btn primary", href: "#cost" }, "Cost a fabric"))];
+  if (sources.length < 2) return [...head, h("div", { class: "card" }, h("p", { class: "empty" }, "Comparing needs two costed fabrics in the list. Upload a sheet under Bulk upload, or cost a fabric and press Add to list; a fabric open on Create cost counts as one."), h("a", { class: "btn primary", href: "#cost" }, "Create cost"))];
   const pickBox = (id, label, start) => { const sel = h("select", { id }, sources.map(s => h("option", { value: s.id }, s.label))); sel.value = sources[start].id; return [h("div", { class: "field" }, h("label", { for: id }, label), sel), sel]; };
   state.cmp = state.cmp || {};
   try { const ids = JSON.parse(sessionStorage.getItem("rp-compare-ids") || "null"); sessionStorage.removeItem("rp-compare-ids"); if (ids && ids.length === 2) state.cmp = { a: ids[0], b: ids[1] }; } catch (e) { /* none handed over */ }
@@ -952,6 +953,8 @@ PAGES.bulk = async (arg) => {
   state.listUI = state.listUI || { groups: { Fabric: true, Order: false, "Mill's price build-up": true }, picked: new Set(), filter: "", show: "all" };
   const ui = state.listUI;
   if (ui.yarn === undefined) ui.yarn = "*"; if (ui.pct === undefined) ui.pct = ""; if (ui.byStake === undefined) ui.byStake = false;
+  // a yarn move handed over from the Dashboard (through the shell), applied once
+  try { const mv = JSON.parse(sessionStorage.getItem("rp-list-move") || "null"); sessionStorage.removeItem("rp-list-move"); if (mv) { ui.yarn = mv.yarn; ui.pct = String(mv.pct); } } catch (e) { /* none */ }
   // with a yarn move on, the gap that counts is the one after the move
   const moving = () => ui.pct !== "" && !!Number(ui.pct);
   const gapOf = r => moving() && r.sim_gap !== null && r.sim_gap !== undefined ? { rs: r.sim_gap, pct: r.sim_gap_pct } : { rs: r.gap, pct: r.gap_pct };
@@ -996,7 +999,7 @@ PAGES.bulk = async (arg) => {
       const simCells = sim ? [h("td", { class: "n rp" }, r.simulated === null ? "" : fmt(r.simulated)), h("td", { class: "n rp" }, r.simulated === null || r.should_cost === null ? "" : Math.abs(r.simulated - r.should_cost) < 0.005 ? "no change" : `${r.simulated - r.should_cost >= 0 ? "+" : "\u2212"}${fmt(Math.abs(r.simulated - r.should_cost))}`)] : [];
       return h("tr", { class: ui.picked.has(r.id) ? "picked" : null },
         h("td", { class: "stick s0" }, tick),
-        h("td", { class: "stick s1" }, h("button", { type: "button", class: "linkish", title: "Open in Cost a fabric", onclick: () => openRow(r) }, r.mill["Fab Code"] || "(no code)")),
+        h("td", { class: "stick s1" }, h("button", { type: "button", class: "linkish", title: "Open in Create cost", onclick: () => openRow(r) }, r.mill["Fab Code"] || "(no code)")),
         h("td", { class: "n rp stick s2" }, sc), ...simCells, h("td", { class: "n rp" }, blank(price) ? "" : fmt(price)), h("td", { class: "n rp" }, gap), h("td", { class: "n rp" }, stake === null ? "" : (stake < 0 ? "\u2212" : "") + "Rs " + fmt(Math.abs(stake), 0)), h("td", { class: "rp" }, stanceCell(r)), h("td", { class: "rp" }, sums),
         h("td", { class: "rp remarks" }, rem.length ? rem.map(x => h("div", {}, x)) : ""),
         cols.map(c => h("td", { class: "millcol" + (typeof r.mill[c] === "number" ? " n" : "") }, cell(c, r.mill[c]))));
@@ -1085,9 +1088,9 @@ PAGES.pack = async () => {
   let first;
   try { first = await (await postJSON("/api/pack", move ? { yarn_pct: move } : {})).json(); }
   catch (e) { return [...pageHead("Negotiation pack", "One page for a whole mill sheet, to take into the meeting."), h("p", { class: "empty" }, "The list is empty. Upload a mill's price sheet under Bulk upload and list, then come back here.")]; }
-  const scopes = [["all", `Whole list (${first.totals.rows} rows)`]];
+  const scopes = [["all", `Whole list (${plural(first.totals.rows, "row")})`]];
   if (picked) scopes.push(["picked", `Rows ticked on the list (${picked.length})`]);
-  first.sheets.forEach((g, i) => scopes.push(["sheet" + i, `${g.label} (${g.ids.length} rows)`]));
+  first.sheets.forEach((g, i) => scopes.push(["sheet" + i, `${g.label} (${plural(g.ids.length, "row")})`]));
   // ticked rows on the list win whenever there are any; otherwise the last choice, or the whole list
   if (picked) ui.scope = "picked"; else if (!ui.scope || !scopes.some(x => x[0] === ui.scope)) ui.scope = "all";
   const idsFor = k => k === "all" ? null : k === "picked" ? picked : first.sheets[Number(k.slice(5))].ids;
@@ -1117,7 +1120,7 @@ function packView(p, move, scopeNote) {
     tile("Above should-cost, rows counted", signed(t.counted_stake), `Push ${signed(t.push_stake)} + in line ${signed(t.fair_stake)}${t.count.ask + t.count.check ? `. Not counted: ${plural(t.count.ask + t.count.check, "row")} the tool is unsure of or whose quote needs checking (${signed(t.flagged_stake)})` : ""}`),
     tile(`Push: ${plural(t.count.push, "row")}`, R(t.push_above_range), t.count.push ? `above the usual range, to be justified (${R(t.push_stake)} above should-cost)` : "no row is above its usual range", t.count.push ? "push" : ""),
     tile("Ask for the break-up", plural(t.count.ask, "row"), (t.count.ask ? "the tool is unsure of these; no target is named" : "") + (t.count.check ? `${t.count.ask ? ". " : ""}${plural(t.count.check, "quote")} more than 30% below should-cost to confirm first` : ""), t.count.ask || t.count.check ? "ask" : ""),
-    tile("Mill's sums off", t.sums_money ? R(t.sums_money) : plural(t.sums_off, "row"), t.sums_off ? (t.sums_money ? `charged above what the sheet's own sums give, on ${plural(t.sums_off, "row")}` : "check them; none charges more than its own sums give") : "every row's sums add up", t.sums_off ? "sums" : ""),
+    tile("Mill's sums off", t.sums_money ? R(t.sums_money) : plural(t.sums_off, "row"), t.sums_off ? (t.sums_money ? `charged above what the sheet's own sums give, on ${plural(t.sums_off, "row")}` : "check them; none charges more than its own sums give") : p.rows.some(r => r.has_sheet) ? "every mill-sheet row's sums add up" : "no row comes from a mill sheet, so there are no sums to check", t.sums_off ? "sums" : ""),
     tile(`In line: ${t.count.fair} \u00B7 below: ${t.count.below}`, t.savings ? R(t.savings) : "\u2014", t.savings ? "below should-cost on the rows marked Below: a saving, if the specification holds" : "no row is below its usual range"));
   const byCode = Object.fromEntries(p.rows.map(r => [r.code, r]));
   const lead = p.lead.length ? h("div", { class: "pack-lead" }, h("b", {}, "Lead with: "), p.lead.map((c, i) => { const r = byCode[c]; return h("span", {}, `${i ? "; " : ""}${c}, ${R(r.above_range_money)} above the usual range on ${fmt(r.quantity, 0)} m (quote ${rs(r.quote)}; open at ${rs(r.open_at)}, aim for ${rs(r.upper)})`); }), ".") : (t.count.push ? h("div", { class: "pack-lead" }, h("b", {}, "Nothing large to lead with. "), `The ${plural(t.count.push, "Push row")} ${t.count.push === 1 ? "is" : "are"} only paise above the usual range: ask for the top of the range (the questions below).`) : h("div", { class: "pack-lead" }, h("b", {}, "No row to push on. "), "Every costed row is inside its usual range, below it, or on a fabric type the tool is unsure of."));
@@ -1130,7 +1133,7 @@ function packView(p, move, scopeNote) {
       h("td", { class: "n", "data-l": "Above should-cost" }, `${r.gap >= 0 ? "+" : "−"}${fmt(Math.abs(r.gap))} (${pctSigned(r.gap_pct * 100)})`),
       h("td", { class: "n", "data-l": "At stake" }, r.at_stake === null ? "—" : (r.at_stake < 0 ? "−" : "") + R(r.at_stake)),
       h("td", { "data-l": "What to do" }, r.duplicate_of ? h("span", { class: "tag warn", title: "Same mill reference and quantity as another row: counted once" }, `Duplicate of ${r.duplicate_of}`) : tag(r.stance), !r.duplicate_of && r.stance === "push" ? h("div", { class: "pack-desc" }, `open ${rs(r.open_at)} \u00B7 aim ${rs(r.upper)}`) : null),
-      h("td", { "data-l": "Mill's sums" }, r.sums.length ? h("span", { class: "tag down" }, `✗ ${r.sums.length} off`) : h("span", { class: "tag ok" }, "✓ add up")))))));
+      h("td", { "data-l": "Mill's sums" }, !r.has_sheet ? h("span", { class: "sub", style: "margin:0" }, "no mill sheet") : r.sums.length ? h("span", { class: "tag down" }, `✗ ${r.sums.length} off`) : h("span", { class: "tag ok" }, "✓ add up")))))));
   const qs = rows.flatMap(r => r.questions.map(q => ({ code: r.code, q })));
   const sums = [...p.rows, ...p.not_costed].filter(r => r.sums.length);
   const foot = h("p", { class: "sub pack-foot" }, "Each fabric type has its own usual range: where half your past purchases of it were priced against should-cost, kept at least 5% and at most 10% either way. Push: above it. Fair: inside it. Below: under it, a saving if the specification holds. Check quote: over 30% below should-cost. Ask break-up: the tool is unsure, so no target. Open: as far below the top of the range as the quote is above it, never below should-cost; aim: the top of the range. At stake: printed gap times metres. A row repeating an order (same mill reference and quantity) is counted once.");
@@ -1392,6 +1395,7 @@ const EMBED = QS.get("embed") === "1", IN_PAGE = EMBED && QS.get("in") === "page
 if (EMBED) document.documentElement.classList.add("embed");
 if (QS.get("bare") === "1") document.documentElement.classList.add("bare");      // the shell shows the page's title itself
 const POPUP_PAGES = ["cost", "bulk", "compare", "pack"];
+if (EMBED && !IN_PAGE) addEventListener("keydown", e => { if (e.key === "Escape" && !document.querySelector(".tip:not([hidden])") && parent !== window) parent.postMessage({ rp: "close" }, location.origin); });
 // Right cost opens a costing here: its choices, and the list row it came from (if any)
 window.rpOpen = (choices, listId) => {
   if (!state.meta) return setTimeout(() => window.rpOpen(choices, listId), 100);

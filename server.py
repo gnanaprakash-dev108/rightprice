@@ -290,9 +290,9 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         band_why = "5% either side of should-cost" + ("" if ins and ins[1] else " (there is no purchase history on this server to set it from)")
     else:
         fit = (f"half of the {cat['fabrics']} {typ} fabrics you bought were priced between {cat['p25']:+.1f}% and "
-               f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)")
+               f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)").replace("-", "\u2212")
         adjusted = (lo, hi) != (cat["p25"], cat["p75"])
-        band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%" if adjusted else "")
+        band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%".replace("-", "\u2212") if adjusted else "")
 
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False
@@ -748,6 +748,7 @@ def pack(options: dict = Body(default={})):
         for k in keys:
             seen.setdefault(k, code)
         row["questions"] = [] if row["duplicate_of"] else _questions(row, b, m)
+        row["has_sheet"] = bool(r["from_mill"])
         for k in ("mill", "inputs", "from_mill"):
             row.pop(k)
         rows.append(row)
