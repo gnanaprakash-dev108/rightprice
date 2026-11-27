@@ -32,6 +32,7 @@ REQUIRED = ["Purchasing Document", "Item", "Document Date", "Material", "Order Q
             "Name of Supplier", "Purchasing Doc. Type", "Deletion Indicator", "Currency"]
 SHIPPED_NAME = "Fabric _ 3Months_4746.xlsx (the purchase file that came with the code)"
 STALE = 300                 # seconds without a sign of life after which a job is taken to have stopped (a restart)
+MAX_BYTES = 40 * 1024 * 1024    # a purchase-order file larger than this is refused (the 4-month export is about 4 MB)
 CHUNK = 1000                # order lines written per transaction, so pages are never held up for long
 VENDOR_NO = re.compile(r"^\d+\s+")
 need_db = fab_groups.need_db
@@ -382,6 +383,8 @@ def upload(filename, data, who=""):
     st = need_db()
     if not data:
         raise common.Refused(400, "The file is empty.")
+    if len(data) > MAX_BYTES:
+        raise common.Refused(413, f"The file is {len(data) / 1048576:.0f} MB; files up to {MAX_BYTES // 1048576} MB are read. Split it by months.")
     if not str(filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise common.Refused(400, "Upload the purchase-order export as an Excel workbook (.xlsx), as SAP gives it.")
     with st.tx(write=KIND) as c:

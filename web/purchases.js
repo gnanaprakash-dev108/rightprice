@@ -106,7 +106,8 @@
     try { x = await api("/api/purchases/history?code=" + encodeURIComponent(code)); }
     catch (e) { fill(body, h("p", { class: needsDb(e.message) ? "muted" : "err" }, e.message)); return; }
     const g = x.group, sp = x.spec;
-    const specLine = sp ? [sp.blend_name, sp.dyemethod_name, sp.weavetype_name, `${sp.warpcount} x ${sp.weftcount}`, `${sp.epi} x ${sp.ppi}`, `${sp.finishedwidth} ${sp.finishedwidth_uom}`, sp.finish_name].filter(Boolean).join(" · ") : "No PLM specification for this code";
+    const num = v => v === "" || isNaN(Number(v)) ? v : String(Number(v));
+    const specLine = sp ? "PLM: " + [sp.blend_name, sp.dyemethod_name, sp.weavetype_name, `${sp.warpcount} x ${sp.weftcount}`, `${num(sp.epi)} x ${num(sp.ppi)}`, `${num(sp.finishedwidth)} ${sp.finishedwidth_uom}`, String(sp.finish_name || "").replace(/^F\s*-\s*/, "")].filter(Boolean).join(" · ") : "No PLM specification for this code";
     const pts = x.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, series: "this", text: `${l.mill}, order ${l.po}/${l.item}` }));
     if (g) for (const l of g.lines) if (l.code !== x.code) pts.push({ date: l.date, price: l.price, metres: l.metres, series: "group", text: `${l.code}, ${l.mill}` });
     const series = [{ key: "this", name: `This code, ${x.code}`, cls: "s1", big: true }, { key: "group", name: g ? `Other codes of ${g.code} (the same construction, any colour)` : "", cls: "s0" }];
