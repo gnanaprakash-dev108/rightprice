@@ -2,6 +2,7 @@
 import datetime as dt
 import os
 import io
+import re
 import pandas as pd
 from rules import common
 import masters
@@ -52,6 +53,21 @@ EDITABLE = set(TABLES) - {"Cotton_Prices", "Content_Groups"}
 
 _stash = {}       # tables read by the price intake, waiting for their columns to be chosen
 
+# RULE: a rate is never below zero; the rates always paid for are above zero. Adds, uplifts, points, upcharges and
+# discounts may be below zero (a cheaper mill tier, a lighter weave, a smaller order slab), as before.
+NOT_BELOW_ZERO = {"Yarn_Rates": ["Rate Rs/kg", "Count Ne (resultant)"], "Market_Yarn": ["Low Rs/kg", "High Rs/kg"],
+                  "Weaving_Rates": ["Rs per pick"], "Sizing_Rates": ["Rs per kg warp", "Warp count up to (Ne)"],
+                  "Yarn_Dyeing": ["Rs per kg yarn"], "Piece_Dyeing": ["Rs per kg greige"],
+                  "Finishing_Rates": ["Rs per kg greige (yarn dyed)", "Rs per kg greige (piece dyed / RFD / printed)"],
+                  "Print_Methods": ["Rs per metre"], "Dobby_Charges": ["Rs per metre"], "Weft_Options": ["Rs per metre"],
+                  "Class_Defaults": ["Warp crimp", "Warp wastage", "Weft crimp (old method only)", "Weft wastage", "Process wastage",
+                                     "Overhead", "Margin"],
+                  "Mill_Sheet_Terms": ["Per end Rs", "Per pick up to 90 Rs", "Per pick above 90 Rs", "C2FO factor"]}
+ABOVE_ZERO = {"Yarn_Rates": ["Rate Rs/kg", "Count Ne (resultant)"], "Market_Yarn": ["Low Rs/kg", "High Rs/kg"],
+              "Weaving_Rates": ["Rs per pick"], "Sizing_Rates": ["Rs per kg warp", "Warp count up to (Ne)"],
+              "Piece_Dyeing": ["Rs per kg greige"], "Finishing_Rates": ["Rs per kg greige (yarn dyed)"],
+              "Mill_Sheet_Terms": ["Per end Rs", "Per pick up to 90 Rs", "Per pick above 90 Rs", "C2FO factor"]}
+
 
 def save_masters(m, reason="Rate master edited", who=""):
     """Write the rate master. The first change of each day keeps a dated copy of what was there (in a database, every
@@ -83,6 +99,16 @@ def save_table(sheet: str, payload: dict, who: str = ""):
             df[col] = num
         else:
             df[col] = text
+    for col in NOT_BELOW_ZERO.get(sheet, ()):                 # RULE: no rate below zero, and none of zero where a rate is always paid
+        if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+            below = df.index[df[col] < 0].tolist()
+            if below:
+                raise common.Refused(400, f"'{col}' cannot be below zero (row {below[0] + 1})")
+    for col in ABOVE_ZERO.get(sheet, ()):
+        if col in df.columns:
+            zero = df.index[df[col] <= 0].tolist()
+            if zero:
+                raise common.Refused(400, f"'{col}' must be above zero (row {zero[0] + 1}): a rate of 0 cannot be right")
     key = old.columns[0]
     if sheet != "Market_Yarn":
         if df[key].isna().any():
@@ -110,6 +136,8 @@ def add_cotton(payload: dict, who: str = ""):
         raise common.Refused(400, "A date and a price in rupees per candy are both needed")
     if price <= 0:
         raise common.Refused(400, "The price must be above zero")
+    if date > dt.date.today().isoformat():
+        raise common.Refused(400, f"The date {date} is still to come: a cotton price is for a day that has been")
     last = cot.iloc[-1] if len(cot) else {"Variety": "Shankar-6", "Unit": "Rs per candy", "Source": ""}
     row = {"Date": date, "Variety": last["Variety"], "Price": price, "Unit": last["Unit"],
            "Source": str(payload.get("source") or "").strip() or "Typed in the tool"}
@@ -221,10 +249,21 @@ def intake_file(filename, data):
     raise common.Refused(400, "Use an Excel, CSV, PDF or picture file")
 
 
+def _public(url):
+    """The address, if Bring in prices may read it (price_import.not_public: public http or https only); else refused."""
+    why = pi.not_public(url)
+    if why:
+        raise common.Refused(400, why + " Nothing was read.")
+    return url
+
+
 def intake_link(payload: dict):
     url = str(payload.get("url") or "").strip()
     if not url:
         raise common.Refused(400, "Give a page address")
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = "https://" + url                      # a page address typed without http(s)://
+    _public(url)
     try:
         kind, got = pi.fetch_link(url)
         if kind == "pdf":
@@ -243,6 +282,10 @@ def intake_api(payload: dict):
     url = str(payload.get("url") or "").strip()
     if not url:
         raise common.Refused(400, "Give the endpoint address")
+    name = str(payload.get("header_name") or "").strip().lower()
+    if name.startswith("x-ms-") or name in ("cookie", "host"):
+        raise common.Refused(400, "That header is not sent: RightPrice never passes on sign-in, cookie or host headers. Nothing was read.")
+    _public(url)
     try:        # the key is used for this one call and is not stored
         return _tables({"Reply": pi.fetch_api(url, payload.get("header_name"), payload.get("header_value"))}, url)
     except Exception as e:
@@ -270,6 +313,9 @@ def intake_add(payload: dict, who: str = ""):
     good = pi.clean_stage(pd.DataFrame(payload.get("rows", []), columns=pi.STAGE_COLS))
     if good.empty:
         raise common.Refused(400, "No complete rows: each row needs a count and a rate")
+    low = good[(good["Low Rs/kg"] <= 0) | (good["High Rs/kg"] <= 0)]
+    if len(low):
+        raise common.Refused(400, f"A yarn rate must be above zero: the row for {low.iloc[0]['Count']} has {low.iloc[0]['Low Rs/kg']:g}. Nothing was added.")
     if payload.get("source"):
         good["Source"] = good["Source"].fillna(payload["source"])
     m = dict(common.get_masters())

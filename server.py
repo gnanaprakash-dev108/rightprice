@@ -365,9 +365,9 @@ def costsheet_view():
 
 
 @app.post("/api/costsheet/upload")
-async def costsheet_upload(file: UploadFile = File(...)):
+async def costsheet_upload(request: Request, file: UploadFile = File(...)):
     data = await file.read()
-    return await asyncio.to_thread(costsheets.costsheet_upload, file.filename, data)
+    return await asyncio.to_thread(costsheets.costsheet_upload, file.filename, data, _who(request))
 
 
 @app.post("/api/costsheet/remove")
