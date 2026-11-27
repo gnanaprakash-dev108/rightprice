@@ -1135,6 +1135,7 @@ addEventListener("focus", catchUp); document.addEventListener("visibilitychange"
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
+  if (!can("page:rightcost")) return;           // a role without Right cost has no costings to load
   try {
     const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];

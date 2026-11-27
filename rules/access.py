@@ -15,7 +15,8 @@ With it:
 
 The person comes from Azure App Service's sign-in headers (X-MS-CLIENT-PRINCIPAL-NAME and X-MS-CLIENT-PRINCIPAL), which
 requests from outside cannot set: Microsoft, "Work with user identities in AuthN/AuthZ" (read 27 Nov 2026). People are
-known by their e-mail address, lower case.
+known by their e-mail address, lower case. Off Azure anyone can send those headers: switch permissions on only where the
+app is reached through App Service's sign-in (on a laptop, leave RIGHTPRICE_ADMINS unset).
 
 The MCP token (RIGHTPRICE_MCP_TOKEN, server.py McpGate) is its own fixed role, "AI assistant": what its tools do today
 (ASSISTANT_TOOLS), not changed on the admin page.

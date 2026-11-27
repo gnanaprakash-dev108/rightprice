@@ -21,6 +21,7 @@ import subprocess
 import sys
 from contextlib import asynccontextmanager
 
+import anyio.to_thread
 import httpx
 import websockets
 from fastapi import Body, FastAPI, File, Request, UploadFile, WebSocket
@@ -208,7 +209,8 @@ class AccessGate:
         if need == access.PUBLIC:
             return await self.inner(scope, receive, send)
         headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers") or []}
-        refused = await asyncio.to_thread(access.check, headers, need)     # may read the database: not on the server's own loop
+        # it may read the database: in a worker thread (the app's own pool of 120), never on the server's own loop
+        refused = await anyio.to_thread.run_sync(access.check, headers, need)
         if refused is None:
             return await self.inner(scope, receive, send)
         status, words = refused

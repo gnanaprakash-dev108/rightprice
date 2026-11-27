@@ -89,7 +89,7 @@ function renderUsers(main) {
     editable ? [h("p", {}, h("b", {}, "Permissions are on. "), "Nobody can use RightPrice until they are added here. The server checks every request against the person's role, whatever the screens show."),
       h("p", {}, "Always Admin, from the app setting RIGHTPRICE_ADMINS: ", h("b", {}, v.setting_admins.join(", ") || "(no address)"), ". Add yourself below as Admin too, so you stay an admin if that setting is changed."),
       v.setting_ignored.length ? h("p", { class: "ua-bad" }, `Not read as an e-mail address in that setting, so ignored: ${v.setting_ignored.join(", ")}`) : null]
-      : [h("p", {}, h("b", {}, "Permissions are off. "), v.why_off), h("p", {}, "Until then RightPrice cannot tell an admin from anyone else, so nothing can be changed on this page: what is shown is how it will start. The steps are in docs/AZURE_DEPLOY.md, “Users and roles”.")],
+      : [h("p", {}, h("b", {}, "Permissions are off: "), v.why_off.replace(/^Permissions are off: /, "")), h("p", {}, "Until then RightPrice cannot tell an admin from anyone else, so nothing can be changed on this page: what is shown is how it will start. The steps are in docs/AZURE_DEPLOY.md, “Users and roles”.")],
     h("p", { class: "muted" }, v.marks_note));
   // add a person
   const email = h("input", { type: "email", placeholder: "name@company.com", "aria-label": "E-mail address", autocomplete: "off", disabled: !editable || null });
@@ -112,7 +112,8 @@ function renderUsers(main) {
         const sw = h("button", { type: "button", class: "btn line ua-sm", disabled: !editable || (p.active && p.email === lastAdmin) || null, title: p.active && p.email === lastAdmin ? "The last admin in the list stays on" : null, onclick: ev => {
           const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = p.active ? "Switch off" : "Switch on"; } }, 4000); return; }
           uaChange("/api/users/change", { email: p.email, active: !p.active }, `${p.email} switched ${p.active ? "off" : "on"}`); } }, p.active ? "Switch off" : "Switch on");
-        return h("tr", { class: p.active ? null : "off" }, h("td", {}, p.email, p.email === me ? h("span", { class: "muted" }, " (you)") : null), h("td", {}, nm), h("td", {}, sel),
+        return h("tr", { class: p.active ? null : "off" }, h("td", {}, p.email, p.email === me ? h("span", { class: "muted" }, " (you)") : null), h("td", {}, nm),
+          h("td", {}, sel, v.setting_admins.includes(p.email) && p.role !== "Admin" ? h("div", { class: "muted" }, "Admin while in the app setting") : null),
           h("td", {}, h("span", { class: "ua-state" }, p.active ? "On" : "Switched off"), " ", sw), h("td", { class: "muted" }, uaWhen(p.added_at), p.added_by ? h("div", {}, "by " + p.added_by) : null),
           h("td", { class: "muted" }, p.changed_at ? [uaWhen(p.changed_at), h("div", {}, "by " + p.changed_by)] : ""));
       })))) : h("p", { class: "muted" }, "Nobody is in the list yet."));
