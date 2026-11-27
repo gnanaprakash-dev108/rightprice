@@ -53,7 +53,16 @@ EDITABLE = set(TABLES) - {"Cotton_Prices", "Content_Groups"}
 
 _stash = {}       # tables read by the price intake, waiting for their columns to be chosen
 
-# the rates that are always paid for: zero there is a slip (an upcharge, uplift or add-on may well be zero)
+# RULE: a rate is never below zero; the rates always paid for are above zero. Adds, uplifts, points, upcharges and
+# discounts may be below zero (a cheaper mill tier, a lighter weave, a smaller order slab), as before.
+NOT_BELOW_ZERO = {"Yarn_Rates": ["Rate Rs/kg", "Count Ne (resultant)"], "Market_Yarn": ["Low Rs/kg", "High Rs/kg"],
+                  "Weaving_Rates": ["Rs per pick"], "Sizing_Rates": ["Rs per kg warp", "Warp count up to (Ne)"],
+                  "Yarn_Dyeing": ["Rs per kg yarn"], "Piece_Dyeing": ["Rs per kg greige"],
+                  "Finishing_Rates": ["Rs per kg greige (yarn dyed)", "Rs per kg greige (piece dyed / RFD / printed)"],
+                  "Print_Methods": ["Rs per metre"], "Dobby_Charges": ["Rs per metre"], "Weft_Options": ["Rs per metre"],
+                  "Class_Defaults": ["Warp crimp", "Warp wastage", "Weft crimp (old method only)", "Weft wastage", "Process wastage",
+                                     "Overhead", "Margin"],
+                  "Mill_Sheet_Terms": ["Per end Rs", "Per pick up to 90 Rs", "Per pick above 90 Rs", "C2FO factor"]}
 ABOVE_ZERO = {"Yarn_Rates": ["Rate Rs/kg", "Count Ne (resultant)"], "Market_Yarn": ["Low Rs/kg", "High Rs/kg"],
               "Weaving_Rates": ["Rs per pick"], "Sizing_Rates": ["Rs per kg warp", "Warp count up to (Ne)"],
               "Piece_Dyeing": ["Rs per kg greige"], "Finishing_Rates": ["Rs per kg greige (yarn dyed)"],
@@ -90,17 +99,16 @@ def save_table(sheet: str, payload: dict, who: str = ""):
             df[col] = num
         else:
             df[col] = text
-    if sheet not in ("Settings", "Supplier_Benchmarks"):       # RULE: no rate below zero, and no rate of zero where a rate must be paid
-        for col in old.columns:
-            if pd.api.types.is_numeric_dtype(df[col]):
-                below = df.index[df[col] < 0].tolist()
-                if below:
-                    raise common.Refused(400, f"'{col}' cannot be below zero (row {below[0] + 1})")
-        for col in ABOVE_ZERO.get(sheet, ()):
-            if col in df.columns:
-                zero = df.index[df[col] <= 0].tolist()
-                if zero:
-                    raise common.Refused(400, f"'{col}' must be above zero (row {zero[0] + 1}): a rate of 0 cannot be right")
+    for col in NOT_BELOW_ZERO.get(sheet, ()):                 # RULE: no rate below zero, and none of zero where a rate is always paid
+        if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+            below = df.index[df[col] < 0].tolist()
+            if below:
+                raise common.Refused(400, f"'{col}' cannot be below zero (row {below[0] + 1})")
+    for col in ABOVE_ZERO.get(sheet, ()):
+        if col in df.columns:
+            zero = df.index[df[col] <= 0].tolist()
+            if zero:
+                raise common.Refused(400, f"'{col}' must be above zero (row {zero[0] + 1}): a rate of 0 cannot be right")
     key = old.columns[0]
     if sheet != "Market_Yarn":
         if df[key].isna().any():
@@ -128,6 +136,8 @@ def add_cotton(payload: dict, who: str = ""):
         raise common.Refused(400, "A date and a price in rupees per candy are both needed")
     if price <= 0:
         raise common.Refused(400, "The price must be above zero")
+    if date > dt.date.today().isoformat():
+        raise common.Refused(400, f"The date {date} is still to come: a cotton price is for a day that has been")
     last = cot.iloc[-1] if len(cot) else {"Variety": "Shankar-6", "Unit": "Rs per candy", "Source": ""}
     row = {"Date": date, "Variety": last["Variety"], "Price": price, "Unit": last["Unit"],
            "Source": str(payload.get("source") or "").strip() or "Typed in the tool"}

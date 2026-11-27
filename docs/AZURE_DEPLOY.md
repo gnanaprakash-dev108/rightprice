@@ -416,12 +416,14 @@ Each tool does what one address of the screens does, through the same rule, with
 - **Change (Claude Desktop asks first):** edit a rate table (cell by cell, giving the figure the table holds now and
   the new one; or the whole table, only with the stamp of the table it read, every column given; a figure moved to
   more than twice or under half what it was needs your explicit yes; no rate below zero, or of zero where a rate is
-  always paid, on the screen too; the version before is kept); add a cotton price; Bring in prices (read a file, a
+  always paid, on the screen too; the version before is kept); add a cotton price (a date still to come is refused, on
+  the screen too; a price past twice or under half the newest needs your explicit yes); Bring in prices (read a file, a
   public page or a public JSON endpoint, never this machine, a private network or the cloud's own addresses, and never
   with a sign-in header; map its columns; add the checked rows to the market reference or as dated yarn rates); enter
   or remove a dated yarn rate, load the market history's dated rates; upload a mill's sheet or a template to the
   fabric list, add one fabric, remove rows; upload and remove mill cost sheets, and apply their drafts on the figures
-  you were told (a draft that moved since is refused, on the screen too); mark alerts seen or bring them back; record a
+  you were told (a draft that moved since is refused, on the screen too; one that moves a rate past twice or under half
+  needs your explicit yes); mark alerts seen or bring them back; record a
   tracker step (two at the same moment: one is kept), undo its own, or remove any step; add a person, change a role or
   name, switch someone on, change what a role may do. The last admin in the list stays an admin, and the assistant
   does not switch off an admin or take Admin away.

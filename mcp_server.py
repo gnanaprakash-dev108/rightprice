@@ -279,7 +279,7 @@ def _brief0(b):
             "usual_range_per_m": [b["lower"], b["settle_up_to"]], "why_this_range": b["band"]["why"],
             "open_at_per_m": b["open_at"] if b["stance"] == "push" else None, "aim_for_per_m": b["settle_up_to"] if b["stance"] == "push" else None,
             "why_no_target": b["weak"], "caveats": b["caveats"], "quantity_m": b["quantity"],
-            "rupees_above_should_cost_on_the_quantity": b["at_stake"]}
+            "rupees_above_should_cost_on_the_quantity": None if b["implausible"] else b["at_stake"]}
 
 
 @tool(mirrors="GET /api/costs")
@@ -419,7 +419,7 @@ def negotiation_pack(mill: str = "", keys: list[str] | None = None) -> dict:
         rows_out.append({"key": key, "code": r["code"], "description": r["description"], "quantity_m": r["quantity"], "sheet_price_per_m": r["quote"],
                          "should_cost_per_m": r["should"], "verdict_on_sheet_price": words.get(r["stance"], r["stance"]), "top_of_usual_range_per_m": r["upper"],
                          "open_at_per_m": r["open_at"] if r["stance"] == "push" else None,
-                         "rupees_above_should_cost": r["at_stake"], "rupees_above_range": (r["above_range_money"] if r["quantity"] else None) if r["stance"] == "push" else None,
+                         "rupees_above_should_cost": None if r["stance"] == "check" else r["at_stake"], "rupees_above_range": (r["above_range_money"] if r["quantity"] else None) if r["stance"] == "push" else None,
                          "sheet_sums_off": r["sums"], "mills_own_build_up_per_m": r["own_price"], "repeats_order_of": r["duplicate_of"],
                          "why_no_target": r["weak"], "caveats": r["caveats"], "questions": r["questions"], "tracker": _track(key)})
     moved = [x["code"] for x in rows_out if x["tracker"]]
@@ -772,34 +772,71 @@ LARGE = 2.0         # a figure moved to more than twice, or under half, what it 
 
 
 def _table_changes(sheet, before, after):
-    """What a save changes: each cell, old and new (rows matched by their key, numbered as in the table after), and the
-    rows added and removed. A table whose key repeats (Market_Yarn) is compared row by row."""
-    cols, k = after["columns"], 2 if sheet in TWO_KEYS else 1
+    """What a save changes. A table with a key (its first column, or first two: the key the screen refuses twice): each
+    cell changed, old and new, rows matched by key and numbered as in the table after; and the rows added and removed (a
+    row whose key changed is one removed and one added). Market_Yarn has no key (a count is priced many times): its
+    changes are the whole rows removed and added, and the answer says so."""
+    from collections import Counter
+    cols = after["columns"]
+    if sheet == "Market_Yarn":
+        whole = lambda r: tuple(str(x) for x in r)
+        b_, a_ = Counter(whole(r) for r in before["rows"]), Counter(whole(r) for r in after["rows"])
+        gone, new = b_ - a_, a_ - b_
+        removed = [r for r in before["rows"] if gone[whole(r)] and not gone.subtract([whole(r)])]
+        added = [r for r in after["rows"] if new[whole(r)] and not new.subtract([whole(r)])]
+        return {"cells": [], "rows_added": [dict(zip(cols, r)) for r in added], "rows_removed": [dict(zip(cols, r)) for r in removed],
+                "rows_before": len(before["rows"]), "rows_after": len(after["rows"]),
+                "note": "This table has no key (a yarn count is priced many times), so a changed row shows as removed and added."}
+    k = 2 if sheet in TWO_KEYS else 1
     key = lambda r: tuple(str(x).strip() for x in r[:k])
-    bk, ak = [key(r) for r in before["rows"]], [key(r) for r in after["rows"]]
-    if sheet == "Market_Yarn" or len(set(bk)) != len(bk) or len(set(ak)) != len(ak):
-        n = min(len(bk), len(ak))
-        pairs, added, removed = [(i, i) for i in range(n)], after["rows"][n:], before["rows"][n:]
-    else:
-        bi, ai = {x: i for i, x in enumerate(bk)}, {x: i for i, x in enumerate(ak)}
-        pairs = [(bi[x], ai[x]) for x in ak if x in bi]
-        added, removed = [after["rows"][ai[x]] for x in ak if x not in bi], [before["rows"][bi[x]] for x in bk if x not in ai]
+    bi, ai = {key(r): i for i, r in enumerate(before["rows"])}, {key(r): i for i, r in enumerate(after["rows"])}
+    pairs = [(bi[x], ai[x]) for x in ai if x in bi]
+    added, removed = [after["rows"][ai[x]] for x in ai if x not in bi], [before["rows"][bi[x]] for x in bi if x not in ai]
     cells = [{"row": j + 1, "key": " / ".join(key(after["rows"][j])), "column": c, "old": x, "new": y}
              for i, j in pairs for c, x, y in zip(cols, before["rows"][i], after["rows"][j]) if not _same(x, y)]
     return {"cells": cells, "rows_added": [dict(zip(cols, r)) for r in added], "rows_removed": [dict(zip(cols, r)) for r in removed],
             "rows_before": len(before["rows"]), "rows_after": len(after["rows"])}
 
 
-def _large(cells):
-    """The changed figures that move to more than twice, or under half, what they were (or away from zero)."""
+def _num(v):
+    try:
+        x = float(v)
+        return x if math.isfinite(x) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _far(x, y):
+    """y more than twice, or under half, of x (or away from zero)."""
+    return (x == 0 and y != 0) or (x != 0 and not (1 / LARGE <= y / x <= LARGE))
+
+
+def _large(diff, before):
+    """The figures a save would move to more than twice, or under half, what they were: each changed cell; a row whose
+    key changed (a row removed and one added, taken in order) figure by figure against the row it was; and a new row's
+    figures against the lowest and highest of that column in the table now."""
     out = []
-    for c in cells:
-        try:
-            x, y = float(c["old"]), float(c["new"])
-        except (TypeError, ValueError):
-            continue
-        if (x == 0 and y != 0) or (x != 0 and not (1 / LARGE <= y / x <= LARGE)):
+    for c in diff["cells"]:
+        x, y = _num(c["old"]), _num(c["new"])
+        if x is not None and y is not None and _far(x, y):
             out.append(f"row {c['row']} ({c['key']}), {c['column']}: {x:g} to {y:g}")
+    cols = before["columns"]
+    span = {}
+    for i, col in enumerate(cols):
+        vals = [v for v in (_num(r[i]) for r in before["rows"]) if v is not None and v > 0]
+        if vals:
+            span[col] = (min(vals), max(vals))
+    paired = list(zip(diff["rows_removed"], diff["rows_added"]))
+    for was, now in paired:
+        for col in cols:
+            x, y = _num(was.get(col)), _num(now.get(col))
+            if x is not None and y is not None and _far(x, y):
+                out.append(f"a row changed ({was.get(cols[0])} to {now.get(cols[0])}), {col}: {x:g} to {y:g}")
+    for now in diff["rows_added"][len(paired):]:
+        for col, (lo, hi) in span.items():
+            y = _num(now.get(col))
+            if y is not None and not (lo / LARGE <= y <= hi * LARGE):
+                out.append(f"a new row ({now.get(cols[0])}), {col}: {y:g}, beside {lo:g} to {hi:g} in the table now")
     return out
 
 
@@ -816,8 +853,9 @@ def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | 
     - rows: the whole table, every row in order, each a list in rate_table's column order or an object with every column;
       a row left out is removed, a new row added. Use it to add or remove rows. based_on: the `stamp` rate_table gave
       with the table you read; if the table has changed since, nothing is saved.
-    A figure moved to more than twice, or under half, what it was (or away from zero) is refused unless
-    large_change_confirmed is true: set it only after telling the person the old and the new figure of each such cell and
+    A figure moved to more than twice, or under half, what it was (or away from zero), a row whose key changed taken
+    against the row it was, or a new row's figure beyond twice the table's highest or under half its lowest, is refused
+    unless large_change_confirmed is true: set it only after telling the person the old and the new figure of each such cell and
     hearing them confirm that figure. The save is checked as on the screen: numbers where numbers belong, no rate below
     zero (or zero, for a rate always paid), no blank or repeated key, and the example fabric must still cost; anything
     wrong and nothing is saved. The rate master as it was is kept (on a database every version is kept; on files a dated
@@ -880,7 +918,7 @@ def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | 
             else:
                 raise Refused(400, f"Each row is a list of {len(cols)} values in this order: {', '.join(cols)} (or an object with every "
                                    "column). Nothing was saved.")
-    large = _large(_table_changes(sheet, before, {"columns": cols, "rows": new_rows})["cells"])
+    large = _large(_table_changes(sheet, before, {"columns": cols, "rows": new_rows}), before)
     if large and not large_change_confirmed:
         raise Refused(409, "These figures move to more than twice, or under half, what they are now: " + "; ".join(large) + ". Tell the "
                            "person the old and the new figure; only if they confirm it, call again with large_change_confirmed true. Nothing was saved.")
@@ -890,17 +928,28 @@ def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | 
 
 
 @tool(mirrors="POST /api/cotton", writes=True)
-def add_cotton_price(date: str, price_per_candy: float, source: str = "") -> dict:
+def add_cotton_price(date: str, price_per_candy: float, source: str = "", large_change_confirmed: bool = False) -> dict:
     """Add one cotton price to the rate master (Shankar-6, rupees per candy), as Prices > Cotton prices does. THIS CHANGES
     THE RATE MASTER FOR EVERYONE; the person must confirm first. [RATE RULE] Tell them the date, the price, and
     the latest price held now (cotton_prices). date: YYYY-MM-DD. source: where the price is from (for example
-    "CAI, 27 Nov 2026"); "Typed in the tool" when empty. Recorded as "AI assistant" on the database."""
+    "CAI, 27 Nov 2026"); "Typed in the tool" when empty. A date still to come is refused (on the screen too). A price more
+    than twice, or under half, the newest one held is refused unless large_change_confirmed is true: set it only after
+    telling the person both figures and hearing them confirm this one. Recorded as "AI assistant" on the database."""
     import pandas as pd
     s = _s()
     cot = s.common.get_masters()["Cotton_Prices"]
     dates = pd.to_datetime(cot["Date"], errors="coerce")
     newest = None if dates.isna().all() else int(dates.reset_index(drop=True).idxmax())
     was = None if newest is None else _rows_as_dicts(s.common.records(cot.iloc[[newest]]), newest + 1)[0]
+    x, y = _num((was or {}).get("Price")), _num(price_per_candy)
+    try:            # a bad date, a date to come, or a price of 0 or below: the rule's own refusal comes first
+        sound = pd.Timestamp(date).date() <= dt.date.today() and x and y and x > 0 and y > 0
+    except Exception:
+        sound = False
+    if sound and _far(x, y) and not large_change_confirmed:
+        from rules.common import Refused
+        raise Refused(409, f"Rs {y:,.0f} a candy is more than twice, or under half, the newest price held (Rs {x:,.0f} on {was['Date']}). Tell the "
+                           "person both figures; only if they confirm this one, call again with large_change_confirmed true. Nothing was added.")
     out = s.rates.add_cotton({"date": date, "price": price_per_candy, "source": source}, who=ASSISTANT)
     now = s.common.get_masters()["Cotton_Prices"]
     return dict(out, added=_rows_as_dicts(s.common.records(now.tail(1)), len(now))[0], latest_before=was, recorded_as=_recorded())
@@ -1146,16 +1195,23 @@ def remove_mill_cost_sheet_rows(ids: list[str] | None = None, upload: str = "") 
 
 
 @tool(mirrors="POST /api/costsheet/apply", writes=True)
-def apply_cost_sheet_drafts(drafts: list[dict]) -> dict:
+def apply_cost_sheet_drafts(drafts: list[dict], large_change_confirmed: bool = False) -> dict:
     """Apply drafts from Mill cost sheets to the rate master, as its screen does when the person ticks drafts and applies
     them. THIS CHANGES THE RATES EVERY COSTING USES, FOR EVERYONE; the person must confirm first. [RATE RULE] For each
     draft tell them the rate, its figure now and the proposed figure (mill_cost_sheets), and which mills it comes from.
     drafts: each {"id": ..., "now": ..., "proposed": ...}, with the two figures exactly as mill_cost_sheets gave them and
     you told the person; a draft whose figures have changed since (more sheets came in, or a rate was changed) is refused
-    and nothing is applied. The rate master as it was is kept first. Recorded as "AI assistant" on the database."""
+    and nothing is applied. A draft that moves a rate to more than twice, or under half, what it is is refused unless
+    large_change_confirmed is true: set it only after the person confirms that figure. The rate master as it was is kept
+    first. Recorded as "AI assistant" on the database."""
     from rules.common import Refused
     if not isinstance(drafts, list) or not all(isinstance(d, dict) and {"id", "now", "proposed"} <= set(d) for d in drafts):
         raise Refused(400, 'Give each draft as {"id", "now", "proposed"}: the figures you told the person. Nothing was applied.')
+    far = [f"{d['id']}: {_num(d['now']):g} to {_num(d['proposed']):g}" for d in drafts
+           if _num(d["now"]) is not None and _num(d["proposed"]) is not None and _far(_num(d["now"]), _num(d["proposed"]))]
+    if far and not large_change_confirmed:
+        raise Refused(409, "These drafts move a rate to more than twice, or under half, what it is: " + "; ".join(far) + ". Tell the person the "
+                           "old and the new figure; only if they confirm it, call again with large_change_confirmed true. Nothing was applied.")
     out = _s().costsheets.costsheet_apply({"ids": [str(d["id"]) for d in drafts],
                                            "expect": {str(d["id"]): {"now": d["now"], "proposed": d["proposed"]} for d in drafts}}, who=ASSISTANT)
     return dict(out, recorded_as=_recorded())

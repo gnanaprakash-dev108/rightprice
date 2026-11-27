@@ -304,7 +304,7 @@ def main():
               and d is not None and abs(d["proposed"] - 0.07) < 1e-9 and d["sheets"] == 2)
         check("Cost sheet: nothing applied without a tick", c.post("/api/costsheet/apply", json={"ids": []}).status_code == 400
               and abs(c.post("/api/cost", json=masters.EXAMPLE_ROW).json()["total_per_m"] - 181.40) < 0.01)
-        ap = c.post("/api/costsheet/apply", json={"ids": [d["id"]]}).json()
+        ap = c.post("/api/costsheet/apply", json={"ids": [d["id"]], "expect": {d["id"]: {"now": d["now"], "proposed": d["proposed"]}}}).json()
         cd = c.get("/api/table/Class_Defaults").json()
         row = next(r for r in cd["rows"] if r[0] == "Dobby/Matt" and r[1] == "Yarn Dyed")
         check("Cost sheet: an applied draft changes that rate only, with its basis and a dated backup",
@@ -325,7 +325,7 @@ def main():
         check("Cost sheet: a mill's sheet sent again takes the place of its rows", again.get("replaced") == 3 and len(c.get("/api/costsheet").json()["rows"]) == 3)
         newrow = next((x for x in c.get("/api/costsheet").json()["drafts"] if x["table"] == "Class_Defaults" and "new row" in x["label"]), None)
         if newrow:
-            c.post("/api/costsheet/apply", json={"ids": [newrow["id"]]})
+            c.post("/api/costsheet/apply", json={"ids": [newrow["id"]], "expect": {newrow["id"]: {"now": newrow["now"], "proposed": newrow["proposed"]}}})
             cd2 = c.get("/api/table/Class_Defaults").json()
             nr = next(r for r in cd2["rows"] if r[0] == newrow["match"]["Weave group"] and r[1] == newrow["match"]["Route"])
         check("Cost sheet: a new row of wastage, overhead and margin stays marked Placeholder, naming what came from a mill",
@@ -1727,6 +1727,40 @@ def assistant_checks():
               "changed twice in one call" in chained.get("error", "") and "more than twice" in big.get("error", "") and "large_change_confirmed" in big["error"]
               and v_big == v_c and sure.get("saved") is True and undo.get("saved") is True and web("GET", "/api/table/Yarn_Rates").json()["rows"] == yr["rows"],
               f"{chained} {big}"[:400])
+        st_ = call("rate_table", sheet="Yarn_Rates")
+        renamed = [list(r) for r in yr["rows"]]
+        renamed[n - 1][ki], renamed[n - 1][ri] = "Cotton 40s", r0 * 3
+        v_g = versions()
+        guard = {"a row's key and its rate changed together (the whole table)": call("edit_rate_table", sheet="Yarn_Rates", rows=renamed, based_on=st_["stamp"]),
+                 "a row's key and its rate changed together (cells)": call("edit_rate_table", sheet="Yarn_Rates", changes=[
+                     {"row": n, "column": "Yarn key", "old": "Cotton 40S", "new": "Cotton 40s"}, {"row": n, "column": "Rate Rs/kg", "old": r0, "new": r0 * 3}]),
+                 "a new row far beyond the table's rates": call("edit_rate_table", sheet="Yarn_Rates", based_on=st_["stamp"],
+                                                                rows=[list(r) for r in yr["rows"]] + [["Cotton 99S"] + list(yr["rows"][n - 1][1:ri]) + [99999] + list(yr["rows"][n - 1][ri + 1:])])}
+        check(tag + "edit_rate_table's size guard also holds when a row's key changes with its rate (taken against the row it was), and for a new "
+                    "row's figures (against the table's lowest and highest); nothing saved without large_change_confirmed",
+              all("more than twice" in g.get("error", "") for g in guard.values()) and versions() == v_g, str({k: str(g)[:120] for k, g in guard.items()}))
+        mk_ = call("rate_table", sheet="Market_Yarn")
+        dropped = call("edit_rate_table", sheet="Market_Yarn", rows=mk_["rows"][1:], based_on=mk_["stamp"])
+        first_row = {k: v for k, v in mk_["rows"][0].items() if k != "row"}
+        restored = call("edit_rate_table", sheet="Market_Yarn", rows=[{k: v for k, v in r.items() if k != "row"} for r in mk_["rows"]],
+                        based_on=call("rate_table", sheet="Market_Yarn")["stamp"])
+        check(tag + "edit_rate_table on Market_Yarn (a table with no key): taking out its first row is reported as that whole row removed, not as "
+                    "figures moved along the table; put back the same way",
+              dropped.get("saved") is True and dropped["changed"]["cells"] == [] and dropped["changed"]["rows_removed"] == [first_row]
+              and dropped["changed"]["rows_added"] == [] and "no key" in dropped["changed"]["note"] and restored["changed"]["rows_added"] == [first_row]
+              and [{k: v for k, v in r.items() if k != "row"} for r in call("rate_table", sheet="Market_Yarn")["rows"]] == [{k: v for k, v in r.items() if k != "row"} for r in mk_["rows"]],
+              f"{str(dropped)[:300]}")
+        tier = web("GET", "/api/table/Mill_Tier").json()
+        oi = tier["columns"].index("Overhead add (points)")
+        cheaper = [list(r) for r in tier["rows"]]
+        cheaper[0][oi] = -2
+        neg_w = web("PUT", "/api/table/Mill_Tier", json={"columns": tier["columns"], "rows": cheaper}).status_code
+        web("PUT", "/api/table/Mill_Tier", json={"columns": tier["columns"], "rows": tier["rows"]})
+        neg_m = call("edit_rate_table", sheet="Mill_Tier", changes=[{"row": 1, "column": "Overhead add (points)", "old": tier["rows"][0][oi], "new": -2}],
+                     large_change_confirmed=True)
+        web("PUT", "/api/table/Mill_Tier", json={"columns": tier["columns"], "rows": tier["rows"]})
+        check(tag + "A cheaper mill tier (an overhead add below zero) is still saved, on the screen and through the assistant: only true rates are kept "
+                    "from going below zero", neg_w == 200 and neg_m.get("saved") is True, str(neg_m)[:200])
         bad = [list(r) for r in yr["rows"]]
         bad[n - 1][ri] = "abc"
         twice, blank = [list(r) for r in yr["rows"]] + [list(yr["rows"][n - 1])], [list(r) for r in yr["rows"]]
@@ -1754,6 +1788,13 @@ def assistant_checks():
         cm = call("add_cotton_price", date=day, price_per_candy=55555, source="check")
         web("POST", "/api/cotton", json={"date": day, "price": 55555, "source": "check"})
         cot, vv = web("GET", "/api/table/Cotton_Prices").json()["rows"], versions()
+        tenfold = call("add_cotton_price", date=day, price_per_candy=640000)
+        to_come = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
+        future = (call("add_cotton_price", date=to_come, price_per_candy=55000), web("POST", "/api/cotton", json={"date": to_come, "price": 55000}))
+        check(tag + "add_cotton_price refuses a price more than twice the newest held until it is confirmed explicitly; a date still to come is "
+                    "refused, on the screen too, in the same words",
+              "more than twice" in tenfold.get("error", "") and "large_change_confirmed" in tenfold["error"] and same_refusal(*future)
+              and "still to come" in future[0]["error"] and len(web("GET", "/api/table/Cotton_Prices").json()["rows"]) == len(cot), f"{tenfold} {future[0]}"[:300])
         check(tag + "add_cotton_price adds the same row as Prices > Cotton prices (its row number right), says the newest price before it (by "
                     "date, not the table's last row), recorded as \"AI assistant\"; "
                     "a bad date or price is refused in the screen's words",
@@ -1785,8 +1826,18 @@ def assistant_checks():
                    "a file of another kind": (call("intake_file", file_base64=b64(b"x"), file_name="x.exe"), upload("/api/intake/file", "x.exe", b"x")),
                    "no page address": (call("intake_page", url=""), web("POST", "/api/intake/link", json={"url": ""})),
                    "no endpoint": (call("intake_api", url=""), web("POST", "/api/intake/api", json={"url": ""}))}
+        import socket
+        import price_import
+        trap = socket.socket()          # a listener on this machine: no address below may reach it
+        trap.bind(("127.0.0.1", 0))
+        trap.listen(16)
+        trap.settimeout(0.2)
+        tp = trap.getsockname()[1]
         for url in ("http://127.0.0.1:8765/api/costsheet", "localhost/api/store", "http://169.254.169.254/metadata/identity/oauth2/token",
-                    "http://10.0.0.4/", "http://[::1]/", "http://192.168.1.1/", "file:///etc/passwd", "ftp://example.com/x"):
+                    "http://10.0.0.4/", "http://[::1]/", "http://192.168.1.1/", "file:///etc/passwd", "ftp://example.com/x",
+                    f"http://127.0.0.1:{tp}\\@example.com/x", f"http://127.0.0.1:{tp}\\.example.com/", f"http://example.com@127.0.0.1:{tp}/",
+                    f"http://user:pw@127.0.0.1:{tp}/", f"http://127.0.0.1:{tp}%5C@example.com/", "http://0x7f000001/", "http://2130706433/",
+                    f"http://127.1:{tp}/", "http://[::ffff:127.0.0.1]/", "http://example.com /x"):
             refused["page " + url] = (call("intake_page", url=url), web("POST", "/api/intake/link", json={"url": url}))
             refused["endpoint " + url] = (call("intake_api", url=url, header_name="X-Api-Key", header_value="k"),
                                           web("POST", "/api/intake/api", json={"url": url, "header_name": "X-Api-Key", "header_value": "k"}))
@@ -1797,10 +1848,99 @@ def assistant_checks():
                     "metadata and identity address, or an address that is not http(s), for a page or an endpoint; a sign-in header; a file that "
                     "is not base64, or without a name, is refused in words",
               all(same_refusal(m, w) for m, w in refused.values()) and "not base64" in call("intake_file", file_base64="@@ not base64 @@", file_name="a.csv").get("error", "")
-              and all("not a public address" in m["error"] or "Only web addresses" in m["error"] for k, (m, w) in refused.items() if k.startswith(("page ", "endpoint ")))
+              and all(any(x in m["error"] for x in ("not a public address", "Only web addresses", "no backslashes", "user name or password", "could not be found", "reads differently"))
+                      for k, (m, w) in refused.items() if k.startswith(("page ", "endpoint ")))
               and "never passes on sign-in" in refused["a sign-in header"][0].get("error", "")
               and "file's name" in call("intake_file", file_base64=b64(csv), file_name="").get("error", "") and len(web("GET", "/api/table/Market_Yarn").json()["rows"]) == my0 + 4,
               str({k: (m.get("error"), detail(w)) for k, (m, w) in refused.items() if not same_refusal(m, w)}))
+
+        reached = 0
+        try:
+            while True:
+                conn, _ = trap.accept()
+                conn.close()
+                reached += 1
+        except OSError:
+            pass
+        trap.close()
+        check(tag + "Bring in prices: an address that hides this machine behind a backslash, a user name, an encoded character or another way of "
+                    "writing 127.0.0.1 is refused by the tool and the screen alike, and nothing reached this machine",
+              reached == 0 and all(m.get("error") for k, (m, w) in refused.items() if str(tp) in k or "0x7f" in k or "2130706433" in k), f"{reached} connections")
+        import http.server
+        hits = {"127.0.0.2": [], "127.0.0.3": []}
+
+        class Pages(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                me = self.server.server_address[0]
+                hits[me].append((self.path, self.headers.get("Host"), self.headers.get("X-Api-Key")))
+                if self.path == "/away":
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.3:{far_port}/stolen")
+                    self.end_headers()
+                    return
+                body, kind = {"/table": (b"<html><body><table><tr><th>Count</th><th>Rate</th></tr><tr><td>40s</td><td>351</td></tr></table></body></html>", "text/html"),
+                              "/plain": (b"<html><body><p>40s combed compact 343 - 358</p></body></html>", "text/html"),
+                              "/json": (b'{"rates": [{"count": "40s", "rate": 351}]}', "application/json")}.get(self.path, (b"none", "text/plain"))
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        near, far_ = http.server.ThreadingHTTPServer(("127.0.0.2", 0), Pages), http.server.ThreadingHTTPServer(("127.0.0.3", 0), Pages)
+        near_port, far_port = near.server_address[1], far_.server_address[1]
+        for srv in (near, far_):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+        looked = {"rebind.example": 0}
+        real_addresses, real_public = price_import._addresses, price_import._public_ip
+
+        def addresses(host, port):          # prices.example and rebind.example stand for public hosts; rebind's second answer is this machine
+            if host == "prices.example":
+                return ["127.0.0.2"]
+            if host == "rebind.example":
+                looked["rebind.example"] += 1
+                return ["127.0.0.2"] if looked["rebind.example"] == 1 else ["127.0.0.3"]
+            return real_addresses(host, port)
+        price_import._addresses, price_import._public_ip = addresses, lambda ip: ip == "127.0.0.2" or (ip != "127.0.0.3" and real_public(ip))
+        try:
+            base_ = f"http://prices.example:{near_port}"
+            pg_t, pg_tw = call("intake_page", url=base_ + "/table"), web("POST", "/api/intake/link", json={"url": base_ + "/table"}).json()
+            pg_n = call("intake_page", url=base_ + "/plain")
+            pg_r, pg_rw = call("intake_page", url=base_ + "/away"), web("POST", "/api/intake/link", json={"url": base_ + "/away"})
+            api_ = call("intake_api", url=base_ + "/json", header_name="X-Api-Key", header_value="k1")
+            api_r = call("intake_api", url=base_ + "/away", header_name="X-Api-Key", header_value="k2")
+            reb = call("intake_page", url=f"http://rebind.example:{near_port}/table")
+        finally:
+            price_import._addresses, price_import._public_ip = real_addresses, real_public
+            near.shutdown()
+            far_.shutdown()
+        check(tag + "Bring in prices connects to the address it checked, with the page's own name sent as its host (a host name standing for a "
+                    "public address here): a page's table is read, as on the screen; a page with no table says so plainly; an endpoint's reply "
+                    "is read, its key sent to that host only",
+              pg_t.get("kind") == "tables" and [v["first_rows"] for v in pg_t["tables"].values()] == [v["rows"] for v in pg_tw["sheets"].values()]
+              and pg_n.get("kind") == "rows" and "No tables on the page" in pg_n.get("note", "") and api_.get("kind") == "tables"
+              and (f"prices.example:{near_port}" in {h for _, h, _ in hits["127.0.0.2"]}) and ("/json", f"prices.example:{near_port}", "k1") in hits["127.0.0.2"],
+              f"{str(pg_t)[:150]} {str(pg_n)[:150]} {str(api_)[:150]} {hits}")
+        check(tag + "Bring in prices checks every address a page sends it on to: a redirect to this machine is refused (tool and screen alike), "
+                    "and so is a host name that pointed to a public address when it was first checked and to this machine at the fetch; "
+                    "nothing reached the address refused",
+              "not a public address" in pg_r.get("error", "") and same_refusal(pg_r, pg_rw) and "not a public address" in api_r.get("error", "")
+              and "not a public address" in reb.get("error", "") and looked["rebind.example"] >= 2 and hits["127.0.0.3"] == [],
+              f"{pg_r} {api_r} {reb} {hits['127.0.0.3']}"[:400])
+        try:            # a real public page, where this machine may reach the internet directly (the live site can)
+            import certifi
+            import ssl
+            ip_ = real_addresses("example.com", 443)[0]
+            with socket.create_connection((ip_, 443), timeout=5) as raw:          # straight there, its certificate verified
+                ssl.create_default_context(cafile=certifi.where()).wrap_socket(raw, server_hostname="example.com").close()
+            live_ = call("intake_page", url="https://example.com/")
+            check(tag + "Bring in prices reads a real public page (example.com, which has no table: it says so)",
+                  live_.get("kind") == "rows" and "No tables on the page" in live_.get("note", ""), str(live_)[:200])
+        except OSError as e:
+            print(f"{tag}Bring in prices from a real public page: not tried here: this machine cannot reach the internet directly, with a "
+                  f"certificate it can verify ({type(e).__name__}: {str(e)[:80]})")
 
         # dated yarn rates (stage 5): typed, removed, brought in, loaded from the market history; each beside its web route
         dated = lambda: web("GET", "/api/dated-rates").json()
@@ -1957,10 +2097,13 @@ def assistant_checks():
               and versions() == v_s and "Give each draft" in call("apply_cost_sheet_drafts", drafts=[{"id": d["id"]}]).get("error", ""), str(stale_m)[:300])
         web("POST", "/api/costsheet/remove", json={"upload": next(r["upload"] for r in web("GET", "/api/costsheet").json()["rows"] if r["mill"] == "Mill C")})
         t0 = web("GET", f"/api/table/{d['table']}").json()
+        bare_ids = web("POST", "/api/costsheet/apply", json={"ids": [d["id"]]})
+        check(tag + "A request to apply drafts without the figures shown (an older copy of the screen) is refused, and nothing applied",
+              bare_ids.status_code == 409 and "did not come with the request" in bare_ids.json()["detail"] and web("GET", f"/api/table/{d['table']}").json() == t0)
         ap = call("apply_cost_sheet_drafts", drafts=[told])
         t1, v1 = web("GET", f"/api/table/{d['table']}").json(), versions()
         web("PUT", f"/api/table/{d['table']}", json={"columns": t0["columns"], "rows": t0["rows"]})
-        apw = web("POST", "/api/costsheet/apply", json={"ids": [d["id"]]}).json()
+        apw = web("POST", "/api/costsheet/apply", json={"ids": [d["id"]], "expect": {d["id"]: {"now": d["now"], "proposed": d["proposed"]}}}).json()
         t2, v2 = web("GET", f"/api/table/{d['table']}").json(), versions()
         check(tag + "apply_cost_sheet_drafts writes the ticked draft into the rate master exactly as the screen does (the rate and its Basis), after "
                     "keeping the rate master as it was; recorded as \"AI assistant\"",
@@ -1976,6 +2119,20 @@ def assistant_checks():
         web("POST", "/api/costsheet/remove", json={"ids": [web("GET", "/api/costsheet").json()["rows"][0]["id"]]})
         left_web = web("GET", "/api/costsheet").json()
         gone = call("remove_mill_cost_sheet_rows", upload=left_web["rows"][0]["upload"])
+        cs4 = cs.copy()
+        cs4["Mill"] = "Mill D"
+        cs4.loc[0, "Overhead %"] = 12
+        upload("/api/costsheet/upload", "fourth.xlsx", xlsx(cs4, sheet="Cost sheet"))
+        big_d = next(x for x in web("GET", "/api/costsheet").json()["drafts"] if x["id"] == d["id"])
+        told_big = {"id": big_d["id"], "now": big_d["now"], "proposed": big_d["proposed"]}
+        v_d = versions()
+        big_ap = call("apply_cost_sheet_drafts", drafts=[told_big])
+        v_d2 = versions()
+        sure_ap = call("apply_cost_sheet_drafts", drafts=[told_big], large_change_confirmed=True)
+        web("PUT", f"/api/table/{d['table']}", json={"columns": t0["columns"], "rows": t0["rows"]})
+        web("POST", "/api/costsheet/remove", json={"upload": next(r["upload"] for r in web("GET", "/api/costsheet").json()["rows"] if r["mill"] == "Mill D")})
+        check(tag + "apply_cost_sheet_drafts refuses a draft that moves a rate past twice what it is until it is confirmed explicitly",
+              big_d["proposed"] / big_d["now"] > 2 and "more than twice" in big_ap.get("error", "") and v_d2 == v_d and sure_ap.get("applied"), f"{big_ap} {sure_ap}"[:300])
         check(tag + "remove_mill_cost_sheet_rows removes a row, or a whole upload, as the screen does",
               rmm["removed"] == 1 and cut(left_ai) == cut(left_web) and len(left_ai["rows"]) == 1 and gone["removed"] == 1 and web("GET", "/api/costsheet").json()["rows"] == [])
 
@@ -2132,11 +2289,16 @@ def assistant_checks():
             r["gap_pct"] != round(w["sim_gap_pct"] * 100, 1) or r["verdict"] != verdict_of(w.get("sim_brief"))
             or r["should_cost_per_m"] != round(w["simulated"], 2) or r["on_todays_yarn_rates"]["gap_pct"] != round(w["gap_pct"] * 100, 1))]
         lq = call("fabric_list", search="AI-4")["rows"][0]
+        lb = call("fabric_brief", key=f"Fabric list|{low_q['id']}")
+        lp = next(r for r in call("negotiation_pack", mill="Low Mills")["rows"] if r["code"] == "AI-4")
         lf = call("find_fabrics", search="AI-4", source="Fabric list")["fabrics"][0]
         check(tag + "fabric_list with a yarn move judges each row on the moved yarn rates, as Bulk upload does (verdict, gap, should-cost), with "
                     "today's beside; a Check quote's rupees are not shown, as the screens hide them",
               mv_m["rows"] and not disagree and lq["verdict"] == "Check quote" and lq["rupees_above_should_cost"] is None
-              and lf["verdict_on_that_price"] == "Check quote" and lf["rupees_above_should_cost"] is None and low_q.get("saved"), str(disagree[:3]) + str(lq)[:200])
+              and lf["verdict_on_that_price"] == "Check quote" and lf["rupees_above_should_cost"] is None and low_q.get("saved")
+              and lb["brief"]["verdict"] == "Check quote" and lb["brief"]["rupees_above_should_cost_on_the_quantity"] is None
+              and lb["fabric"]["rupees_above_should_cost"] is None and lp["verdict_on_sheet_price"] == "Check quote" and lp["rupees_above_should_cost"] is None,
+              str(disagree[:3]) + str(lq)[:200] + str(lb.get("brief"))[:200])
 
         # every tool that only reads, called for real, watched: the store does not move
         fresh_tok = call("intake_file", file_base64=b64(csv), file_name="list.csv")["token"]

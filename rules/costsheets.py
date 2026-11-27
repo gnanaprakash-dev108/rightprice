@@ -90,10 +90,12 @@ def costsheet_apply(payload: dict, who: str = ""):
     expect = payload.get("expect") if isinstance(payload.get("expect"), dict) else {}
     show = lambda d, v: f"{float(v) * 100:.1f}%" if d["pct"] else f"Rs {float(v):g}"
     moved = []
+    unseen = [d["label"] for d in picked if d["id"] not in expect]
+    if unseen:      # a page from before this check (an older copy of the screen) sends no figures: it is not trusted to
+        raise common.Refused(409, "The figures shown for " + "; ".join(unseen) + " did not come with the request, so nothing was "
+                                  "applied. Reload the page (it may be an older copy) and apply again.")
     for d in picked:
-        e = expect.get(d["id"])
-        if e is None:
-            continue
+        e = expect[d["id"]]
         try:
             same = abs(float(e["now"]) - d["now"]) <= 1e-6 and abs(float(e["proposed"]) - d["proposed"]) <= 1e-6
         except (KeyError, TypeError, ValueError):
