@@ -44,7 +44,21 @@ Stage 1, where it stands:
   switching back is one setting. The checks should run against a real PostgreSQL (a service container in the "checks" job).
 - A test PostgreSQL runs in the build container: `initdb` and `pg_ctl` are in `/usr/lib/postgresql/16/bin`; the data folder
   must be one the `postgres` user can reach (`/var/lib/postgresql/...`, not the scratchpad), run with `su postgres -c`.
-- GP was given the steps to create the Azure database (27 Nov). He has not yet said it exists.
+- **The Azure database: GP started creating it on 27 Nov** (the portal showed "Deployment is in progress" at 2:36 PM his time;
+  ask him whether it completed). Azure Database for PostgreSQL flexible server, name `rightprice-db`
+  (`rightprice-db.postgres.database.azure.com`, port 5432, SSL required), administrator login `rpadmin`, resource group
+  `rightprice-rg`, region India South Central, PostgreSQL 16, Dev/Test: Burstable B1ms, 32 GiB, no high availability, backups
+  7 days, public access with "allow Azure services" on. The app uses the default database, `postgres`; no other was created.
+  GP holds the password; it must never be asked for in chat. A build session cannot reach this database: build and prove on
+  the test PostgreSQL here, and let the app itself copy the files in when GP adds the setting.
+- **Cost, as GP was told:** the form showed USD 22.08 a month (compute 17.89, storage 4.19) with "Free up to 750 hours" and
+  "Free up to 32 GB"; GP's Free services page lists Azure Database for PostgreSQL among the services free for 12 months after
+  sign-up. The subscription is Azure for Students (a fixed credit, which the web app plan also draws on). GP finds USD 17 to 22
+  a month too much: if Cost analysis shows a charge for `rightprice-db`, or when the free period ends, the fallback agreed is a
+  database file (SQLite) on the web app's own storage. **So write the data layer to run on either** (PostgreSQL and SQLite),
+  chosen by the setting; keep the SQL plain enough for both.
+- **GP must not add `DATABASE_URL` until stage 1 is merged** and he is asked to, so the switch-over is deliberate. Its value:
+  `postgresql://rpadmin:PASSWORD@rightprice-db.postgres.database.azure.com:5432/postgres?sslmode=require`.
 
 Found while measuring on 27 Nov, and told to GP:
 - **The calibration's "held-back third" is not a fair test.** It splits by fabric code (`pilot.held_back`), and the 1,696
