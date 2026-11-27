@@ -64,9 +64,20 @@ def allowed(header):
     return bool(t) and bool(got) and hmac.compare_digest(got.encode(), t.encode())
 
 
+class _Rules:
+    """The business rules the tools use (rules/), and the costing engine. The same functions the screens' requests call."""
+
+    def __init__(self):
+        import masters
+        from rules import alerts, common, costing, mills, pack, rightcost, supplier, tracker
+        self.masters, self.alerts, self.common, self.costing, self.mills = masters, alerts, common, costing, mills
+        self.pack, self.rightcost, self.supplier, self.tracker = pack, rightcost, supplier, tracker
+        self.NEGO_KINDS = tracker.NEGO_KINDS
+
+
+@functools.cache
 def _s():
-    import server           # late: the tools run inside the web app, or load it once for stdio
-    return server
+    return _Rules()         # late: the tools run inside the web app, or load the rules once for stdio
 
 
 def _fail(e):
@@ -81,10 +92,10 @@ def _r2(v):
 def _track(key):
     """What the tracker holds on a fabric, in a few words an assistant cannot misread."""
     s = _s()
-    rec = s._negos().get(key)
+    rec = s.tracker._negos().get(key)
     if not rec or not rec.get("events"):
         return None
-    m = s.nego_summary(rec)
+    m = s.tracker.nego_summary(rec)
     return {"status": m["status"], "mill_latest_per_m": m["latest"], "our_counter_per_m": m["counter"], "agreed_per_m": m["agreed"],
             "note": "agreed: closed, nothing left to push" if m["status"] == "Agreed" else "open: the price on this row may be out of date; use fabric_brief"}
 
@@ -100,12 +111,12 @@ def _row(r):
 
 
 def _find(key):
-    return next((r for r in _s().costs()["rows"] if f"{r['source']}|{r.get('id') or r['code']}" == key), None)
+    return next((r for r in _s().rightcost.costs()["rows"] if f"{r['source']}|{r.get('id') or r['code']}" == key), None)
 
 
 def _fields():
     s = _s()
-    L = s.masters.lists(s.get_masters())
+    L = s.masters.lists(s.common.get_masters())
     typed = ["Fabric code", "Description", "Supplier", "Content", "EPI", "PPI", "Finished width (in)", "Reed space (in)", "Quoted price (Rs/m)", "Order quantity (m)"]
     fields = {name: {"choose_from": list(L[lst])[:400] if lst in L else None, "required": bool(req)} for name, lst, req in s.masters.TEMPLATE_COLUMNS}
     for t in typed:
@@ -149,7 +160,7 @@ def cost_fabric(choices: dict) -> dict:
     if wrong:
         return {"error": "These must be plain positive numbers (no units, no commas): " + "; ".join(wrong) + ". Nothing was costed."}
     try:
-        out = s.cost(dict(choices))
+        out = s.costing.cost(dict(choices))
     except Exception as e:
         return _fail(e)
     b = out.get("brief")
@@ -195,10 +206,10 @@ def find_fabrics(search: str = "", mill: str = "", verdict: str = "", source: st
     Below, Ask break-up, Check quote. source: "Purchase orders" or "Fabric list". Sorted by rupees above should-cost,
     largest first. Returns each fabric's key, needed by the other tools."""
     s = _s()
-    d = s.costs()
+    d = s.rightcost.costs()
     rows, words = d["rows"], [w for w in search.lower().split() if w]
     if mill:
-        rows = [r for r in rows if r["mill"] == s.mill_key(mill)]
+        rows = [r for r in rows if r["mill"] == s.mills.mill_key(mill)]
     if source:
         rows = [r for r in rows if r["source"].lower() == source.lower()]
     notes = []
@@ -231,16 +242,16 @@ def fabric_brief(key: str) -> dict:
     if r is None:
         return {"error": "No fabric with that key. Use find_fabrics to get the key."}
     out = {"fabric": _row(r)}
-    rec = s._negos().get(key)
-    summ = s.nego_summary(rec) if rec and rec.get("events") else None
+    rec = s.tracker._negos().get(key)
+    summ = s.tracker.nego_summary(rec) if rec and rec.get("events") else None
     price = (summ["agreed"] if summ and summ["status"] == "Agreed" else summ["latest"] if summ else None) or r.get("price")
     if r.get("problems"):
         out["not_costed_because"] = r["problems"]
     elif price and r.get("choices"):
         try:
-            m = s.get_masters()
+            m = s.common.get_masters()
             res = s.masters.cost(dict(r["choices"], **{"Quoted price (Rs/m)": price}), m)
-            b = s.brief(res, m, r.get("metres"), (), r["choices"])
+            b = s.costing.brief(res, m, r.get("metres"), (), r["choices"])
             if b:
                 out["brief"] = _brief(b, summ)
                 out["brief_is_on"] = "the agreed price in the tracker" if summ and summ["status"] == "Agreed" else "the mill's latest price in the tracker" if summ and summ["latest"] else "the price on the row"
@@ -252,12 +263,12 @@ def fabric_brief(key: str) -> dict:
     if summ:
         out["negotiation"] = _nego(rec, summ)
     if r["source"] == "Fabric list":
-        a = s.alerts()["all"].get(r.get("id"))
+        a = s.alerts.alerts()["all"].get(r.get("id"))
         if a:
             out["quote_alerts"] = {"state": a["state"], "flags": [f["text"] for f in a["flags"]],
                                    "note": "These flags are on the price of the mill's sheet" + (f" (Rs {r['price']:,.2f}); the tracker has since moved to Rs {price:,.2f}, so read them as history." if r.get("price") and abs(price - r["price"]) >= 0.005 else ".")}
     if r.get("duplicate_of"):
-        twin = next((x for x in s.costs()["rows"] if x["source"] == r["source"] and x["code"] == r["duplicate_of"] and not x.get("duplicate_of")), None)
+        twin = next((x for x in s.rightcost.costs()["rows"] if x["source"] == r["source"] and x["code"] == r["duplicate_of"] and not x.get("duplicate_of")), None)
         tk = _track(f"{twin['source']}|{twin.get('id') or twin['code']}") if twin else None
         out["repeats_order_of"] = {"code": r["duplicate_of"], "key": f"{twin['source']}|{twin.get('id') or twin['code']}" if twin else None, "tracker": tk,
                                    "note": "This row is the same order as that one: answer from that fabric's brief and negotiation, and do not count this row's rupees as well."}
@@ -273,7 +284,7 @@ def _nego(rec, summ):
             "agreed": summ["agreed"], "won_per_m_against_first_quote": summ["won_per_m"], "won_rupees": summ["won"] if summ["counted"] else None,
             "counted_as_won": summ["counted"], "to_check": summ["warnings"],
             "steps": [{"date": e["date"], "kind": e["kind"], "price_per_m": e["price"], "note": e.get("note") or "", "by": e.get("by") or ""}
-                      for e in _s()._nego_order(rec.get("events", []))]}
+                      for e in _s().tracker._nego_order(rec.get("events", []))]}
 
 
 @tool
@@ -283,7 +294,7 @@ def supplier_summary(mill: str) -> dict:
     and the questions to take to the meeting. mill: the mill's name in any spelling."""
     s = _s()
     try:
-        d = s.supplier(mill)
+        d = s.supplier.supplier(mill)
     except Exception as e:
         return _fail(e)
     side = lambda x: {k: v for k, v in x.items() if k not in ("rows",)} | {"largest": [
@@ -307,13 +318,13 @@ def negotiation_pack(mill: str = "", keys: list[str] | None = None) -> dict:
     its verdict, open and aim prices, rupees at stake, the mill's own sums done again, and the questions per row.
     Give a mill name, or the keys of fabric-list rows from find_fabrics."""
     s = _s()
-    rows = [r for r in s.costs()["rows"] if r["source"] == "Fabric list"]
+    rows = [r for r in s.rightcost.costs()["rows"] if r["source"] == "Fabric list"]
     want = set(keys or [])
-    ids = [r["id"] for r in rows if (f"Fabric list|{r['id']}" in want if want else (mill and r["mill"] == s.mill_key(mill)))]
+    ids = [r["id"] for r in rows if (f"Fabric list|{r['id']}" in want if want else (mill and r["mill"] == s.mills.mill_key(mill)))]
     if not ids:
         return {"error": "No fabric-list rows for that mill or those keys. The pack is made from quoted fabrics (the fabric list), not purchase orders."}
     try:
-        p = s.pack({"ids": ids})
+        p = s.pack.pack({"ids": ids})
     except Exception as e:
         return _fail(e)
     words = {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask break-up", "check": "Check quote"}
@@ -344,10 +355,10 @@ def tracker_steps(key: str) -> dict:
     s = _s()
     if _find(key) is None:
         return {"error": "No fabric with that key. Use find_fabrics to get the key."}
-    rec = s._negos().get(key)
+    rec = s.tracker._negos().get(key)
     if not rec or not rec.get("events"):
         return {"status": "Not tracked", "steps": [], "kinds_you_can_record": s.NEGO_KINDS}
-    return dict(_nego(rec, s.nego_summary(rec)), kinds_you_can_record=s.NEGO_KINDS)
+    return dict(_nego(rec, s.tracker.nego_summary(rec)), kinds_you_can_record=s.NEGO_KINDS)
 
 
 @tool(writes=True)
@@ -368,9 +379,9 @@ def record_tracker_step(key: str, kind: str, price_per_m: float, date: str = "",
         return {"error": "No fabric with that key. Use find_fabrics to get the key."}
     if kind not in s.NEGO_KINDS:
         return {"error": f"kind must be exactly one of: {', '.join(s.NEGO_KINDS)}. Nothing was recorded."}
-    rec0 = s._negos().get(key) or {}
-    ev0 = s._nego_order(rec0.get("events", []))
-    before = s.nego_summary(rec0) if ev0 else None
+    rec0 = s.tracker._negos().get(key) or {}
+    ev0 = s.tracker._nego_order(rec0.get("events", []))
+    before = s.tracker.nego_summary(rec0) if ev0 else None
     try:
         p = round(float(price_per_m), 2)
     except (TypeError, ValueError):
@@ -396,10 +407,10 @@ def record_tracker_step(key: str, kind: str, price_per_m: float, date: str = "",
     if kind == "Our counter" and before and before["status"] == "Agreed":
         return {"error": f"This fabric is agreed at Rs {before['agreed']:,.2f}. A counter would reopen it. If the mill has reopened the price, record its new quote first. Nothing was recorded."}
     try:
-        rec = s.negotiation_event({"key": key, "kind": kind, "price": p, "date": date or None,
+        rec = s.tracker.negotiation_event({"key": key, "kind": kind, "price": p, "date": date or None,
                                    "note": (str(note or "").strip()[:440] + " (recorded through the AI assistant)").strip(), "code": r["code"],
                                    "supplier": r.get("supplier"), "description": r.get("description"), "source": r["source"],
-                                   "metres": r.get("metres"), "should": r.get("should"), "row_price": r.get("price")}, None, by="AI assistant")
+                                   "metres": r.get("metres"), "should": r.get("should"), "row_price": r.get("price")}, who="AI assistant")
     except Exception as e:
         return _fail(e)
     new = [w for w in rec["summary"]["warnings"] if not before or w not in before["warnings"]]
@@ -414,28 +425,28 @@ def remove_my_tracker_step(key: str, kind: str, price_per_m: float, date: str = 
     quote cannot be removed while later steps rest on it. The removal is kept in the fabric's Log. Confirm with the
     person first."""
     s = _s()
-    rec = s._negos().get(key) or {}
+    rec = s.tracker._negos().get(key) or {}
     mine = [e for e in rec.get("events", []) if e.get("by") == "AI assistant" and e["kind"] == kind and abs(e["price"] - float(price_per_m)) < 0.005 and (not date or e["date"] == date)]
     if not mine:
         return {"error": "No step with that kind and price recorded by the assistant on this fabric. Steps a person recorded are removed on the fabric's Negotiation tab."}
-    ordered = s._nego_order(rec.get("events", []))
+    ordered = s.tracker._nego_order(rec.get("events", []))
     quotes = [e for e in ordered if e["kind"] in ("Mill's quote", "Mill's revised quote")]
     if quotes and mine[-1]["id"] == quotes[0]["id"] and len(ordered) > 1:
         return {"error": "That is the mill's first quote, and the later steps are measured from it. Remove the later steps first (those the assistant recorded), "
                          "or have the person correct it on the fabric's Negotiation tab. Nothing was removed."}
     try:
-        s.negotiation_remove({"key": key, "id": mine[-1]["id"]}, None)
+        s.tracker.negotiation_remove({"key": key, "id": mine[-1]["id"]}, who="AI assistant")
     except Exception as e:
         return _fail(e)
-    rec = s._negos().get(key) or {}
-    return {"removed": True, "removed_step": {"kind": mine[-1]["kind"], "price_per_m": mine[-1]["price"], "date": mine[-1]["date"]}, "now": _nego(rec, s.nego_summary(rec)) if rec.get("events") else {"status": "Not tracked", "steps": []}}
+    rec = s.tracker._negos().get(key) or {}
+    return {"removed": True, "removed_step": {"kind": mine[-1]["kind"], "price_per_m": mine[-1]["price"], "date": mine[-1]["date"]}, "now": _nego(rec, s.tracker.nego_summary(rec)) if rec.get("events") else {"status": "Not tracked", "steps": []}}
 
 
 @tool
 def quote_alerts() -> dict:
     """Newly quoted fabrics that need a look before their price is accepted: above the usual range, the mill's own sums
     off, repeating an order already on the list, or far below should-cost. Newest upload first."""
-    a = _s().alerts()
+    a = _s().alerts.alerts()
     return {"count": a["count"], "by_kind": {a["kinds"][k]: n for k, n in a["by_kind"].items()},
             "rupees_quoted_above_ranges": a["above_money"], "rupees_the_mills_own_sums_are_out": a["sums_money"],
             "note": "The two rupee figures largely overlap: do not add them. ALERTS ARE ON THE PRICES OF THE MILLS' SHEETS, as uploaded: where a fabric has a `tracker` entry the "

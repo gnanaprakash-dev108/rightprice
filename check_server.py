@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import masters  # noqa: E402
 import server  # noqa: E402
+from rules import common as rules_common, drafts as rules_drafts, mills as rules_mills  # noqa: E402
 
 
 def main():
@@ -365,8 +366,8 @@ def main():
         nc = ev({"key": "Fabric list|T-15", "code": "T-15", "kind": "Mill's quote", "price": 2150, "row_price": 185, "date": "2026-11-20"}).json()["summary"]
         check("Tracker: a fabric not costed is checked against the price on its row", any("price on the row" in w for w in nc["warnings"]))
         check("Mill names: Ltd, Limited, Mills and a cut-off Limited are dropped",
-              server.mill_key("Rajapalayam Mills Limite") == server.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and server.mill_key("Arvind") == server.mill_key("Arvind Limited"))
-        check("Rupees in Indian grouping", server._inr(99999999) == "9,99,99,999.00" and server._inr(1234.5) == "1,234.50")
+              rules_mills.mill_key("Rajapalayam Mills Limite") == rules_mills.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and rules_mills.mill_key("Arvind") == rules_mills.mill_key("Arvind Limited"))
+        check("Rupees in Indian grouping", rules_common._inr(99999999) == "9,99,99,999.00" and rules_common._inr(1234.5) == "1,234.50")
         # a list row that repeats another order: no second negotiation
         buf = io.BytesIO()
         pd.DataFrame([dict(base_row, **{"Fab Code": "D-1", "Total order qnty": 3100}), dict(base_row, **{"Fab Code": "D-2", "Total order qnty": 3100})],
@@ -403,11 +404,11 @@ def main():
         check("Supplier page: an agreed fabric is closed, not money to push on",
               sp2["quoted"]["agreed"] == 1 and sp2["quoted"]["above_range"] == round((205 - upper) * 4100) and sp2["quoted"]["agreed_above_range"] == round((230 - upper) * 5000), str({k: v for k, v in sp2["quoted"].items() if k != "rows"}))
         check("Mill names: a name cut short is the fuller name; Textiles and Mills of one name stay apart",
-              server._mill_base("Nahar Industrial Enterpr") != "" and server._mill_base("Sri Shyam Fashions India Pvt Ltd") == server._mill_base("Sri Shyam Fashion India")
-              and server._mill_base("Ruby Textiles Pvt Ltd") != server._mill_base("The Ruby Mills Limited") and server._mill_base("\u0905\u0930\u0935\u093f\u0902\u0926") != "")
-        server._learn_mill_names({"Nahar Industrial Enterpr", "Nahar Industrial Enterprises Ltd", "Arvind Ltd", "Arvind Ltd (Denim Division)"})
-        check("Mill names: only a cut-off name joins the fuller one", server.mill_key("Nahar Industrial Enterpr") == server.mill_key("Nahar Industrial Enterprises Ltd")
-              and server.mill_key("Arvind Ltd") != server.mill_key("Arvind Ltd (Denim Division)"))
+              rules_mills._mill_base("Nahar Industrial Enterpr") != "" and rules_mills._mill_base("Sri Shyam Fashions India Pvt Ltd") == rules_mills._mill_base("Sri Shyam Fashion India")
+              and rules_mills._mill_base("Ruby Textiles Pvt Ltd") != rules_mills._mill_base("The Ruby Mills Limited") and rules_mills._mill_base("\u0905\u0930\u0935\u093f\u0902\u0926") != "")
+        rules_mills._learn_mill_names({"Nahar Industrial Enterpr", "Nahar Industrial Enterprises Ltd", "Arvind Ltd", "Arvind Ltd (Denim Division)"})
+        check("Mill names: only a cut-off name joins the fuller one", rules_mills.mill_key("Nahar Industrial Enterpr") == rules_mills.mill_key("Nahar Industrial Enterprises Ltd")
+              and rules_mills.mill_key("Arvind Ltd") != rules_mills.mill_key("Arvind Ltd (Denim Division)"))
         q2 = [q["text"] for q in sp2["questions"]["quoted"] if q["code"] == "S-2"]
         r2 = next(r for r in sp2["quoted"]["rows"] if r["code"] == "S-2")
         check("Supplier page: a fabric the mill has moved on is judged and asked about at the price it is at now, holding our counter",
@@ -435,7 +436,7 @@ def main():
               "already agreed" in c.post("/api/draft", json={"scope": {"type": "fabric", "key": k_s1["key"]}}).json().get("detail", ""))
         other = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r["mill"] != mill)
         check("Draft: fabrics of two mills are refused", c.post("/api/draft", json={"scope": {"type": "rows", "keys": [k_d2, "Purchase orders|" + other["code"]]}}).status_code == 400)
-        facts = {k: v for k, v in server._draft_facts({"scope": {"type": "fabric", "key": k_d2}, "ask": "breakup"}).items() if k not in ("skipped", "left_out", "adjusted")}
+        facts = {k: v for k, v in rules_drafts._draft_facts({"scope": {"type": "fabric", "key": k_d2}, "ask": "breakup"}).items() if k not in ("skipped", "left_out", "adjusted")}
         check("Draft: what goes to the API is this fabric's figures and nothing else",
               [i["code"] for i in facts["items"]] == ["S-2"] and set(facts) == {"writer", "contact", "mill", "ask", "wants", "items"}
               and facts["writer"] == "[Your name]" and facts["items"][0]["price"] == 205 and facts["items"][0]["price_to_name"] == 180 and facts["items"][0]["purpose"] == "revise")
@@ -514,7 +515,7 @@ def main():
         check("Quote alerts: a corrected sheet makes the older row say so, with both prices", any("240.00" in f["text"] and "185.00" in f["text"] for f in old_row["flags"]) and len(old_row["flags"]) == 1)
         newer = [a for a in c.get("/api/alerts").json()["all"].values() if any("An older row for this code and quantity" in f["text"] for f in a["flags"])]
         check("Quote alerts: the newer row says an older one is on the list", len(newer) == 1 and newer[0]["state"] == "live")
-        check("Quantities as mills type them", server._qty("5000 mtr") == 5000 and server._qty("3,333") == 3333 and server._qty(4200) == 4200 and server._qty("about 5") is None)
+        check("Quantities as mills type them", rules_common._qty("5000 mtr") == 5000 and rules_common._qty("3,333") == 3333 and rules_common._qty(4200) == 4200 and rules_common._qty("about 5") is None)
         tot_q = c.get("/api/negotiations/summary").json()
         check("Tracker: a fabric agreed before a re-quote arrived keeps its gain", any(t for t in [tot_q] if t["duplicates"] == 0))
         # MCP: an assistant's way in, behind a secret token
