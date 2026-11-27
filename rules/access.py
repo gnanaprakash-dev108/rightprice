@@ -152,6 +152,12 @@ ROUTES = {
     "POST /api/intake/api": "do:edit_rates",
     "POST /api/intake/map": "do:edit_rates",
     "POST /api/intake/add": "do:edit_rates",
+    "GET /api/dated-rates": "page:prices",           # stage 5: dated yarn rates, on the Yarn prices page
+    "GET /api/dated-rates/market": "page:prices",    # what the market history would give (only read)
+    "POST /api/dated-rates": "do:edit_rates",
+    "POST /api/dated-rates/remove": "do:edit_rates",
+    "POST /api/dated-rates/market": "do:edit_rates",
+    "POST /api/intake/add-dated": "do:edit_rates",   # Bring in prices: the reviewed rows as dated yarn rates
     "GET /classic": "do:edit_rates",                 # the earlier Streamlit screens can change rates
     "* /classic/{path:path}": "do:edit_rates",
     "WS /classic/{path:path}": "do:edit_rates",
@@ -184,7 +190,8 @@ PAGE_USES = {
     "page:cost": ["GET /api/meta", "POST /api/cost", "POST /api/cost-sheet", "POST /api/list"],     # Create cost and Compare
     "page:list": ["GET /api/meta", "POST /api/list", "POST /api/list/download", "GET /api/template"],
     "page:pack": ["GET /api/meta", "POST /api/pack"],
-    "page:prices": ["GET /api/meta", "GET /api/table/{sheet}", "GET /api/dashboard", "GET /api/cotton"],
+    "page:prices": ["GET /api/meta", "GET /api/table/{sheet}", "GET /api/dashboard", "GET /api/cotton",
+                    "GET /api/dated-rates", "GET /api/dated-rates/market"],          # stage 5: web/dated.js on Yarn prices
     "page:costsheets": ["GET /api/meta", "GET /api/costsheet", "GET /api/costsheet/template"],
     "page:users": ["GET /api/users"],
 }

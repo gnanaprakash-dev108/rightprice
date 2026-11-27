@@ -55,6 +55,28 @@ def _above_range(r):
     return max(0.0, round(round(r["price"], 2) - upper, 2)) * r["metres"]
 
 
+def _bought_rates(po):
+    """Which rates the purchases are costed on (stage 5): the yarn rates of each order month where a dated rate exists,
+    today's otherwise. In words for the page, with the counts."""
+    known = [r for r in po if (r.get("rates") or {}).get("month")]
+    dated_n = sum(1 for r in known if r["rates"]["dated"])
+    by = {}
+    for r in known:
+        by[r["rates"]["month"]] = by.get(r["rates"]["month"], 0) + 1
+    months = ", ".join(f"{masters.month_label(k)}: {n}" for k, n in sorted(by.items()))
+    if not po:
+        text = ""
+    elif not known:
+        text = "Purchases are costed on today's rates: their order months are not known on this server."
+    elif dated_n == 0:
+        text = (f"Purchases are costed on the yarn rates of their order month where a dated rate exists. None of these {len(known)} "
+                f"has one yet (by order month, {months}), so all are on today's rates.")
+    else:
+        text = (f"Purchases are costed on the yarn rates of their order month where a dated rate exists: {dated_n} of {len(known)} "
+                f"use at least one dated yarn rate (by order month, {months}); the rest are on today's rates. Every other rate is today's.")
+    return {"of": len(po), "known": len(known), "dated": dated_n, "by_month": by, "text": text}
+
+
 def _hold_counter(questions, ng, b, code):
     """A counter already made is the figure to hold: never ask for more than it."""
     c = ng.get("counter") if ng else None
@@ -195,7 +217,8 @@ def supplier(mill: str):
         if (r["price"], round(r["should"], 2)) not in asked:
             break
         try:
-            res = masters.cost(r["choices"], m)
+            # on the yarn rates of its order month, as Right cost works its verdict out (stage 5)
+            res = masters.cost(r["choices"], m, on=(r.get("rates") or {}).get("month"))
             b = costing.brief(res, m, r["metres"], (), r["choices"])
             if b is None or b["stance"] != "push":
                 continue
@@ -265,9 +288,11 @@ def supplier(mill: str):
             where = f"the mill is at Rs {common._inr(t['latest'])}" if t["latest"] is not None else "the mill has not quoted"
             general.append(f"{t['code']} is still open: {where}" + (f", our counter is Rs {common._inr(t['counter'])}" if t["counter"] is not None else "") + ". Close it or agree the next step.")
     slim = lambda r: {k: r.get(k) for k in ("source", "id", "code", "description", "route", "weave_group", "should", "price", "gap", "gap_pct", "metres", "excess",
-                                              "band", "range", "duplicate_of", "problems", "why_unsure", "placeholders", "above_range", "tracked", "sheet_price", "first_quote")}
+                                              "band", "range", "duplicate_of", "problems", "why_unsure", "placeholders", "above_range", "tracked", "sheet_price", "first_quote",
+                                              "rates")}
     return {"key": key, "name": _mill_names(rows)[0], "names": _mill_names(rows), "ready": d["ready"],
-            "bought": dict(b_side, rows=[slim(r) for r in sorted(po, key=lambda r: (-r["above_range"], -(r["excess"] or 0)))]),
+            "bought": dict(b_side, rows=[slim(r) for r in sorted(po, key=lambda r: (-r["above_range"], -(r["excess"] or 0)))],
+                           rates=_bought_rates(po) if d["ready"] else {"of": len(po), "known": 0, "dated": 0, "by_month": {}, "text": ""}),
             "quoted": dict(q_side, rows=[slim(r) for r in sorted(fl, key=lambda r: (r.get("tracked") == "Agreed", -r["above_range"]))], not_costed=not_costed, sheets=sheets),
             "sums": sums, "hint": hint, "today": common._day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},

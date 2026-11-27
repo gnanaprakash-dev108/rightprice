@@ -11,8 +11,8 @@ never a second version, and every change it makes goes through the same checks a
 GP's decision, 27 Nov 2026: "if I ask something through the MCP connector it should execute everything including the
 admin role". The token is an admin key: its fixed role, "AI assistant" (rules/access.py ASSISTANT_ALLOWED), holds the
 Admin role's permissions. So there is a tool for every change an Admin can make in the app: rate tables, cotton prices,
-Bring in prices, uploads to the fabric list and removing its rows, mill cost sheets and their drafts, quote alerts seen,
-tracker steps, drafts to mills, and users and roles. Every change is recorded as "AI assistant" where the screens record
+Bring in prices, dated yarn rates (stage 5), uploads to the fabric list and removing its rows, mill cost sheets and their
+drafts, quote alerts seen, tracker steps, drafts to mills, and users and roles. Every change is recorded as "AI assistant" where the screens record
 the signed-in person (rate versions, list rows added or removed, cost sheet rows, alerts seen, tracker steps, the users'
 change record). Every tool that changes shared data is marked as writing and destructive, so a client asks the person
 before it runs, and its description says what it changes and that the person must confirm. A tool that changes a rate
@@ -68,7 +68,8 @@ mcp = MCPServer(
         "THIS CONNECTION HOLDS AN ADMIN'S PERMISSIONS: it can change rates, the fabric list, mill cost sheets, alerts, the tracker "
         "and who may use RightPrice, for everyone. Every tool that changes something is marked as such; before calling one, tell the "
         "person exactly what will change and get their yes. NEVER CHANGE A RATE (edit_rate_table, add_cotton_price, intake_add_rows, "
-        "apply_cost_sheet_drafts) unless the person has explicitly asked for that change, and state the old and the new figure first; "
+        "apply_cost_sheet_drafts, and the dated yarn rates: add_dated_rate, remove_dated_rate, load_market_dated_rates, "
+        "intake_add_dated_rates) unless the person has explicitly asked for that change, and state the old and the new figure first; "
         "never change a rate to make a costing match a price. Every change is recorded as \"AI assistant\"."))
 
 
@@ -321,8 +322,10 @@ def fabric_brief(key: str) -> dict:
     elif price and r.get("choices"):
         try:
             m = s.common.get_masters()
-            res = s.masters.cost(dict(r["choices"], **{"Quoted price (Rs/m)": price}), m)
+            # a purchase order on the yarn rates of its order month, a quote on today's (stage 5, GP's decision)
+            res = s.masters.cost(dict(r["choices"], **{"Quoted price (Rs/m)": price}), m, on=(r.get("rates") or {}).get("month"))
             b = s.costing.brief(res, m, r.get("metres"), (), r["choices"])
+            out["rates_are"] = (r.get("rates") or {}).get("note") or "today's rates"
             if b:
                 out["brief"] = _brief(b, summ)
                 out["brief_is_on"] = "the agreed price in the tracker" if summ and summ["status"] == "Agreed" else "the mill's latest price in the tracker" if summ and summ["latest"] else "the price on the row"
@@ -831,7 +834,8 @@ def _intake(out):
                 "next": "Choose the table and its columns with intake_map_columns (this token, the table's name, and the columns holding the "
                         "count and the rate; the high rate, yarn and date columns if there are any). Nothing has been added."}
     return dict(out, next="These rows are read but not added. Show them to the person; with their yes, add the ones to keep with intake_add_rows "
-                          "(each row in this column order). Nothing has been added.")
+                          "(each row in this column order) to the market reference, or as dated yarn rates with intake_add_dated_rates "
+                          "(each row given its yarn of the yarn master and whether its price includes GST, with this read_token). Nothing has been added.")
 
 
 @tool(mirrors="POST /api/intake/file", writes=True, destructive=False)
@@ -883,6 +887,83 @@ def intake_add_rows(rows: list, source: str = "") -> dict:
     cols = s.rates.pi.STAGE_COLS
     shaped = [[r.get(c) for c in cols] if isinstance(r, dict) else r for r in rows or []]
     return dict(s.rates.intake_add({"rows": shaped, "source": source}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+# ------------------------------------------------------------------ dated yarn rates (stage 5; a database only)
+def _dated():
+    from rules import dated
+    return dated
+
+
+@tool(mirrors="GET /api/dated-rates")
+def dated_rates() -> dict:
+    """Dated yarn rates (Prices > Yarn prices): a yarn's rate for a month, so a purchase order is costed on the yarn rates
+    of its order month (quotes and Cost a fabric stay on today's rates). Gives the rule they follow, every rate in force
+    (yarn, month, rate, low and high, what it rests on, who entered it, its id for remove_dated_rate), the ones removed
+    or replaced lately, the yarn master's yarns with today's rate, and how many purchase-order fabrics each month has a
+    dated rate for. Kept in the database only: on the files the answer says so."""
+    p = _dated().page()
+    return {"rule": p["rule"], "this_month": p["this_month"], "in_force": p["entries"], "removed_or_replaced_lately": p["history"],
+            "yarns": p["yarns"], "rests_on_choices": p["rests_on"], "orders_by_month": p["orders"], "rate_limits_rs_per_kg": p["limits"],
+            "first_month": p["first_month"], "market_file": p["market_file"]}
+
+
+@tool(mirrors="GET /api/dated-rates/market")
+def dated_market_preview() -> dict:
+    """What loading the market history in hand (Yarn_Inteliigence_Master.xlsx) as dated yarn rates would do: each monthly
+    rate it gives (only yarns surely in the yarn master), whether it is new, changed, unchanged, kept (a person's rate
+    stays) or held (a person removed it), and every row it leaves out, with why. Changes nothing."""
+    return _dated().market_preview()
+
+
+@tool(mirrors="POST /api/dated-rates", writes=True)
+def add_dated_rate(yarn_key: str, month: str, rests_on: str, rate: float | None = None, low: float | None = None,
+                   high: float | None = None, gst: bool = False, note: str = "") -> dict:
+    """Enter a dated yarn rate, as Prices > Yarn prices does: a yarn of the yarn master, a month (YYYY-MM, one that has
+    begun), what it rests on ("circular", "price list", "quote", "invoice", "other" with the document named in `note`, or
+    "none": then it is kept as a placeholder), whether the price includes GST, and the rate in rupees a kilo (or a low and
+    a high: their midpoint). It takes the place of any earlier rate for that yarn and month (kept, marked replaced); a
+    rate with GST never takes the place of one without GST. THIS CHANGES THE YARN RATES PURCHASE ORDERS OF THAT MONTH ARE
+    COSTED ON, FOR EVERYONE; the person must confirm first. [RATE RULE] Recorded as entered by "AI assistant"."""
+    payload = {"yarn_key": yarn_key, "month": month, "rests_on": rests_on, "rate": rate, "low": low, "high": high, "gst": gst, "note": note}
+    return dict(_dated().add(payload, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+@tool(mirrors="POST /api/dated-rates/remove", writes=True)
+def remove_dated_rate(rate_id: int) -> dict:
+    """Take one dated yarn rate out, as Prices > Yarn prices does (rate_id from dated_rates). Purchase orders of that month
+    then use today's rate for that yarn, unless another rate is entered. THIS CHANGES HOW THOSE ORDERS ARE COSTED, FOR
+    EVERYONE; the person must confirm the yarn, the month and the rate first. [RATE RULE] The rate is kept, marked removed
+    by "AI assistant", and loading the market history does not bring it back."""
+    return dict(_dated().remove({"id": rate_id}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+@tool(mirrors="POST /api/dated-rates/market", writes=True)
+def load_market_dated_rates() -> dict:
+    """Load the market history's monthly rates as dated yarn rates, as Prices > Yarn prices does (see dated_market_preview
+    first, and show the person what it would add). Only the yarns surely in the yarn master; a rate a person entered
+    stays, a rate a person removed is not brought back, and a load that changes nothing writes nothing. THIS CHANGES THE
+    YARN RATES PURCHASE ORDERS ARE COSTED ON, FOR EVERYONE; the person must confirm first. [RATE RULE] Recorded as entered
+    by "AI assistant"."""
+    return dict(_dated().market_load(who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+@tool(mirrors="POST /api/intake/add-dated", writes=True)
+def intake_add_dated_rates(rows: list, read_token: str = "", source: str = "", month: str = "", month_undated: str = "",
+                           preview: bool = False) -> dict:
+    """Bring in prices, last step, as dated yarn rates instead of the market reference (Bring in prices > Add as dated
+    yarn rates). rows: the reviewed rows as intake_map_columns (or step 1) returned them, each with two more values: the
+    yarn of the yarn master it is, and whether its price includes GST (true or false): [Date, Yarn, Count, Low Rs/kg,
+    High Rs/kg, Source, yarn key, GST]; a row given no yarn key ("") is left out. read_token: as that step returned it;
+    the month of each row comes from the dates the server itself read of the document, never from today. month: one month
+    (YYYY-MM) for every row instead; month_undated: the month for rows without a date of the document's. preview: true
+    only says which month each row would take and which rows need a month, and changes nothing: call it first and show
+    the person. Otherwise THIS CHANGES THE YARN RATES PURCHASE ORDERS OF THOSE MONTHS ARE COSTED ON, FOR EVERYONE; the
+    person must confirm first. [RATE RULE] One rate per yarn and month (a range as its midpoint, several prices averaged,
+    those without GST before those with). Recorded as entered by "AI assistant"."""
+    payload = {"rows": rows or [], "read_token": read_token, "source": source, "month": month or None, "month_undated": month_undated or None,
+               "preview": bool(preview)}
+    return dict(_dated().intake_add(payload, who=ASSISTANT), recorded_as=ASSISTANT)
 
 
 @tool(mirrors="POST /api/list/upload", writes=True)

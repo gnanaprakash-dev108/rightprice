@@ -344,7 +344,7 @@ through the sign-in, and is then protected by the token alone: every request mus
 
    The first must answer `401` with "A token is needed" (a redirect to login.microsoftonline.com means step 3 has
    not taken; `404` "switched off" means step 2 has not). The second must answer `{"ok": true, ...}`, with
-   `"tools": 40`. Then open the site's home page in a private window: it must still ask for Microsoft sign-in.
+   `"tools": 46`. Then open the site's home page in a private window: it must still ask for Microsoft sign-in.
 
 ### Cutting it off
 
@@ -387,7 +387,7 @@ runs on your computer and adds the token to every request. It needs Node.js (nod
    the old and the new figure first.
 
 Tried by the build session on 27 Nov 2026 against the app on its own machine (not the live site): `mcp-remote` 0.1.37
-and 0.17.1 with exactly these arguments, listing the 40 tools, reading a rate table and adding a cotton price (saved as
+and 0.17.1 with exactly these arguments, listing the tools (40 then; 46 since stage 5's dated rates), reading a rate table and adding a cotton price (saved as
 "AI assistant"). Claude Desktop itself was not tried.
 
 - **On a laptop, on that laptop's own data** (no token, no Azure): `{"mcpServers": {"rightprice": {"command":
@@ -396,20 +396,21 @@ and 0.17.1 with exactly these arguments, listing the 40 tools, reading a rate ta
 - **A build session checking a deploy**: with the token saved for the site's host through the secure form, it can
   call `/mcp/health`, which reports which code is running. Remember the token is an admin key.
 
-### What the assistant can do (40 tools)
+### What the assistant can do (46 tools)
 
 Each tool does what one address of the screens does, through the same rule, with the same refusals:
 
 - **Read:** cost a fabric; find costings; a fabric's brief and negotiation steps; a supplier's page and the list of
   suppliers; a negotiation pack; the quote alerts; the fabric list (with a yarn price move tried); the rate tables,
-  the yarn master, cotton prices; the Dashboard's panels and what negotiation has won; the pilot results; mill cost
-  sheets and their drafts; Users and roles with the record of changes; where the data is kept (`store_status`); cost a
-  filled template (nothing kept).
+  the yarn master, cotton prices; the dated yarn rates and what loading the market history would give; the Dashboard's
+  panels and what negotiation has won; the pilot results; mill cost sheets and their drafts; Users and roles with the
+  record of changes; where the data is kept (`store_status`); cost a filled template (nothing kept).
 - **Change (Claude Desktop asks first):** edit a rate table (cell by cell, giving the old and new figure, or the whole
   table; the version before is kept); add a cotton price; Bring in prices (read a file, a page or a JSON endpoint, map
-  its columns, add the checked rows); upload a mill's sheet or a template to the fabric list, add one fabric, remove
-  rows; upload and remove mill cost sheets and apply their drafts; mark alerts seen or bring them back; record a
-  tracker step, undo its own, or remove any step; add a person, change a role or name, switch someone off or on,
+  its columns, add the checked rows to the market reference or as dated yarn rates); enter or remove a dated yarn
+  rate, load the market history's dated rates; upload a mill's sheet or a template to the fabric list, add one fabric,
+  remove rows; upload and remove mill cost sheets and apply their drafts; mark alerts seen or bring them back; record
+  a tracker step, undo its own, or remove any step; add a person, change a role or name, switch someone off or on,
   change what a role may do (the last admin in the list stays an admin).
 - **Draft a message to a mill** (nothing is sent or kept).
 

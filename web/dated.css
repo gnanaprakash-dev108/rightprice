@@ -1,0 +1,40 @@
+/* Dated yarn rates (stage 5): the card on the Yarn prices page and the step on Bring in prices. Uses the page's own
+   colour roles, with RightPrice's light values where a page has none. */
+.dr-card { margin-top: 16px; }
+.dr-small { color: var(--muted, #4f6077); font-size: 12.5px; margin: 8px 0 0; max-width: 85ch; }
+.dr-empty { color: var(--muted, #4f6077); margin: 10px 0; }
+.dr-h { margin: 22px 0 8px; }
+.dr-orders { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 0 0 14px; }
+.dr-month { display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border: 1px solid var(--border, #dde4ee); border-radius: 10px; background: var(--panel2, #f8fafc); font-size: 12.5px; }
+.dr-month b { font-size: 13px; }
+.dr-month .dr-none { color: var(--muted, #4f6077); }
+.dr-multiples { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.dr-fig { margin: 0; padding: 10px 10px 4px; border: 1px solid var(--border, #dde4ee); border-radius: 10px; min-width: 0; }
+.dr-fig figcaption { font-size: 13px; color: var(--muted, #4f6077); }
+.dr-fig figcaption b { color: var(--text, #0f1b2d); }
+.dr-chart svg { display: block; width: 100%; height: auto; }
+.dr-grid { stroke: var(--border, #dde4ee); stroke-width: 1; }
+.dr-axis { fill: var(--faint, #586880); font-size: 11px; font-family: var(--font, system-ui, sans-serif); }
+.dr-val { fill: var(--text, #0f1b2d); font-size: 11.5px; font-weight: 600; font-family: var(--font, system-ui, sans-serif); }
+.dr-gap { fill: var(--faint, #586880); opacity: .45; }
+.dr-today { stroke: var(--faint, #586880); stroke-width: 1; }
+.dr-line { fill: none; stroke: var(--g1, #2a78d6); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.dr-dot { fill: var(--g1, #2a78d6); stroke: var(--panel, #ffffff); stroke-width: 2; }
+.dr-hit { fill: transparent; cursor: crosshair; }
+.dr-hit:hover { fill: color-mix(in srgb, var(--text, #0f1b2d) 5%, transparent); }
+.dr-fields { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items: start; }
+.dr-table { margin-top: 6px; max-height: 50vh; }
+.dr-table th.n, .dr-table td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.dr-table td.w { min-width: 220px; white-space: normal; }
+.dr-why { margin: 6px 0 0; padding-left: 20px; font-size: 13px; }
+.dr-why li { margin: 3px 0; }
+.dr-details { margin-top: 14px; }
+.dr-details > summary { cursor: pointer; font-weight: 600; }
+.dr-rule { margin: 8px 0 0; padding-left: 20px; font-size: 13px; max-width: 95ch; }
+.dr-rule li { margin: 4px 0; }
+@media print { .dr-hit { display: none; } }
+.dr-dot.dr-ph { fill: var(--panel, #ffffff); stroke: var(--g1, #2a78d6); stroke-width: 2; }
+.dr-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text, #0f1b2d); min-height: 40px; }
+.dr-radios { display: flex; gap: 16px; flex-wrap: wrap; }
+.dr-when { display: grid; gap: 8px; margin: 0 0 12px; padding: 12px; border: 1px solid var(--border, #dde4ee); border-radius: 10px; background: var(--panel2, #f8fafc); }
+.field .dr-check input[type="checkbox"], .field .dr-check input[type="radio"], .dr-check input[type="checkbox"], .dr-check input[type="radio"] { width: 16px; height: 16px; min-width: 16px; margin: 0; padding: 0; flex: none; accent-color: var(--accent, #0b7d57); }
