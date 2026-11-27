@@ -30,6 +30,7 @@ const CONFIG = {
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
+        { id: "fab_group", header: "Fab group", width: 130, type: "fabgroup", help: "Purchase orders: the fabric's Fab group (the same construction in any colour, across mills), from the purchase history. Click it for the group's page; the chart button shows the price over time" },
         { id: "route", header: "Route", width: 90 },
         { id: "weave", header: "Weave", width: 90 },
         { id: "finish", header: "Finish", width: 140 },
@@ -60,7 +61,7 @@ const CONFIG = {
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "mill", label: "Mill (every spelling)" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
-        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
+        { id: "order_size", label: "Order size" }, { id: "fab_group", label: "Fab group" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
@@ -267,7 +268,7 @@ function rerunWithSkeleton() { state.loading = true; state.shown = CONFIG.pageSi
 // ================================================================== RENDER
 function railActive(id) {
   const first = decodeURIComponent(location.hash.slice(1)).split("/")[0] || "dashboard";
-  const now = id || (first === "rightcost" || first === "item" || first === "supplier" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
+  const now = id || (first === "rightcost" || first === "item" || first === "supplier" || first === "group" || first === "groups" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
   document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === now));
 }
 function renderRail() {
@@ -311,6 +312,7 @@ function openFly(name, anchor, hover, keep) {
       h("div", { class: "g" }, "Settings"),
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
       link("Calculation settings", "#settings"), link("Rate tables", "#rates"),
+      h("div", { class: "g" }, "Admin"), link("Purchase files", "#purchase-files"), link("Fab groups", "#groups"),
       h("div", { class: "g" }, "Account"),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/classic/"; } }, "Earlier screens (classic)"),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
@@ -338,14 +340,16 @@ function route() {
   state.frame = null; state.library = null; state.supplier = id === "supplier" && rest.join("/") ? { key: rest.join("/"), data: state.supplier && state.supplier.key === rest.join("/") ? state.supplier.data : null } : null;
   if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || tabMemo(rest.join("/")) || "item", editing: false }; }
   else state.detail = null;
+  state.page = typeof RP_PAGES !== "undefined" && RP_PAGES[id] ? { id, arg: rest.join("/") } : null;      // stage 2: web/purchases.js
   if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
   else if (CONFIG.frames[id]) state.frame = hsh;
-  else if (id !== "rightcost" && id !== "item" && !state.supplier) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
-  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier ? " fixed listpage" : "");
+  else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.page) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
+  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier && !state.page ? " fixed listpage" : "");
   railActive(); render();
   if (state.supplier) loadSupplier();
+  if (state.page) RP_PAGES[state.page.id].enter(state.page);
   if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
-  document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
+  document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.page ? RP_PAGES[state.page.id].title(state.page) : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
 const frameSrc = hsh => `/?embed=1&bare=1&in=page#${hsh}`;
 function renderFrame(main) {
@@ -372,6 +376,7 @@ function render() {
   if (state.frame) return renderFrame(main);
   if (state.library) return renderLibrary(main);
   if (state.supplier) return renderSupplier(main);
+  if (state.page) return RP_PAGES[state.page.id].render(main);
   if (state.detail) return renderDetail(main);
   const mod = CONFIG.modules.costs, rows = filtered(), cls = mod.classes.find(c => c[0] === state.cls) || mod.classes[0];
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", CONFIG.appName, "\u00A0\u203A\u00A0", h("span", {}, cls[1]));
@@ -462,6 +467,7 @@ function gridView(rows, skeleton) {
 function cellFor(r, c, cls, pinStyle, pend) {
   const k = keyOf(r), st = pinStyle(c);
   if (c.type === "select") { const b = h("input", { type: "checkbox", class: "cb", "aria-label": `Select ${r.code}` }); b.checked = state.selection.has(k); b.addEventListener("change", () => { b.checked ? state.selection.add(k) : state.selection.delete(k); render(); }); return h("td", { class: cls(c), style: st }, b); }
+  if (c.type === "fabgroup") return h("td", { class: cls(c), style: st }, typeof RP_PURCH !== "undefined" ? RP_PURCH.cell(r) : "");     // stage 2: web/purchases.js
   if (c.type === "thumb") return h("td", { class: cls(c), style: st }, h("div", { class: "thumb", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" }, title: r.route || "" }, (r.route || "—").split(/[ /]/)[0].slice(0, 5).toUpperCase()));
   if (c.type === "link") return h("td", { class: cls(c), style: st }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code));
   if (c.type === "band" && r.duplicate_of) return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: "Same order as " + r.duplicate_of + ": counted once in the negotiation pack" }, h("i", { style: { background: "#B9BEC7" } }), h("span", { class: "pt" }, "Duplicate of " + r.duplicate_of)));
@@ -611,7 +617,7 @@ function fields(r) {
     ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", n2(r.price)],
     ["Against should-cost", r.price && r.gap !== null && r.gap !== undefined ? `Rs ${n2(Math.abs(r.gap))} ${r.gap >= 0 ? "above" : "below"} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
     [r.source === "Purchase orders" ? "Paid against should-cost, Rs" : "Quote against should-cost, Rs (not paid)", r.excess === null || r.excess === undefined ? "" : `${n0(Math.abs(r.excess))} ${r.excess >= 0 ? "above" : "below"}`],
-    ["Duplicate of", r.duplicate_of || ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
+    ["Duplicate of", r.duplicate_of || ""], ["Fab group", r.fab_group ? `${r.fab_group}: ${r.fab_group_name}` : r.fab_group_name ? "Not grouped: " + r.fab_group_name : ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
     ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
@@ -639,7 +645,7 @@ function renderDetail(main) {
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", h("button", { type: "button", onclick: () => { location.hash = "#rightcost"; } }, CONFIG.appName), "\u00A0\u203A\u00A0", h("span", {}, r.code));
   const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; location.hash = "#rightcost"; }),
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
-    ib("open", "Open in Create cost", () => openCostPopup(r)));
+    ib("open", "Open in Create cost", () => openCostPopup(r)), r.source === "Purchase orders" && typeof RP_PURCH !== "undefined" ? ib("chart", "Price over time (purchase history)", () => RP_PURCH.openHistory(r.code)) : null);
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
   const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; tabMemo(k, t); render(); if (t === "negotiation" || t === "log") loadNegos(); } }, l)));
   let content;

@@ -640,8 +640,245 @@ def main():
               added.get("added") == 2 and len(c.get("/api/table/Market_Yarn").json()["rows"]) == m0 + 2)
         check("Empty review refused", c.post("/api/intake/add", json={"rows": [[None] * 6]}).status_code == 400)
         check("Unknown file type refused", c.post("/api/intake/file", files={"file": ("x.exe", io.BytesIO(b"x"))}).status_code == 400)
+        stage2_checks(c, check)         # stage 2: purchase history and Fab groups (last: it loads purchase files)
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
+
+
+# ===================================================================== stage 2: purchase history and Fab groups
+def _stage2_codes():
+    """Real fabric codes for the made-up purchase file: three costed 100% cotton codes of one construction (A1, A2, A3)
+    and one of another (B1) from the pilot; one whose PLM specification is incomplete. Prices and mills are made up."""
+    import pandas as pd
+    from rules import fab_groups, purchases
+    specs = purchases.plm_specs()
+    pilot_codes = pd.read_excel(os.path.join(HERE, "pilot", "Pilot_Results.xlsx"), sheet_name="Fabrics")["Fabric code"].astype(str)
+    by_sig = {}
+    for code in pilot_codes:
+        _, sig, _ = fab_groups.signature_of(specs.get(code))
+        if sig:
+            by_sig.setdefault(sig, []).append(code)
+    sigs = sorted(by_sig, key=lambda s: (-len(by_sig[s]), s))
+    a, b = by_sig[sigs[0]], by_sig[sigs[1]]
+    incomplete = next(code for code in sorted(specs) if "incomplete" in (fab_groups.signature_of(specs[code])[2] or ""))
+    return a[0], a[1], a[2], b[0], incomplete
+
+
+def _stage2_file(rows):
+    """A purchase-order file in the SAP export's shape, from made-up rows (each a dict over the export's columns)."""
+    import pandas as pd
+    cols = ["Purchasing Document", "Plant", "Document Date", "Item", "Material", "Short Text", "Purchasing Doc. Type", "Order Quantity",
+            "Order Unit", "Net Price", "Name of Supplier", "Currency", "Deletion Indicator"]
+    buf = io.BytesIO()
+    pd.DataFrame([{k: r.get(k) for k in cols} for r in rows], columns=cols).to_excel(buf, index=False)
+    return buf.getvalue()
+
+
+def stage2_checks(c, check):
+    """Purchase files read in the background; one line per order line; mills, fabrics and Fab groups; the price popup;
+    the Fab group page and its range (the brief's rule); the merge; Right cost's Fab group column. On the files store:
+    a plain refusal, and everything else as before."""
+    import statistics
+    import pandas as pd
+    import store
+    from rules import costing, purchases
+    kind = store.get().kind
+    sha = lambda p: hashlib.sha256(open(os.path.join(HERE, p), "rb").read()).hexdigest()
+    kept_files = {p: sha(p) for p in ("pilot/Pilot_Results.xlsx", "data/Rate_Master.xlsx", "inputs/Fabric _ 3Months_4746.xlsx")}
+    r_before, yarn_before = c.post("/api/cost", json=masters.EXAMPLE_ROW).json(), c.get("/api/table/Yarn_Rates").json()
+    versions = lambda: (c.get("/api/store").json().get("counts") or {}).get("rate versions")
+    versions_before = versions()
+    for css in ("web/purchases.css",):
+        txt = open(os.path.join(HERE, css), encoding="utf8").read()
+        check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
+    if shutil.which("node"):
+        p = subprocess.run(["node", "--check", os.path.join(HERE, "web", "purchases.js")], capture_output=True, text=True)
+        check("web/purchases.js parses", p.returncode == 0, p.stderr[-300:])
+    shell = c.get("/").text
+    check("Stage 2: the shell loads the purchase-history page script before its own", shell.index("purchases.js") < shell.index("rightcost.js")
+          and c.get("/purchases.js").status_code == 200 and c.get("/purchases.css").status_code == 200)
+    if kind == "files":
+        answers = [c.get("/api/purchases/uploads"), c.get("/api/groups"), c.get("/api/groups/Fab-0001"), c.get("/api/purchases/history", params={"code": "X"}),
+                   c.post("/api/purchases/load-shipped"), c.post("/api/groups/merge", json={"code": "Fab-0001", "into": "Fab-0002"})]
+        check("Stage 2 on the files store: the purchase history says plainly that it needs the database (503), nothing breaks",
+              all(r.status_code == 503 and "kept in the database" in r.json()["detail"] for r in answers)
+              and c.get("/api/purchases/status").json()["available"] is False)
+        po = [r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders"]
+        check("Stage 2 on the files store: Right cost's Fab group column is empty", po and all(r["fab_group"] is None and r["fab_group_name"] is None for r in po))
+        check("Stage 2: the pilot results, the rate master and the purchase file are untouched", all(sha(p) == v for p, v in kept_files.items()))
+        return
+
+    def wait(uid, limit=300):
+        for _ in range(limit * 4):
+            u = next((x for x in c.get("/api/purchases/uploads").json()["uploads"] if x["id"] == uid), None)
+            if u and u["status"] in ("done", "failed"):
+                return u
+            time.sleep(0.25)
+        raise SystemExit(f"upload {uid} was not read in {limit} s")
+
+    k = f"[{kind}] Stage 2:"
+    s0 = c.get("/api/purchases/status").json()
+    check(f"{k} the purchase history starts empty", s0["available"] is True and s0["counts"]["lines"] == 0 and s0["counts"]["groups"] == 0, str(s0))
+    a1, a2, a3, b1, inc = _stage2_codes()
+    arv, arv2 = "1200094    ARVIND LTD", "1200094    Arvind Limited"
+    raj, raj2, nsl = "1208655    RAJAPALAYAM MILLS LIMITE", "1208655    Rajapalayam Mills Limited", "1203290    NSL TEXTILES LIMITED"
+    row = lambda po, item, code, day, sup, qty, price, **kw: dict({"Purchasing Document": float(po), "Item": float(item), "Material": code, "Plant": "F007",
+                                                               "Document Date": pd.Timestamp(day), "Name of Supplier": sup, "Order Quantity": qty, "Net Price": price,
+                                                               "Purchasing Doc. Type": "BO", "Currency": "INR", "Order Unit": "M", "Short Text": "made up for the checks"}, **kw)
+    rows = [row(9900000001, 10, a1, "2026-08-03", arv, 1000, 100), row(9900000002, 10, a2, "2026-08-10", arv2, 1200, 101, **{"Purchasing Doc. Type": "ZLOI"}),
+            row(9900000003, 10, a1, "2026-09-01", raj, 800, 102), row(9900000003, 20, a2, "2026-09-01", raj2, 900, 103, **{"Purchasing Doc. Type": "BF"}),
+            row(9900000004, 10, a1, "2026-10-05", arv, 2000, 140),
+            row(9900000005, 10, b1, "2026-08-01", nsl, 3000, 150),                     # the earliest line: its group is Fab-0001
+            row(9900000006, 10, inc, "2026-08-05", nsl, 500, 90), row(9900000007, 10, "ZZCHECK001", "2026-08-06", nsl, 600, 95),
+            # left out, each for its own reason
+            row(9900000008, 10, a1, "2026-08-07", arv, 100, 100, **{"Deletion Indicator": "L"}), row(9900000009, 10, a1, "2026-08-07", arv, 100, 100, **{"Purchasing Doc. Type": "BA"}),
+            row(9900000010, 10, a1, "2026-08-07", arv, 100, 1.2, Currency="USD"), row(9900000011, 10, a1, "2026-08-07", arv, 100, 100, **{"Order Unit": "KG"}),
+            row(9900000012, 10, a1, "2026-08-07", arv, 100, 0), row(9900000001, 10, a1, "2026-08-03", arv, 1000, 100),
+            {"Order Quantity": 9999, "Order Unit": "M"}]                               # a total line at the foot, as SAP writes it
+    data = _stage2_file(rows)
+    bad = c.post("/api/purchases/upload", files={"file": ("orders.csv", io.BytesIO(b"a,b\n1,2\n"))})
+    check(f"{k} a file that is not an Excel workbook is refused at once", bad.status_code == 400 and ".xlsx" in bad.json()["detail"])
+    up = c.post("/api/purchases/upload", files={"file": ("purchase orders.xlsx", io.BytesIO(data))}).json()
+    check(f"{k} an upload is answered at once and queued for the background", up.get("status") == "queued" and isinstance(up.get("id"), int), str(up))
+    u = wait(up["id"])
+    det = c.get(f"/api/purchases/uploads/{up['id']}").json()
+    why = {s["kind"] for s in det["skipped"]}
+    check(f"{k} the file is read in the background: done, with its counts", u["status"] == "done" and u["rows_total"] == len(rows) and u["rows_loaded"] == 8
+          and u["rows_new"] == 8 and u["rows_skipped"] == 7 and u["fabrics_new"] == 5 and u["groups_new"] == 2 and u["mills_new"] == 3, str({x: u[x] for x in u if x.startswith("rows") or x.endswith("new")}))
+    check(f"{k} the rows left out say which and why (deleted, not bulk, not rupees, not metres, no price, repeated, a total line)",
+          why == {"Deleted or blocked in SAP", "Not a bulk order", "Not in rupees", "Not per metre", "No price", "Repeated in this file", "No order number"}
+          and any(s["why"].startswith("The same order line as row 2") for s in det["skipped"]) and any("BA" in s["why"] for s in det["skipped"]), str(det["skipped"])[:400])
+    xl = c.get(f"/api/purchases/uploads/{up['id']}/skipped")
+    check(f"{k} every row left out can be downloaded", xl.status_code == 200 and len(pd.read_excel(io.BytesIO(xl.content))) == 7)
+    st = store.get()
+    with st.tx() as cur:
+        mills = cur.all("SELECT m.key, count(a.spelling) FROM mill m JOIN mill_alias a ON a.mill_id = m.id GROUP BY m.key ORDER BY m.key")
+    check(f"{k} one record per mill, every spelling kept (Arvind Ltd and Arvind Limited; a name cut at 24 characters and its full name)",
+          mills == [("arvind", 2), ("nsl textile", 1), ("rajapalayam", 2)], str(mills))
+    hist = c.get("/api/purchases/history", params={"code": a1}).json()
+    gA, gB = hist["group"]["code"], c.get("/api/purchases/history", params={"code": b1}).json()["group"]["code"]
+    check(f"{k} Fab-0001 onward in order of first appearance; two codes of one construction are one group, across mills",
+          gB == "Fab-0001" and gA == "Fab-0002" and c.get("/api/purchases/history", params={"code": a2}).json()["group"]["code"] == gA
+          and {m["name"] for m in hist["group"]["mills"]} == {"Arvind Limited", "Rajapalayam Mills Limited"}, f"{gA} {gB}")
+    ng1, ng2 = (c.get("/api/purchases/history", params={"code": x}).json() for x in (inc, "ZZCHECK001"))
+    check(f"{k} a code whose specification is incomplete, or missing, is not grouped and says why (never guessed)",
+          ng1["group"] is None and "incomplete" in ng1["not_grouped"] and ng2["group"] is None and ng2["not_grouped"] == "No PLM specification for this code"
+          and ng2["should"] is None)
+    po_row = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r["code"] == a1)   # the pilot's choices
+    same = lambda d: {x: v for x, v in d.items() if x not in ("Quoted price (Rs/m)", "Supplier", "Description", "Fabric code", "Order quantity (m)",
+                                                                 "Rate card quantity", "Order size")}
+    with st.tx() as cur:
+        stored = json.loads(cur.one("SELECT choices FROM fabric WHERE code = %s", (a1,))[0])
+    check(f"{k} price over time for a code: each purchase with date, mill, metres and price, and its should-cost on today's rates",
+          [(x["date"], x["mill"], x["metres"], x["price"]) for x in hist["lines"]] == [("2026-08-03", "Arvind Limited", 1000.0, 100.0), ("2026-09-01", "Rajapalayam Mills Limited", 800.0, 102.0),
+                                                                                    ("2026-10-05", "Arvind Limited", 2000.0, 140.0)]
+          and hist["should"] == round(c.post("/api/cost", json=stored).json()["total_per_m"], 2) and same(stored) == same(po_row["choices"]), str(hist["lines"])[:300])
+    check(f"{k} the popup also shows the code's Fab group history, its other codes included", len(hist["group"]["lines"]) == 5
+          and {x["code"] for x in hist["group"]["lines"]} == {a1, a2})
+    page = c.get(f"/api/groups/{gA}").json()
+    prices = sorted([100, 101, 102, 103, 140])
+    med = statistics.median(prices)
+    q = statistics.quantiles(prices, n=4, method="inclusive")
+    lo, hi = costing.usual_range((q[0] / med - 1) * 100, (q[2] / med - 1) * 100)
+    upper = round(med * (1 + hi / 100), 2)
+    check(f"{k} the group page: purchases, metres, mills, median price, and the usual range by the brief's own rule (5% to 10% round the median)",
+          page["purchases"] == 5 and page["metres"] == 5900 and len(page["mills"]) == 2 and page["range"]["median"] == 102 and page["range"]["enough"]
+          and (page["range"]["lo"], page["range"]["hi"]) == (lo, hi) == (-5.0, 5.0) and page["range"]["upper"] == upper == 107.1
+          and page["should"]["median"] is not None, str(page["range"]))
+    check(f"{k} priced well above the group: only the purchase above the top of the usual range, with the rupees above it",
+          [(x["code"], x["price"], x["above"], x["above_rs"]) for x in page["above"]] == [(a1, 140.0, 32.9, 65800.0)] and page["above_rs"] == 65800, str(page["above"]))
+    pb = c.get("/api/groups/fab-0001").json()
+    check(f"{k} a group with too few purchases says so, and calls nothing high", pb["code"] == "Fab-0001" and pb["range"]["enough"] is False and pb["range"]["n"] == 1
+          and pb["above"] == [] and pb["min_for_range"] == 5)
+    # the same file again: nothing doubled; a later file with one price changed and one line deleted in SAP
+    u2 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders again.xlsx", io.BytesIO(data))}).json()["id"])
+    n_lines = c.get("/api/purchases/status").json()["counts"]["lines"]
+    check(f"{k} the same file uploaded twice: each order line is one line", u2["status"] == "done" and u2["rows_new"] == 0 and u2["rows_same"] == 8 and n_lines == 8
+          and u2["fabrics_new"] == 0 and u2["groups_new"] == 0, str(u2))
+    rows2 = [dict(r) for r in rows]
+    rows2[1]["Net Price"] = 105
+    rows2[7]["Deletion Indicator"] = "L"
+    u3 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected.xlsx", io.BytesIO(_stage2_file(rows2)))}).json()["id"])
+    h2 = c.get("/api/purchases/history", params={"code": a2}).json()
+    check(f"{k} a later file: a changed line takes the newer figures; a line deleted in SAP since is no longer counted (kept, marked)",
+          u3["rows_changed"] == 1 and u3["rows_removed"] == 1 and u3["rows_same"] == 6 and c.get("/api/purchases/status").json()["counts"]["lines"] == 7
+          and c.get("/api/purchases/status").json()["counts"]["lines_removed"] == 1 and h2["lines"][0]["price"] == 105
+          and c.get("/api/purchases/history", params={"code": "ZZCHECK001"}).json()["lines"] == [], str(u3))
+    bad2 = wait(c.post("/api/purchases/upload", files={"file": ("not orders.xlsx", io.BytesIO(b"PK, but not a workbook"))}).json()["id"])
+    buf = io.BytesIO()
+    pd.DataFrame([{"Fabric": "x", "Price": 1}]).to_excel(buf, index=False)
+    bad3 = wait(c.post("/api/purchases/upload", files={"file": ("other sheet.xlsx", io.BytesIO(buf.getvalue()))}).json()["id"])
+    check(f"{k} a file that cannot be read, or is not a purchase-order export, fails and says why", bad2["status"] == "failed" and "could not be read" in bad2["error"]
+          and bad3["status"] == "failed" and "Purchasing Document" in bad3["error"], f"{bad2['error']} | {bad3['error']}")
+    with st.tx(write="purchases") as cur:
+        cur.run("INSERT INTO upload (kind, filename, uploaded_at, status, alive_at) VALUES ('purchase_orders', 'stale.xlsx', '2026-11-27T00:00:00', 'working', '2026-11-27T00:00:00')")
+    stale = next(x for x in c.get("/api/purchases/uploads").json()["uploads"] if x["filename"] == "stale.xlsx")
+    check(f"{k} a job stopped by a restart is shown as failed, with what to do", stale["status"] == "failed" and "Upload the file again" in stale["error"])
+    # the merge
+    refusals = [c.post("/api/groups/merge", json={"code": gA, "into": gA}).status_code, c.post("/api/groups/merge", json={"code": "Fab-9999", "into": gA}).status_code]
+    m = c.post("/api/groups/merge", json={"code": gB, "into": gA})
+    again = c.post("/api/groups/merge", json={"code": gB, "into": gA}).status_code
+    pb2, listing = c.get(f"/api/groups/{gB}").json(), c.get("/api/groups").json()
+    check(f"{k} an admin merge: the merged group's purchases count in the other; its code is kept and its page says where it went",
+          m.status_code == 200 and refusals == [400, 404] and again == 409 and pb2["code"] == gA and pb2["asked"]["code"] == gB and pb2["purchases"] == 6
+          and [x["code"] for x in listing["groups"]] == [gA] and listing["merged"][0]["code"] == gB and listing["merged"][0]["into"] == gA,
+          f"{m.status_code} {refusals} {again}")
+    check(f"{k} undoing a merge", c.post("/api/groups/unmerge", json={"code": gB}).status_code == 200 and c.get(f"/api/groups/{gB}").json()["code"] == gB
+          and c.post("/api/groups/unmerge", json={"code": gB}).status_code == 409)
+    c.post("/api/groups/merge", json={"code": gB, "into": gA})
+    # the real purchase file that came with the code, loaded through the app
+    t0 = time.time()
+    real = wait(c.post("/api/purchases/load-shipped").json()["id"], limit=600)
+    took = time.time() - t0
+    import pilot
+    po = pd.read_excel(os.path.join(HERE, "inputs", "Fabric _ 3Months_4746.xlsx"))
+    bulk = po[po["Purchasing Doc. Type"].isin(pilot.BULK_TYPES) & (po["Net Price"] > 0) & po["Deletion Indicator"].isna()
+              & (po["Currency"] == "INR") & (po["Order Unit"] == "M")]
+    counts = c.get("/api/purchases/status").json()["counts"]
+    check(f"{k} the purchase file that came with the code loads through the app ({took:.0f} s): the pilot's own bulk lines, every material code once",
+          real["status"] == "done" and real["rows_total"] == len(po) and real["rows_loaded"] == len(bulk) == 6265 and real["rows_new"] == 6265
+          and counts["lines"] == 6265 + 7 and counts["fabrics"] == len(set(bulk["Material"].astype(str).str.strip()) | {a1, a2, b1, inc, "ZZCHECK001"}),
+          str({x: real[x] for x in real if x.startswith("rows")}))
+    fab = pd.read_excel(os.path.join(HERE, "pilot", "Pilot_Results.xlsx"), sheet_name="Fabrics")
+    with st.tx() as cur:
+        got = {code: json.loads(ch) for code, ch in cur.all("SELECT code, choices FROM fabric WHERE choices IS NOT NULL")}
+        new_codes = sorted(code for (code,) in cur.all("SELECT code FROM fab_group WHERE upload_id = %s", (real["id"],)))
+    keys = ["Route", "Weave", "Finish", "Warp yarn", "Weft yarn", "EPI", "PPI", "Finished width (in)", "Rate card quantity", "Order size"]
+    mine = {a1, a2, a3, b1}                           # these carry made-up lines too, so their metres differ
+    same_value = lambda x, y: (float(x) == float(y)) if isinstance(y, (int, float)) and x is not None else str(x) == str(y)
+    differ = [r["Fabric code"] for r in fab.to_dict("records") if r["Fabric code"] not in mine
+              and not all(same_value(got.get(r["Fabric code"], {}).get(x), r[x]) for x in keys)]
+    wd = [r["Fabric code"] for r in fab.to_dict("records") if r["Fabric code"] not in mine and r["Route"] == "Yarn Dyed"
+          and got.get(r["Fabric code"], {}).get("Weft (yarn dyed)") != r["Weft (yarn dyed)"]]
+    check(f"{k} every fabric the pilot costed has the same costing choices here, worked out by pilot.py's own functions ({len(fab)} fabrics)",
+          not differ and not wd and len([x for x in got if x in set(fab["Fabric code"])]) == len(fab) and len(got) == len(fab), f"{differ[:5]} {wd[:5]} {len(got)}")
+    check(f"{k} new Fab groups go on from the last code ever given: a merged code is never handed out again",
+          new_codes and new_codes[0] == "Fab-0003" and gB not in new_codes, str(new_codes[:3]))
+    rc = [r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders"]
+    check(f"{k} Right cost: every purchase-order row shows its Fab group (as it counts now, after merges) or why it has none",
+          all(r["fab_group"] or r["fab_group_name"] for r in rc) and next(r for r in rc if r["code"] == b1)["fab_group"] == gA
+          and next(r for r in rc if r["code"] == a1)["fab_group_name"] == page["name"], str([r for r in rc if not (r["fab_group"] or r["fab_group_name"])][:1])[:300])
+    sample = rc[:20]
+    agree = [abs(c.get("/api/purchases/history", params={"code": r["code"]}).json()["should"] - c.post("/api/cost", json=r["choices"]).json()["total_per_m"]) < 0.006
+             for r in sample if r["code"] not in mine]
+    check(f"{k} the popup's should-cost is the one Right cost's Negotiation tab gives for the same fabric", agree and all(agree), str(agree))
+    again = wait(c.post("/api/purchases/load-shipped").json()["id"], limit=600)
+    check(f"{k} loading the same purchase file again changes nothing", again["rows_new"] == 0 and again["rows_same"] == 6265 and again["groups_new"] == 0
+          and c.get("/api/purchases/status").json()["counts"] == counts)
+    big = max(c.get("/api/groups").json()["groups"], key=lambda g: g["purchases"])
+    gp = c.get(f"/api/groups/{big['code']}").json()
+    r_ = gp["range"]
+    ps = sorted(x["price"] for x in gp["lines"])
+    q2 = statistics.quantiles(ps, n=4, method="inclusive")
+    exp = costing.usual_range((q2[0] / statistics.median(ps) - 1) * 100, (q2[2] / statistics.median(ps) - 1) * 100)
+    check(f"{k} the busiest real group ({big['code']}, {gp['purchases']} purchases, {len(gp['mills'])} mills): range by the brief's rule; purchases above it listed",
+          (r_["lo"], r_["hi"]) == exp and all(x["price"] > r_["upper"] for x in gp["above"])
+          and len(gp["above"]) == sum(1 for x in gp["lines"] if round(x["price"], 2) > r_["upper"]) and gp["purchases"] == len(gp["lines"]) == big["purchases"])
+    check(f"{k} the pilot results, the rate master and the purchase file are untouched", all(sha(p) == v for p, v in kept_files.items()))
+    r1 = c.post("/api/cost", json=masters.EXAMPLE_ROW).json()
+    check(f"{k} no rate changed: the example fabric costs what it did before the purchase files (the checks above edited rates on purpose)",
+          r1["total_per_m"] == r_before["total_per_m"] and c.get("/api/table/Yarn_Rates").json() == yarn_before and versions() == versions_before,
+          f"{r1['total_per_m']:.2f}, rate versions {versions_before} then {versions()}")
 
 
 # ===================================================================== the move from files to a database, proved

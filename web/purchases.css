@@ -1,0 +1,62 @@
+/* Stage 2: purchase history and Fab groups (web/purchases.js). Uses the shell's roles; the chart's series colours are
+   the validated three of the data-viz reference palette (any two told apart with colour blindness, light and dark). */
+:root {
+  --s1: #257de0; --s2: #f47230; --s3: #00b894; --s0: #A3ABA6;
+  --pgrid: #ECE8DD; --paxis: #C9C3B4; --pband: rgba(31, 111, 74, .10); --pband-edge: rgba(31, 111, 74, .35);
+}
+:root[data-theme="dark"] {
+  --s1: #338ced; --s2: #e76624; --s3: #00a888; --s0: #66716B;
+  --pgrid: #24302B; --paxis: #3A4741; --pband: rgba(125, 211, 168, .12); --pband-edge: rgba(125, 211, 168, .40);
+}
+.pchart { width: 100%; margin: 6px 0 2px; }
+.pchart svg { display: block; overflow: visible; }
+.pchart .grid { stroke: var(--pgrid); stroke-width: 1; }
+.pchart .axis { stroke: var(--paxis); stroke-width: 1; }
+.pchart .tick { fill: var(--text2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.pchart .band { fill: var(--pband); stroke: var(--pband-edge); stroke-width: 1; }
+.pchart .mark { stroke-width: 2; stroke-linecap: round; }
+.pchart .mark.should { stroke: var(--text); }
+.pchart .mark.median { stroke: var(--text2); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.pchart .mlabel { fill: var(--text); font-size: 11px; font-weight: 700; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+.pchart .dotm { stroke: var(--panel); stroke-width: 2; }
+.pchart .dotm.s1 { fill: var(--s1); } .pchart .dotm.s2 { fill: var(--s2); } .pchart .dotm.s3 { fill: var(--s3); } .pchart .dotm.s0 { fill: var(--s0); }
+.pchart .hit { fill: transparent; cursor: default; }
+.pchart .pt:hover .dotm { stroke: var(--text); stroke-width: 1.5; }
+.plegend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+.plegend span { display: inline-flex; align-items: center; gap: 6px; }
+.plegend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.plegend .dot.s1 { background: var(--s1); } .plegend .dot.s2 { background: var(--s2); } .plegend .dot.s3 { background: var(--s3); } .plegend .dot.s0 { background: var(--s0); }
+.plegend .key { width: 16px; height: 0; display: inline-block; border-top: 2px solid var(--text); }
+.plegend .key.median { border-top: 1.5px dashed var(--text2); }
+.plegend .bandkey { width: 16px; height: 10px; display: inline-block; background: var(--pband); border: 1px solid var(--pband-edge); border-radius: 2px; }
+
+/* the price popup */
+.dialog.pdialog { width: min(920px, 96vw); max-height: 92vh; }
+.pdialog .phead { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.pdialog .phead h2 { margin: 0; }
+.pdialog h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text2); }
+.pdialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.pdialog .stiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.err { color: #C0362C; font-size: 13px; }
+:root[data-theme="dark"] .err { color: #F28B82; }
+.note { background: var(--selected); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 13px; max-width: 900px; }
+
+/* pages */
+.ptitle { font-size: 24px; font-weight: 800; letter-spacing: -.02em; margin: 6px 0 4px; }
+.dhead .gname { font-size: 14px; color: var(--muted); margin-top: 2px; }
+.gfields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 13px; margin: 6px 0; }
+.gfields dt { color: var(--text2); } .gfields dd { margin: 0; font-weight: 600; }
+.mergerow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
+.mergerow input { width: 120px; border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; background: var(--panel2); margin-left: 4px; }
+.uprow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 6px 0 4px; }
+.upst { display: inline-block; padding: 2px 9px; border-radius: 8px; font-size: 12px; font-weight: 700; background: var(--tab-bg); }
+.upst.done { background: rgba(46, 158, 91, .16); } .upst.failed { background: rgba(229, 72, 77, .16); } .upst.working, .upst.queued { background: rgba(245, 197, 66, .25); }
+.updetail { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; font-size: 13px; }
+.gridscroll.sup.pgt { min-height: 0; }
+.fgcell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
+.fgcell .ib.pib { width: 24px; height: 24px; flex: none; }
+.fgcell .ib.pib svg { width: 15px; height: 15px; }
+@media (max-width: 700px) {
+  .ptitle { font-size: 20px; }
+  .mergerow input { width: 100px; }
+}

@@ -54,7 +54,7 @@ QUOTE_COLUMNS = {"Saved on": "saved_on", "Fabric code": "fabric_code", "Descript
                  "Should-cost Rs/m": "should_cost_per_m", "Should-cost Rs/kg": "should_cost_per_kg", "Quoted Rs/m": "quoted_per_m",
                  "Gap Rs/m": "gap_per_m", "Gap %": "gap_pct", "Id": "legacy_id", "Inputs": "choices", "Result": "costing",
                  "Mill": "sheet_row", "Problems": "problems", "Notes": "notes", "Upload": "upload"}
-KINDS = ("rates", "list", "negotiations", "seen", "sheets")
+KINDS = ("rates", "list", "negotiations", "seen", "sheets", "purchases")   # purchases: stage 2 (db/002), on a database only
 MOVED_NOTE = "moved_to_database.json"      # left beside the files once they are copied into a database (they stay as they were)
 FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations": "negotiations.json",
          "seen": "alerts_seen.json", "sheets": "cost_sheets.json"}
@@ -146,7 +146,7 @@ class FileStore:
         return out
 
     def version(self, what):
-        return _mtime(self.paths[what])
+        return _mtime(self.paths[what]) if what in self.paths else None     # the purchase history has no file
 
     # ------------------------------------------------ rate master
     def read_rates(self):

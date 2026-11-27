@@ -402,6 +402,67 @@ def intake_add(payload: dict = Body(...), request: Request = None):
     return rates.intake_add(payload, who=_who(request))
 
 
+# ------------------------------------------------------------------ stage 2: purchase history, Fab groups (on a database only)
+# Anyone signed in may upload and merge until stage 3 adds who may do what.
+from rules import fab_groups, purchases  # noqa: E402
+
+
+@app.get("/api/purchases/status")
+def purchases_status():
+    return purchases.status()
+
+
+@app.get("/api/purchases/uploads")
+def purchase_uploads():
+    return purchases.uploads()
+
+
+@app.post("/api/purchases/upload")
+async def purchase_upload(request: Request, file: UploadFile = File(...)):
+    data = await file.read()
+    return await asyncio.to_thread(purchases.upload, file.filename, data, _who(request))
+
+
+@app.post("/api/purchases/load-shipped")
+def purchase_load_shipped(request: Request = None):
+    return purchases.upload_shipped(who=_who(request))
+
+
+@app.get("/api/purchases/uploads/{upload_id}")
+def purchase_upload_detail(upload_id: int):
+    return purchases.upload_detail(upload_id)
+
+
+@app.get("/api/purchases/uploads/{upload_id}/skipped")
+def purchase_upload_skipped(upload_id: int):
+    return _file(purchases.skipped_download(upload_id))
+
+
+@app.get("/api/purchases/history")
+def purchase_history(code: str):
+    return purchases.history(code)
+
+
+@app.get("/api/groups")
+def groups_list():
+    return fab_groups.listing()
+
+
+@app.get("/api/groups/{code}")
+def group_page(code: str):
+    return fab_groups.page(code)
+
+
+@app.post("/api/groups/merge")
+def groups_merge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.merge(payload, who=_who(request))
+
+
+@app.post("/api/groups/unmerge")
+def groups_unmerge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.unmerge(payload, who=_who(request))
+
+
 
 # ------------------------------------------------------------------ classic screens, passed through
 HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "content-encoding", "content-length", "host"}

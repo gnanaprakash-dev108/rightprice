@@ -113,6 +113,7 @@ QUANTITY_BANDS = [(500, 600, "500 to 599 m"), (600, 700, "600 to 699 m"), (700, 
                   (800, 2000, "800 to 1,999 m"), (2000, 4000, "2,000 to 3,999 m"),
                   (4000, 6000.5, "4,000 to 6,000 m"), (6000.5, 1e12, "Above 6,000 m")]
 NO_BAND = "Not applied"
+BULK_TYPES = ["BO", "ZLOI", "BF"]       # purchase-order types that are bulk orders (the others are samples, yardage ...)
 FOCUS = [("Yarn Dyed", "Plain"), ("Printed", "Twill"), ("Printed", "Plain")]   # the known over-costed groups
 
 
@@ -167,18 +168,96 @@ def plm_count(txt, yarn_by_count):
     return None
 
 
+def inputs_context(m):
+    """What turning a PLM specification into the tool's choices needs from the rate master."""
+    fin_by_norm = {norm(f).lstrip("f"): f for f in m["Finishing_Rates"]["Finish"]}
+    fin_by_norm.update(FINISH_ALIASES)
+    return {"ybc": yarn_lookup(m), "tool_weaves": set(m["Weaves"]["Weave"]), "fin_by_norm": fin_by_norm}
+
+
+def plm_numbers(s):
+    """EPI, PPI and the finished width in inches, as the PLM specification gives them (0 where unreadable)."""
+    try:
+        epi, ppi, w = float(s["epi"] or 0), float(s["ppi"] or 0), float(s["finishedwidth"] or 0)
+    except ValueError:
+        epi = ppi = w = 0
+    uom = s["finishedwidth_uom"].lower()
+    width = w / 2.54 if uom == "cm" else (w * 39.37 if uom == "m" else w)
+    return epi, ppi, width
+
+
+def fabric_inputs(code, s, ctx, metres, supplier=None, price=None, lines=None):
+    """One woven fabric's PLM specification turned into the tool's costing choices, as the pilot costs it:
+    (row, None), or (None, why it is not costed). `s` is its row of data/plm_specs_for_po.csv with "Content group"
+    added; `metres` are its purchase-order metres (they set the rate card quantity band). The purchase history
+    (rules/purchases.py) works its fabrics' choices out with this too."""
+    import grouping
+    why = None
+    route = PLM_ROUTE.get(s["dyemethod_name"].lower())
+    route_from = "PLM dye method"
+    if route is None and s["dyemethod_name"].lower() == "solid" and s["pattern_name"].lower() in ("solid", "textured"):
+        # 'Solid' with a solid pattern is read as piece dyed, as on the mill rate card ("piece dyed (solid)").
+        # 'Solid' with a print pattern is left out: it could be either.
+        route, route_from = "Piece Dyed", "Assumed: dye method 'Solid' with a solid pattern is piece dyed"
+    wg = grouping.weave_group(s["weavetype_name"])
+    weave = s["weavetype_name"] if s["weavetype_name"] in ctx["tool_weaves"] else GROUP_WEAVE.get(wg)
+    warp, weft_yarn = plm_count(s["warpcount"], ctx["ybc"]), plm_count(s["weftcount"], ctx["ybc"])
+    epi, ppi, width = plm_numbers(s)
+    if s["Content group"] != "100% cotton":
+        why = "Not 100% cotton: " + s["Content group"]
+    elif route is None:
+        why = f"Dye method not mapped: {s['dyemethod_name'] or 'blank'}"
+    elif weave is None:
+        why = f"Weave not mapped: {s['weavetype_name'] or 'blank'}"
+    elif epi <= 20 or ppi <= 20:
+        why = "EPI or PPI missing"
+    elif not 30 <= width <= 75:
+        why = "Width missing or not plausible"
+    elif warp is None or weft_yarn is None:
+        why = f"Count not in yarn master: {s['warpcount'] or 'blank'} x {s['weftcount'] or 'blank'}"
+    if why:
+        return None, why
+    fin_by_norm = ctx["fin_by_norm"]
+    fkey = norm(s["finish_name"]).lstrip("f")
+    yd = route == "Yarn Dyed"
+    weft, weft_basis = weft_from_plm(s) if yd else (None, "")
+    return {"Fabric code": code,
+            "Description": f"{s['blend_name']} {s['warpcount']}x{s['weftcount']} / {epi:g}x{ppi:g} {s['weavetype_name']}",
+            "Supplier": supplier, "Route": route, "Weave": weave,
+            "Finish": fin_by_norm.get(fkey, "Normal"), "Warp yarn": warp, "Weft yarn": weft_yarn,
+            "Weft (yarn dyed)": weft, "Weft read from": weft_basis,
+            "Print method": None,
+            "Print method read from": "Not in PLM; left on the printing rate per kg" if route == "Printed" else "",
+            "Route read from": route_from,
+            "Rate card quantity": quantity_band(route, metres), "PLM pattern": s["pattern_name"],
+            "PLM pattern details": s["patterndetails_name"],
+            "EPI": epi, "PPI": ppi, "Finished width (in)": round(width, 1),
+            "Quoted price (Rs/m)": None if price is None else round(price, 2),
+            "Finish as written": s["finish_name"], "Finish mapped": fkey in fin_by_norm,
+            "PO metres": metres, "PO lines": lines}, None
+
+
+# the order size slabs the pilot sets from the purchase-order metres, where the rate master's slabs are these
+ORDER_SLABS = {"Below 1,000 m": (0, 1000), "1,000 to 3,000 m": (1000, 3000), "3,000 m and above": (3000, 1e12)}
+
+
+def order_size(m, metres):
+    """The order size slab for these purchase-order metres, as the pilot sets it; None when the rate master's slabs
+    are not the three above."""
+    if not set(ORDER_SLABS) <= set(m["Order_Slab"]["Order size"].tolist()):
+        return None
+    return next(k for k, (lo, hi) in ORDER_SLABS.items() if lo <= metres < hi)
+
+
 def build_inputs():
     """Purchase-order fabrics turned into tool inputs: (masters, inputs, not costed, funnel)."""
     import grouping
     m = masters.load()
-    ybc = yarn_lookup(m)
-    tool_weaves = set(m["Weaves"]["Weave"])
-    fin_by_norm = {norm(f).lstrip("f"): f for f in m["Finishing_Rates"]["Finish"]}
-    fin_by_norm.update(FINISH_ALIASES)
+    ctx = inputs_context(m)
 
     po = pd.read_excel(PO_FILE)
     po = po[po["Purchasing Document"].notna()]
-    bulk = po[po["Purchasing Doc. Type"].isin(["BO", "ZLOI", "BF"]) & (po["Net Price"] > 0)
+    bulk = po[po["Purchasing Doc. Type"].isin(BULK_TYPES) & (po["Net Price"] > 0)
               & po["Deletion Indicator"].isna() & (po["Currency"] == "INR") & (po["Order Unit"] == "M")].copy()
     bulk["Material"] = bulk["Material"].astype(str).str.strip()
     bulk["value"] = bulk["Net Price"] * bulk["Order Quantity"]
@@ -201,57 +280,15 @@ def build_inputs():
     for code, s in spec.iterrows():
         if s["productgroup_name"] != "Woven":
             continue
-        why = None
-        route = PLM_ROUTE.get(s["dyemethod_name"].lower())
-        route_from = "PLM dye method"
-        if route is None and s["dyemethod_name"].lower() == "solid" and s["pattern_name"].lower() in ("solid", "textured"):
-            # 'Solid' with a solid pattern is read as piece dyed, as on the mill rate card ("piece dyed (solid)").
-            # 'Solid' with a print pattern is left out: it could be either.
-            route, route_from = "Piece Dyed", "Assumed: dye method 'Solid' with a solid pattern is piece dyed"
-        wg = grouping.weave_group(s["weavetype_name"])
-        weave = s["weavetype_name"] if s["weavetype_name"] in tool_weaves else GROUP_WEAVE.get(wg)
-        warp, weft_yarn = plm_count(s["warpcount"], ybc), plm_count(s["weftcount"], ybc)
-        try:
-            epi, ppi, w = float(s["epi"] or 0), float(s["ppi"] or 0), float(s["finishedwidth"] or 0)
-        except ValueError:
-            epi = ppi = w = 0
-        uom = s["finishedwidth_uom"].lower()
-        width = w / 2.54 if uom == "cm" else (w * 39.37 if uom == "m" else w)
-        if s["Content group"] != "100% cotton":
-            why = "Not 100% cotton: " + s["Content group"]
-        elif route is None:
-            why = f"Dye method not mapped: {s['dyemethod_name'] or 'blank'}"
-        elif weave is None:
-            why = f"Weave not mapped: {s['weavetype_name'] or 'blank'}"
-        elif epi <= 20 or ppi <= 20:
-            why = "EPI or PPI missing"
-        elif not 30 <= width <= 75:
-            why = "Width missing or not plausible"
-        elif warp is None or weft_yarn is None:
-            why = f"Count not in yarn master: {s['warpcount'] or 'blank'} x {s['weftcount'] or 'blank'}"
+        row, why = fabric_inputs(code, s, ctx, g.loc[code, "qty"], g.loc[code, "Supplier"], g.loc[code, "PO price Rs/m"],
+                                 g.loc[code, "lines"])
         if why:
             reasons.append({"Fabric code": code, "Reason": why, "Content": s["blend_name"],
                             "Warp count": s["warpcount"], "Weft count": s["weftcount"],
                             "Weave": s["weavetype_name"], "Dye method": s["dyemethod_name"],
                             "PO metres": g.loc[code, "qty"], "PO price Rs/m": round(g.loc[code, "PO price Rs/m"], 2)})
             continue
-        fkey = norm(s["finish_name"]).lstrip("f")
-        yd, metres = route == "Yarn Dyed", g.loc[code, "qty"]
-        weft, weft_basis = weft_from_plm(s) if yd else (None, "")
-        rows.append({"Fabric code": code,
-                     "Description": f"{s['blend_name']} {s['warpcount']}x{s['weftcount']} / {epi:g}x{ppi:g} {s['weavetype_name']}",
-                     "Supplier": g.loc[code, "Supplier"], "Route": route, "Weave": weave,
-                     "Finish": fin_by_norm.get(fkey, "Normal"), "Warp yarn": warp, "Weft yarn": weft_yarn,
-                     "Weft (yarn dyed)": weft, "Weft read from": weft_basis,
-                     "Print method": None,
-                     "Print method read from": "Not in PLM; left on the printing rate per kg" if route == "Printed" else "",
-                     "Route read from": route_from,
-                     "Rate card quantity": quantity_band(route, metres), "PLM pattern": s["pattern_name"],
-                     "PLM pattern details": s["patterndetails_name"],
-                     "EPI": epi, "PPI": ppi, "Finished width (in)": round(width, 1),
-                     "Quoted price (Rs/m)": round(g.loc[code, "PO price Rs/m"], 2),
-                     "Finish as written": s["finish_name"], "Finish mapped": fkey in fin_by_norm,
-                     "PO metres": g.loc[code, "qty"], "PO lines": g.loc[code, "lines"]})
+        rows.append(row)
 
     return m, pd.DataFrame(rows), pd.DataFrame(reasons), funnel
 
@@ -303,11 +340,8 @@ def steps(inp, m, wg):
 
 def main():
     m, inp, rej, funnel = build_inputs()
-    slabs = m["Order_Slab"]["Order size"].tolist()     # order size from the PO quantity, where slabs match
-    by_metres = {"Below 1,000 m": (0, 1000), "1,000 to 3,000 m": (1000, 3000), "3,000 m and above": (3000, 1e12)}
-    if set(by_metres) <= set(slabs):
-        inp["Order size"] = inp["PO metres"].map(
-            lambda q: next(k for k, (lo, hi) in by_metres.items() if lo <= q < hi))
+    if order_size(m, 0) is not None:                   # order size from the PO quantity, where slabs match
+        inp["Order size"] = inp["PO metres"].map(lambda q: order_size(m, q))
     funnel.append(("...100% cotton", int((~rej["Reason"].str.startswith("Not 100% cotton")).sum()) + len(inp)))
     funnel.append(("...with every field readable (costed)", len(inp)))
 

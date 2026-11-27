@@ -74,7 +74,9 @@ def costs():
     dashboard._warm_pilot()
     ins = common._cache.get(common.PILOT + "#insights")
     cats = {(c["route"], c["weave"]): c for c in (ins[1]["categories"] if ins and ins[1] else [])}
-    memo = (common._state_key(), _briefs["key"], _briefs["running"])
+    from rules import fab_groups        # stage 2: each purchase-order fabric's Fab group (none on the files store)
+    gkey = fab_groups.version()
+    memo = (common._state_key(), _briefs["key"], _briefs["running"], gkey)
     if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
         return _costs_memo["val"]
     out = []
@@ -150,9 +152,14 @@ def costs():
     mills._learn_mill_names({r["supplier"] for r in out})
     for r in out:
         r["mill"] = mills.mill_key(r["supplier"])
+    groups = fab_groups.by_code()
+    for r in out:           # stage 2: the purchase-order fabric's Fab group, from the purchase history
+        if r["source"] == "Purchase orders":
+            g = groups.get(str(r["code"])) or {}
+            r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
     val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=(common._state_key(), _briefs["key"], _briefs["running"]), val=val)
+    _costs_memo.update(key=(common._state_key(), _briefs["key"], _briefs["running"], gkey), val=val)
     return val
 
 
