@@ -134,20 +134,19 @@ Found while measuring on 27 Nov, and told to GP:
   (finished 11:38 UTC).** Without `DATABASE_URL` the site runs on the files as before. The build session cannot sign in:
   **the live site has not been confirmed by eye since this deploy.** After the deploy the site answered Microsoft
   sign-in's 401 to a request without sign-in (the front door is up; that does not show the app started).
-- **GP was told on 27 Nov he may now add `DATABASE_URL`** (steps: docs/AZURE_DEPLOY.md, "The database"). **The next
-  session should first ask GP what `/api/store` shows** (`"store": "postgres"`, `"ok": true`, and `copied_in` >
-  `checked` > `summary`; it holds no password) and whether Right cost, the list, the Dashboard and a supplier page look
-  as before. If `ok` is false, the `error` and `advice` there say what happened; nothing is lost either way.
-- **27 Nov, after the deploy: GP added `DATABASE_URL`; `/api/store` showed `"ok": false`, "could not be reached
-  (ConnectionTimeout: connection timeout expired)"**, "Nothing has been copied in yet and the files are unchanged".
-  A timeout (not a refused connection or a wrong password) points at the database's firewall. GP was asked to check
-  `rightprice-db` > Overview (Available) and > Networking: "Public access (allowed IP addresses)" with "Allow public access
-  from any Azure service within Azure to this server" ticked and saved; the app retries every 15 s and copies the files in
-  by itself once it gets through, no restart. Or remove `DATABASE_URL` meanwhile (the site's data pages answer 503 while
-  the database cannot be reached). If Networking says "Private access (VNet Integration)", GP should stop and say so.
-  **The next session: ask GP what `/api/store` shows now.**
-- This handover note is on the branch and in its own pull request, left unmerged on purpose so no redeploy restarts the
-  site while GP switches it over; merge it (or carry it in) with the next pull request.
+- **27 Nov, 12:13:47 UTC: the live site moved to the database.** GP added `DATABASE_URL`. The first try timed out
+  (ConnectionTimeout): on `rightprice-db` > Networking, public access was on but "Allow public access from any Azure
+  service within Azure to this server" was not ticked and there were no firewall rules. GP ticked it and saved; the app,
+  retrying every 15 s, got through with no restart and copied the files in. `/api/store` showed `"ok": true`: 4 rate
+  versions (the 3 dated copies in `/home/rightprice-data` as earlier versions, then `Rate_Master.xlsx`), 2 fabric list
+  rows ("the same; 1 costed on both, equal to the paisa"; the other row has no costing choices to cost), tracker,
+  alerts seen and mill cost sheets empty on the live site and in the database. The files were only read;
+  `moved_to_database.json` was left beside them.
+- A tighter firewall for later (GP may choose it): instead of the "any Azure service" box, one rule per outbound address
+  of the web app (web app > Networking > Outbound IPv4 addresses, about 40 of them). Never "0.0.0.0 - 255.255.255.255".
+- This handover was merged after the move (its redeploy restarted the site on the database: `/api/store` should still
+  show `copied_in` started 2026-11-27T12:13:47, so nothing was copied twice). **The next session should ask GP to confirm
+  that, and that the pages look as before; the live site has not been seen by eye on the database by the build session.**
 - **Next: stages 2 to 5**, in parallel tracks on their own branches, merged one at a time with all checks re-run (GP
   agreed); then stage 6. Each track builds its tables as `db/00N_<stage>.sql` (the full draft is `db/schema.sql`; its
   `quote`, `negotiation_step`, `rate_version`, `alert_seen` and `cost_sheet_row` differ from the tables in use, so a
