@@ -20,10 +20,11 @@ async function loadMe() {
     if (!r.ok) return;
     RPA.me = await r.json();
     // the menus offer only what this person may use: the Prices links, the popup's screens, the list's ⋮ actions
-    const linkOk = href => !href.startsWith("#") || href.startsWith("#lib/") || can(PAGE_NEEDS[href.slice(1)] || "");
+    const linkOk = href => !href.startsWith("#") || !PAGE_NEEDS[href.slice(1)] || can(PAGE_NEEDS[href.slice(1)]);
     const fly = CONFIG.flyouts.prices;
     fly.groups = fly.groups.map(([g, links]) => [g, links.filter(([, href]) => linkOk(href))]).filter(([, links]) => links.length);
     CONFIG.popupTabs = CONFIG.popupTabs.filter(([id]) => can(TAB_NEEDS[id]));
+    for (const sec of Object.keys(CONFIG.sections)) CONFIG.sections[sec] = CONFIG.sections[sec].filter(id => !PAGE_NEEDS[id] || can(PAGE_NEEDS[id]));   // the tabs above a page
     const mod = CONFIG.modules.costs;
     mod.moreActions = mod.moreActions.filter(a => !ACTION_TABS[a] || can(TAB_NEEDS[ACTION_TABS[a]]));
     render();
@@ -33,9 +34,15 @@ function pageNeed() {
   const id = state.users ? "users" : state.frame ? state.frame.split("/")[0] : state.library ? null : state.supplier ? "supplier" : state.detail ? "item" : "rightcost";
   return id ? PAGE_NEEDS[id] : null;
 }
-function pageOk() { const need = pageNeed(); return !need || can(need); }
+// not let in at all (the server serves the shell without asking the database, then refuses every call for data):
+// every page says why, in the server's words
+const shutOut = () => !!(RPA.me && RPA.me.permissions_on && !RPA.me.let_in);
+function pageOk() { if (shutOut()) return false; const need = pageNeed(); return !need || can(need); }
 function noPage(main) {
   $("#selbar").hidden = true;
+  if (shutOut()) return fill(main, h("div", { class: "empty ua-nopage" }, h("b", {}, RPA.me.signed_in ? "You have not been given access yet" : "Sign in first"),
+    h("p", {}, RPA.me.why || "Ask an admin to add you."), h("p", {}, h("a", { href: RPA.me.signed_in ? "/.auth/logout" : "/.auth/login/aad?post_login_redirect_uri=/" },
+      RPA.me.signed_in ? "Sign out, to sign in with another account" : "Sign in"))));
   fill(main, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') })),
     h("div", { class: "empty ua-nopage" }, h("b", {}, "This page is not open to your role"), h("p", {},
       `Your role (${(RPA.me && RPA.me.role) || "none"}) may not use it. Ask an admin if you need to.`)));
@@ -128,9 +135,11 @@ function renderUsers(main) {
     return h("td", { class: "c" + (on !== g.default ? " differs" : "") + (k in pend ? " pending" : ""), title: on !== g.default ? "Differs from the default" : null }, box);
   };
   const groups = ["Pages", "Actions"].map(gname => [h("tr", { class: "grp" }, h("td", { colspan: String(roles.length + 1) }, gname === "Pages" ? "Pages (to see)" : "Actions (to change)")),
-    v.permissions.filter(p => p.group === gname).map(p => h("tr", {}, h("td", { class: "lbl" }, p.label, p.fixed ? h("span", { class: "muted" }, " (Admin only)") : null), roles.map(r => cell(r, p))))]);
+    v.permissions.filter(p => p.group === gname).map(p => h("tr", {}, h("td", { class: "lbl" }, p.label, p.fixed ? h("span", { class: "muted" }, " (Admin only)") : null,
+      p.unticked ? h("div", { class: "muted ua-note" }, p.unticked) : null), roles.map(r => cell(r, p))))]);
   const grid = h("div", { class: "ua-card" }, h("h2", {}, "What each role may do"),
-    h("p", { class: "muted" }, "Admin always has everything. A shaded box differs from the role's default. ", v.assistant.name, ": ", v.assistant.note),
+    h("p", {}, v.grid_note), h("p", { class: "muted" }, "Admin always has everything. A shaded box differs from the role's default. ", v.assistant.name, ": ", v.assistant.note,
+      Object.keys(v.assistant.tools).length ? ` Its tools: ${Object.keys(v.assistant.tools).join(", ")}.` : ""),
     swipe.cloneNode(true), h("div", { class: "ua-scroll" }, h("table", { class: "ua-table ua-grid" }, h("thead", {}, h("tr", {}, h("th", {}, ""), roles.map(r => h("th", { class: "c" }, r)))), h("tbody", {}, groups))),
     h("div", { class: "ua-acts" }, h("button", { type: "button", class: "btn fill", disabled: !nPend || !editable || null, onclick: async () => {
       const changes = Object.entries(pend).map(([k, allowed]) => { const [role, permission] = k.split("|"); return { role, permission, allowed }; });

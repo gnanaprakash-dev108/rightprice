@@ -174,8 +174,9 @@ anyone.
 
 With the setting on:
 - nobody gets in until an admin adds them on Users and roles (their e-mail address, name and role). Someone signed in
-  but not added sees a plain page: "You have not been given access yet. Ask an admin to add you: you are signed in as
-  <their address>". Everything they ask the server for is refused (403);
+  but not added sees: "You have not been given access yet. Ask an admin to add you: you are signed in as <their
+  address>". Everything with data they ask the server for is refused (403); the page itself (which holds no data) opens
+  without the database, so a slow database never stops the site from opening;
 - the addresses in the setting are always Admin, whether or not they are in the list;
 - the server checks every request against the person's role; the screens only hide what the role may not use;
 - every change on Users and roles (a person added, a role changed, someone switched off or on, a permission given or
@@ -195,6 +196,29 @@ The earlier screens (`/classic`, "Earlier screens" under the user icon) can chan
 that may edit rates. Each person's own marks (Status and Remarks in Right cost, saved searches, Library lists) stay in
 their own browser, as before.
 
+What a tick does, plainly:
+- **Actions** (edit rates, apply drafts, upload, record steps, mark alerts seen, draft messages, manage users) are
+  strict: a role without one cannot do it anywhere, whatever a screen shows.
+- **Pages** decide which pages a role can open. They are **not** a way to keep figures secret. Data several pages read
+  stays open to a role that has any of them, so unticking one page never breaks another (the Dashboard reads the fabric
+  list; Yarn prices reads the Dashboard's yarn figures; Right cost's fabric pages cost the fabric). The drop-down lists
+  every screen loads carry the yarn master with its rates, for anyone let in. The admin page says, for each page, what
+  unticking it hides and where its figures still show.
+- The screens shown inside the shell from the earlier front end (the Dashboard, the price pages, Bulk upload, Create
+  cost, Compare, the pack, Mill cost sheets) still show their buttons to a role that may not use them; pressing one
+  answers "Your role (...) may not ...". Stage 4 moves these screens into the shell and can hide them then.
+
+How the person is read: from `X-MS-CLIENT-PRINCIPAL-NAME` alone, as App Service's sign-in sets it, or, only when that is
+absent, from the sign-in's `preferred_username` or `upn` claim; never from the display name. Microsoft describes that
+header as "a human-readable name ... such as an email address or user principal name" and does not say which it is for
+a personal or a guest account, so add each person by the address the refusal shows them (a personal account written
+`live.com#name@example.com` is read as `name@example.com`). A request carrying a sign-in header twice is refused.
+
+App Service sign-in must stay on. On Azure the app trusts the sign-in headers only while App Service says sign-in is on
+(the setting `WEBSITE_AUTH_ENABLED`, which App Service sets itself). If Authentication is ever turned off while
+`RIGHTPRICE_ADMINS` is set, nobody is let in, admins included, and the page says why: turn sign-in back on, or remove
+`RIGHTPRICE_ADMINS`.
+
 ### Switching it on
 
 Do this only with the database in use (`/api/store` says `"store": "postgres"` and `"ok": true`): the list of people
@@ -209,7 +233,11 @@ everyone else is told a database is needed.
    |---|---|
    | `RIGHTPRICE_ADMINS` | that address, for example `gp@yourcompany.com` (more than one: separate them with commas) |
 
-   Apply, and confirm the restart.
+   Apply, and confirm the restart. The app also reads `"gp@yourcompany.com"`, `GP <gp@yourcompany.com>`,
+   `mailto:gp@yourcompany.com` and a full stop after the address. Anything that is still not an e-mail address is
+   ignored (an admin sees which on Users and roles). If the setting names no valid address at all, nobody is an admin
+   from it: everyone refused is told "the app setting RIGHTPRICE_ADMINS names no valid e-mail address", and the Log
+   stream says so too.
 3. After a minute, open the site, then the user icon > **Users and roles**. It should say "Permissions are on" and show
    your address as always Admin. Add yourself as Admin in the list too, so you stay an admin if the setting is changed
    later. From now on, the others see "You have not been given access yet" until you add them, so add them straight
@@ -247,8 +275,11 @@ checks permissions, so everyone signed in could change rates.
 What was tried: the app, on a test PostgreSQL 16 and on SQLite, given the headers Microsoft documents for a signed-in
 person ("Work with user identities in AuthN/AuthZ", updated November 2026: `X-MS-CLIENT-PRINCIPAL-NAME`, and
 `X-MS-CLIENT-PRINCIPAL` holding the claims, which "external requests aren't allowed to set"). Which address Microsoft
-puts there for a guest or a personal Microsoft account was not seen; the app reads the name header and the
-`preferred_username`, `email` and `upn` claims, and finds a person by any of them. Optional, also not tried: in the
+puts there for a guest or a personal Microsoft account was not seen, nor the value App Service gives
+`WEBSITE_AUTH_ENABLED` on this web app (Microsoft's reference says only that it is "injected ... to indicate whether App
+Service authentication is enabled"; the app takes `True` or `1` as on). If switching permissions on shows everyone
+"App Service sign-in (Authentication) is off" although it is on, remove `RIGHTPRICE_ADMINS` (the site opens as before)
+and tell the build session. Optional, also not tried: in the
 Entra admin center, the app's Enterprise application > Properties > "Assignment required?" = Yes, then Users and
 groups > add the 10, so that nobody else can even sign in.
 

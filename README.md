@@ -47,8 +47,10 @@ survives redeploys.
 Off until the app setting `RIGHTPRICE_ADMINS` (the first admins' sign-in addresses) is added; until then everyone
 signed in may use everything, as before. With it, nobody gets in until an admin adds them under the user icon >
 Users and roles, with a role: Admin, Rates editor, Buyer or Viewer (what each may see and do can be changed there; every
-change is recorded). Every address the server answers needs one permission (`rules/access.py`, `ROUTES`), checked in
+change is recorded). Every address the server answers needs a permission (`rules/access.py`, `ROUTES`), checked in
 one place before the request reaches it (`server.py`, `AccessGate`); `check_server.py` fails if an address has none.
+Actions (edit rates, upload, record steps ...) are strict; a page's tick decides which pages a role can open, not which
+figures it can read (data several pages read stays open to a role with any of them).
 The people are kept in the database (`db/003_users_and_roles.sql`). Steps: [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md),
 "Users and roles".
 

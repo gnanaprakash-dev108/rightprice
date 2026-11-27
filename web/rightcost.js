@@ -908,7 +908,7 @@ function openPopup(tab = "cost", r = null, fromAddress = false) {
   }, { once: true });
   $("#layer").append(s);
 }
-const openCostPopup = r => openPopup("cost", r || null);
+const openCostPopup = r => can("page:cost") ? openPopup("cost", r || null) : toast(`Your role (${RPA.me.role}) may not use Create cost`, false);
 
 // ------------------------------------------------------------------ Library: setup lists (kept in this browser)
 function libSeed(name) {
@@ -1144,6 +1144,6 @@ async function load() {
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
     if (!state.frame) render();
     if (state.supplier && !d.ready) loadSupplier();
-  } catch (err) { fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
+  } catch (err) { if (shutOut()) return render(); fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
 renderRail(); route(); load(); loadAlerts(); whoAmI();

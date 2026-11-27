@@ -177,7 +177,8 @@ def route_keys():
 def _refusal_page(status, words):
     """What a browser is shown when RightPrice will not open for this person: plain words, in RightPrice's colours."""
     import html
-    title = {401: "Sign in first", 503: "RightPrice cannot let you in just now"}.get(status, "You have not been given access yet")
+    title = {400: "RightPrice cannot tell who is asking", 401: "Sign in first",
+             503: "RightPrice cannot let you in just now"}.get(status, "You have not been given access yet")
     link = ('<a href="/.auth/login/aad?post_login_redirect_uri=/">Sign in</a>' if status == 401
             else '<a href="/.auth/logout">Sign out, to sign in with another account</a>')
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -192,7 +193,9 @@ def _refusal_page(status, words):
 class AccessGate:
     """Every request, before it reaches its route: off unless the app setting RIGHTPRICE_ADMINS is set (then the app is
     as it was). With it on, the address's permission (rules/access.py ROUTES) is checked against the signed-in person;
-    an address with none assigned is refused. /mcp is the AI assistant's way in, checked by McpGate and its token."""
+    an address with none assigned is refused. /mcp is the AI assistant's way in, checked by McpGate and its token.
+    A request carrying a sign-in header twice is refused (400), so this check and the routes always read the same person.
+    The shell page (GET /) is decided without the database: it carries no data, and its data is guarded here."""
 
     def __init__(self, inner):
         self.inner = inner
@@ -203,14 +206,19 @@ class AccessGate:
         path = scope.get("path", "")
         if path == "/mcp" or path.startswith("/mcp/"):
             return await self.inner(scope, receive, send)
-        route = _route_for(scope)
-        key = _route_key(route, scope.get("method", "")) if route is not None else f"{scope.get('method', 'WS')} {path}"
-        need = access.permission_for(key, getattr(route, "path", path))
-        if need == access.PUBLIC:
-            return await self.inner(scope, receive, send)
-        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers") or []}
-        # it may read the database: in a worker thread (the app's own pool of 120), never on the server's own loop
-        refused = await anyio.to_thread.run_sync(access.check, headers, need)
+        if access.duplicated(scope.get("headers") or []):
+            refused = 400, "This request carries the sign-in twice, so RightPrice cannot tell who is asking. It is refused."
+        else:
+            route = _route_for(scope)
+            key = _route_key(route, scope.get("method", "")) if route is not None else f"{scope.get('method', 'WS')} {path}"
+            need = access.permission_for(key, getattr(route, "path", path))
+            if need == access.PUBLIC:
+                return await self.inner(scope, receive, send)
+            headers = {}
+            for k, v in scope.get("headers") or []:
+                headers.setdefault(k.decode("latin1").lower(), v.decode("latin1"))
+            # it may read the database: in a worker thread (the app's own pool of 120), never on the server's own loop
+            refused = await anyio.to_thread.run_sync(access.check, headers, need)
         if refused is None:
             return await self.inner(scope, receive, send)
         status, words = refused
