@@ -1,6 +1,7 @@
 """Rate master access, drop-down resolution, upload template and bulk costing."""
 import io
 import os
+import re
 
 import pandas as pd
 from openpyxl import Workbook
@@ -116,15 +117,61 @@ def _num(v):
     return None if _blank(v) else float(v)
 
 
-def resolve(sel, masters):
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def month_of(on):
+    """The month a date falls in, as 'YYYY-MM': from a date, a 'YYYY-MM-DD' or a 'YYYY-MM'. ValueError otherwise."""
+    if hasattr(on, "year") and hasattr(on, "month"):
+        return f"{on.year:04d}-{on.month:02d}"
+    s = str(on).strip()[:10]
+    hit = re.fullmatch(r"(\d{4})-(\d{2})(?:-(\d{2}))?", s)
+    if not hit or not 1 <= int(hit.group(2)) <= 12:
+        raise ValueError(f"'{on}' is not a date (give YYYY-MM-DD or YYYY-MM)")
+    return f"{hit.group(1)}-{hit.group(2)}"
+
+
+def month_label(month):
+    """'2026-09' -> 'Sep 2026'."""
+    return f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[:4]}"
+
+
+def _dated_note(month, yarns):
+    """What a costing on a date says about each yarn it used: the dated rate, a typed price, or today's rate."""
+    notes, seen = [], set()
+    for y in yarns:
+        if y["yarn"] in seen:
+            continue
+        seen.add(y["yarn"])
+        if y.get("typed"):
+            notes.append(f"{y['yarn']}: a typed price (Rs {y['rate']:g}) is used, not a dated rate")
+        elif y["dated"]:
+            notes.append(f"{y['yarn']}: the dated rate for {month_label(month)} is used (Rs {y['rate']:g}; today's is Rs {y['today']:g})"
+                         + (": a placeholder, entered with no source" if y.get("placeholder") else ""))
+        else:
+            notes.append(f"No dated rate for {y['yarn']} in {month_label(month)}: today's rate used (Rs {y['today']:g})")
+    return notes
+
+
+def resolve(sel, masters, on=None, dated=None):
     """Turn drop-down choices into numeric engine inputs.
 
     Returns (inputs, rates_used). rates_used is a list of
     {item, choice, value, unit, basis} so every number can be traced.
     Raises ValueError naming the first choice that is not on a list.
+
+    on: a date (stage 5). Without it nothing changes: every rate is the rate master's, today's. With it, each yarn rate
+    is the dated rate of that month (dated: {yarn key: {'YYYY-MM': {'rate', 'basis'}}}, read from the store when not
+    given), and where there is none, today's rate, said per yarn in inputs['rates_of'] (cost() moves it to the result).
+    Only yarn rates are dated; every other rate is today's.
     """
     L = lists(masters)
     used = []
+    month = None if on is None else month_of(on)
+    if month is not None and dated is None:
+        import data_dated
+        dated = data_dated.table()
+    dated_yarns = []
 
     def pick(field, allowed, default=None):
         v = sel.get(field)
@@ -189,6 +236,18 @@ def resolve(sel, masters):
         basis = "Typed override"
         if rate is None:
             rate, basis = float(row["Rate Rs/kg"]), f"{row['Basis']}, {row['Rate date']}"
+            if month is not None:           # a costing on a date: the dated rate of that month, where there is one
+                hit = (dated.get(key) or {}).get(month)
+                if hit is not None:
+                    # rule 4: a dated rate with no data behind it stays a Placeholder, so the brief, the list's placeholder
+                    # column and every verdict treat it as today's placeholder was treated
+                    rate = float(hit["rate"])
+                    basis = (f"Placeholder: dated rate for {month_label(month)} with no source ({hit['basis']})"
+                             if str(hit["basis"]).startswith("Placeholder") else f"Dated rate for {month_label(month)}: {hit['basis']}")
+                dated_yarns.append({"side": side, "yarn": key, "dated": hit is not None, "rate": rate, "today": float(row["Rate Rs/kg"]),
+                                    "placeholder": basis.startswith("Placeholder")})
+        elif month is not None:
+            dated_yarns.append({"side": side, "yarn": key, "dated": False, "typed": True, "rate": rate})
         count = _num(sel.get(f"{side} count override (Ne)")) or float(row["Count Ne (resultant)"])
         typed = _num(sel.get(f"{side} count"))      # a count typed in the chosen system takes the place of the yarn's own
         label = f"{key} (Ne {count:g})"
@@ -339,12 +398,24 @@ def resolve(sel, masters):
     inp["labels"] = labels
 
     inp["extra_per_m"] = _num(sel.get("Extra charge (Rs/m)")) or 0.0
+    if month is not None:
+        used_dated = any(y["dated"] for y in dated_yarns)
+        inp["rates_of"] = {"month": month, "label": month_label(month), "dated": used_dated, "yarns": dated_yarns,
+                           "notes": _dated_note(month, dated_yarns),
+                           "text": (f"Yarn on the dated rates of {month_label(month)} where there is one" if used_dated else
+                                    f"The rates of {month_label(month)} were asked for: there is no dated rate for its yarn in that month, "
+                                    "so today's yarn rates are used") + "; every other rate is today's"}
     return inp, used
 
 
-def cost(sel, masters):
-    inp, used = resolve(sel, masters)
+def cost(sel, masters, on=None, dated=None):
+    """One fabric costed. on: a date, to cost the yarn on the dated rates of its month (see resolve); the result then
+    says in 'rates_of' which month's rates it used, yarn by yarn. Without on, today's rates, exactly as before."""
+    inp, used = resolve(sel, masters, on=on, dated=dated)
+    rates_of = inp.pop("rates_of", None)
     res = engine.compute(inp)
+    if rates_of is not None:
+        res["rates_of"] = rates_of
     res["rates_used"] = used
     res["inputs"] = inp
     quote = _num(sel.get("Quoted price (Rs/m)"))

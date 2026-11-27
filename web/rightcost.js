@@ -24,7 +24,7 @@ const CONFIG = {
         { id: "select", header: "", width: 40, pinned: true, type: "select" },
         { id: "image", header: "Image", width: 60, pinned: true, type: "thumb" },
         { id: "code", header: "Fabric code", width: 130, pinned: true, type: "link" },
-        { id: "band", header: "Against range", width: 120, type: "band", help: "The price on the row (the mill's quote, or the price paid) against the usual range for this fabric type on today's rates: in it, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates). Where the talks have reached since is in the Negotiation column" },
+        { id: "band", header: "Against range", width: 120, type: "band", help: "The price on the row (the mill's quote, or the price paid) against the usual range for this fabric type (measured on today's rates; a quote is costed on today's rates, a purchase order on the yarn rates of its order month where a dated rate exists, see Rates of): in it, above it, below it, or unsure (a type the tool fits poorly, or placeholder rates). Where the talks have reached since is in the Negotiation column" },
         { id: "nego", header: "Negotiation", width: 270, help: "From the tracker on the fabric's Negotiation tab: the agreed price, or while it is open the mill's latest price (our counter if the mill has not quoted)" },
         { id: "alert", header: "Quote alert", width: 290, help: "Why a newly quoted fabric needs a look before its price is accepted: above its usual range, the mill's sums are off, it repeats an order, or the quote is far below should-cost. It goes when marked seen (the cell then says Seen), or when the price is agreed in the tracker" },
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
@@ -45,6 +45,7 @@ const CONFIG = {
         { id: "metres", header: "Metres", width: 80, type: "num", fmt: n0 },
         { id: "excess", header: "Above should-cost, Rs", width: 120, type: "num", fmt: n0, help: "Price minus should-cost, times the metres. Purchase orders: money paid above should-cost. Fabric list: on a quote, not yet paid" },
         { id: "order_size", header: "Order size", width: 110 },
+        { id: "rates_of", header: "Rates of", width: 200, help: "Which rates the costing is on: a quote on today's rates; a purchase order on the yarn rates of its order month where a dated rate exists, else today's (stage 5)" },
         { id: "source", header: "Source", width: 110 },
         { id: "remarks", header: "Remarks", width: 170, type: "edit-text", help: "Your note. Kept in this browser" },
         { id: "rowstatus", header: "", width: 50, type: "status" },
@@ -550,7 +551,7 @@ function renderSupplier(main) {
   const counts = side => BAND_WORDS.filter(([b]) => side.counts[b]).map(([b, w]) => `${n0(side.counts[b])} ${w}`).join("; ");
   const money = (side, bought) => [
     side.counts.Push ? h("li", {}, h("b", {}, `Rs ${n0(side.above_range)} above the top of the usual range`), ` on ${n0(side.counts.Push)} Push ${side.counts.Push === 1 ? "fabric" : "fabrics"} (Rs ${n0(side.push_excess)} above should-cost on them). `,
-        bought ? "These are paid: the figure is the case for a better price on the next order of the same cloth. It is on today's rates, not the rates of the order date." : "This is the figure the mill has to explain" + (side.moved ? "; where the mill has moved since its sheet, it is on the price it is at now." : "."))
+        bought ? "These are paid: the figure is the case for a better price on the next order of the same cloth. " + (side.rates ? side.rates.text : "It is on today's rates, not the rates of the order date.") : "This is the figure the mill has to explain" + (side.moved ? "; where the mill has moved since its sheet, it is on the price it is at now." : "."))
       : h("li", {}, side.unsure_high ? "None the tool is sure of is above its usual range." : "No fabric is above its usual range."),
     side.unsure_high ? h("li", {}, h("b", {}, `${n0(side.unsure_high)} ${side.counts.Push ? "more " : ""}${side.unsure_high === 1 ? "looks" : "look"} high`), ` (Rs ${n0(side.unsure_high_excess)} above should-cost), but the tool is unsure of ${side.unsure_high === 1 ? "it" : "them"} (placeholder rates, or a fabric type it fits poorly): get the break-up before pushing. Not counted in the figure above.`) : null,
     side.unsure_other ? h("li", {}, `${n0(side.unsure_other)} more the tool is unsure of, in or below the range: no rupee figure is given for them.`) : null,
@@ -568,12 +569,12 @@ function renderSupplier(main) {
   const trackWords = t => (t.warnings.length ? "Check a step · " : "") + (t.status === "Agreed" ? `Agreed Rs ${n2(t.agreed)}` + (t.first === null ? " (no mill quote recorded)" : t.won_per_m === 0 ? " (the first quote)" : ` (${n2(Math.abs(t.won_per_m))} ${t.won_per_m > 0 ? "below" : "above"} the first quote of ${n2(t.first)})`)
     : (t.reopened !== null ? "Open again: " : "Open: ") + (t.latest !== null ? `mill at Rs ${n2(t.latest)}` : "no mill quote yet") + (t.counter !== null ? `, our counter Rs ${n2(t.counter)}` : ""));
   fill(main, crumbs,
-    h("div", { class: "dhead" }, h("div", {}, h("div", { class: "small" }, "Supplier" + (d.names.length > 1 ? " \u00B7 also written " + d.names.slice(1).join(", ") : "")), h("h1", {}, d.name), h("div", { class: "muted" }, `As of ${d.today}, on that day's rates.`)),
+    h("div", { class: "dhead" }, h("div", {}, h("div", { class: "small" }, "Supplier" + (d.names.length > 1 ? " \u00B7 also written " + d.names.slice(1).join(", ") : "")), h("h1", {}, d.name), h("div", { class: "muted" }, `As of ${d.today}: quotes on that day's rates, purchases on the rates said at the foot of the page.`)),
       h("div", { class: "dicons noprint" }, can("do:draft") ? h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "supplier", mill: d.key }, d.name, d.key) }, "Draft a message to the mill") : null, ib("pdf", "Print this page", () => print()), ib("pin", "Show this mill's fabrics in the list", () => { state.filters.mill = [d.key]; state.cls = "*"; store.set("cls", "*"); state.tab = "items"; location.hash = "#rightcost"; }))),
     !d.ready ? h("p", { class: "muted" }, "The verdicts on the purchase orders are still being worked out; this page fills in when they are ready (about 20 seconds).") : null,
     h("div", { class: "stiles" },
       tile("Bought (purchase orders)", `${n0(B.fabrics)} ${B.fabrics === 1 ? "fabric" : "fabrics"}`, B.fabrics ? `${n0(B.metres)} m · Rs ${n0(B.value)} paid` : "none on record"),
-      tile("Paid above the usual range", !B.above_range && B.unsure_high ? "Not sure yet" : `Rs ${n0(B.above_range)}`, (B.counts.Push ? `on ${n0(B.counts.Push)} Push ${B.counts.Push === 1 ? "fabric" : "fabrics"}, on today's rates` : B.unsure_high ? "none the tool is sure of" : "no fabric above its range") + (B.unsure_high ? ` \u00B7 ${n0(B.unsure_high)} more look high but the tool is unsure` : ""), B.above_range ? "red" : B.unsure_high ? "amber" : ""),
+      tile("Paid above the usual range", !B.above_range && B.unsure_high ? "Not sure yet" : `Rs ${n0(B.above_range)}`, (B.counts.Push ? `on ${n0(B.counts.Push)} Push ${B.counts.Push === 1 ? "fabric" : "fabrics"}, on ${B.rates && B.rates.dated ? "the order months' yarn rates where dated" : "today's rates"}` : B.unsure_high ? "none the tool is sure of" : "no fabric above its range") + (B.unsure_high ? ` \u00B7 ${n0(B.unsure_high)} more look high but the tool is unsure` : ""), B.above_range ? "red" : B.unsure_high ? "amber" : ""),
       tile("Quoted now (fabric list)", `${n0(Q.fabrics)} ${Q.fabrics === 1 ? "fabric" : "fabrics"}`, Q.fabrics ? `Rs ${n0(Q.above_range)} above the usual range, still to settle` + (Q.unsure_high ? ` \u00B7 ${n0(Q.unsure_high)} more look high but the tool is unsure` : "") + (Q.agreed ? ` \u00B7 ${Q.agreed} agreed` : "") + (Q.duplicates ? ` \u00B7 ${Q.duplicates} repeated ${Q.duplicates === 1 ? "row" : "rows"} left out` : "") : "no quote in the fabric list"),
       tile("Its sheets' sums", d.sums.length ? `${d.sums.length} off` : Q.sheets ? "none off" : "not checked", d.sums.length ? "see below" : Q.sheets ? "the mill's arithmetic agrees" : "no price sheet from this mill has been uploaded"),
       tile("Negotiation tracker", T.fabrics ? `${T.agreed} agreed, ${T.open} open` : "nothing tracked", T.agreed ? (T.won < 0 ? `Rs ${n0(Math.abs(T.won))} lost against first quotes` : `Rs ${n0(T.won)} won against first quotes` + (T.lost ? `, after Rs ${n0(T.lost)} lost` : "")) : "", T.won < 0 ? "red" : "")),
@@ -592,7 +593,7 @@ function renderSupplier(main) {
       B.rows.length > shown.length ? h("p", { class: "noprint" }, h("button", { type: "button", class: "btn line", onclick: () => { sp.all = true; render(); } }, `Show all ${n0(B.rows.length)} (the ${shown.length} with the most money above the range are shown)`)) : null,
       B.rows.length > shown.length ? h("p", { class: "muted printonly" }, `The ${shown.length} purchases with the most money above the range are printed, of ${n0(B.rows.length)}.`) : null) : null,
     typeof RP_PURCH !== "undefined" && (d.outliers || []).length ? h("section", { class: "sec" }, RP_PURCH.outliers(d.outliers, "this mill", true)) : null,      // stage 2
-    h("p", { class: "muted", style: "margin-top:18px" }, "Should-cost and verdicts are on today's rates. “Above the usual range” is the price less the top of the range for that fabric type, times the metres; it is counted only where the tool is sure of the fabric."));
+    h("p", { class: "muted", style: "margin-top:18px" }, "Quotes: should-cost and verdicts on today's rates. " + (B.rates && B.rates.text ? B.rates.text + " " : "") + "“Above the usual range” is the price less the top of the range for that fabric type, times the metres; it is counted only where the tool is sure of the fabric."));
 }
 function renderSelbar() {
   const bar = $("#selbar"), n = state.selection.size, pend = Object.keys(state.pending).length;
@@ -693,7 +694,8 @@ function costingTab(r, when) {
   return h("div", { class: "buckets" }, Object.entries(b).map(([name, v]) => h("div", { class: "bk" }, h("span", {}, name), h("div", {}, h("div", { class: "b", style: { width: Math.abs(v || 0) / top * 100 + "%" } })), h("span", { style: "text-align:right" }, n2(v)), h("span", { style: "text-align:right;color:var(--text2)" }, r.should ? (100 * (v || 0) / r.should).toFixed(1) + "%" : ""))),
     h("div", { class: "bk tot" }, h("span", {}, "Should-cost"), h("span"), h("span", { style: "text-align:right" }, n2(r.should)), h("span", { style: "text-align:right" }, "100%")),
     r.price ? h("div", { class: "bk" }, h("span", {}, r.source === "Purchase orders" ? "Price paid" : "Mill's quote"), h("span"), h("span", { style: "text-align:right" }, n2(r.price)), h("span", { style: "text-align:right" }, pc(r.gap_pct))) : null,
-    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : "Rs per metre, as costed in the purchase-order pilot (worked out again from the purchase lines where ZLOI orders or later purchases change its metres), on today's rates. The Negotiation tab and Create cost give the same should-cost."),
+    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : r.rates && r.rates.dated ? "Rs per metre, with the yarn on the dated rates of the order month (below) and every other rate today's. Create cost works on today's rates." : "Rs per metre, as costed in the purchase-order pilot (worked out again from the purchase lines where ZLOI orders or later purchases change its metres), on today's rates. The Negotiation tab and Create cost give the same should-cost."),
+    when !== "today" && r.rates ? h("p", { class: "rates-note", style: "color:var(--text2);font-size:11px" }, "Rates: " + r.rates.note) : null,         // stage 5: which month's rates
     h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost"));
 }
 async function liveCosting(r, box) {
@@ -711,13 +713,16 @@ async function negotiationTab(r, box) {
   if (!r.choices || !price) { box.textContent = "No price on this row and no mill price in the tracker yet, so there is nothing to judge."; return; }
   const what = tracked === null ? "the price" : s_.status === "Agreed" ? "the agreed price" : "the mill's latest price";
   try {
-    const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, r.choices, { "Quoted price (Rs/m)": price }, r.metres ? { "Order quantity (m)": r.metres } : {})) })).json();
+    // stage 5: a purchase order is judged on the yarn rates of its order month (GP's decision), a quote on today's
+    const onMonth = r.source === "Purchase orders" && r.rates && r.rates.month ? { _rates_on: r.rates.month } : {};
+    const res = await (await fetch("/api/cost", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, r.choices, { "Quoted price (Rs/m)": price }, r.metres ? { "Order quantity (m)": r.metres } : {}, onMonth)) })).json();
+    const ratesWords = res.rates_of && res.rates_of.month ? (res.rates_of.dated ? `On the yarn rates of ${res.rates_of.label} (the order month) and today's other rates` : `On today's rates (there is no dated yarn rate for the order month, ${res.rates_of.label})`) : "On today's rates";
     if (res.total_per_m) briefShould[keyOf(r)] = res.total_per_m;
     const b = res.brief; if (!b) { box.textContent = "No brief: the price is not usable."; return; }
     const label = { push: ["Push", "#E5484D"], fair: ["Fair", "#2E9E5B"], below: ["Below", "#3D8BFD"], ask: ["Ask for the break-up", "#B98900"] }[b.stance];
     const done = s_ && s_.status === "Agreed";
     fill(box, h("div", {}, h("span", { class: "st", style: { background: label[1] + "22", color: label[1] } }, b.implausible ? "Check the quote first" : done ? { push: "Agreed above the usual range", fair: "Agreed in the usual range", below: "Agreed below the usual range", ask: "Agreed; the tool is unsure of this fabric" }[b.stance] : label[0]),
-        ` On today's rates the should-cost is Rs ${n2(b.should)}; ${what} is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`,
+        ` ${ratesWords} the should-cost is Rs ${n2(b.should)}; ${what} is Rs ${n2(b.quote)}, Rs ${n2(Math.abs(b.gap))} ${b.gap >= 0 ? "above" : "below"}.`,
         tracked !== null && r.price && Math.abs(tracked - r.price) >= 0.005 ? ` (The ${r.source === "Purchase orders" ? "purchase order" : "fabric list"} has Rs ${n2(r.price)}; this brief follows the tracker below.)` : ""),
       h("ul", {}, h("li", {}, `Usual range for this fabric: Rs ${n2(b.lower)} to Rs ${n2(b.settle_up_to)} (${b.band.why}).`), b.stance === "push" && !done ? h("li", {}, s_ && s_.counter !== null ? `You have countered at Rs ${n2(s_.counter)}` + (s_.counter <= b.settle_up_to ? `: do not open above it. Aim for Rs ${n2(s_.counter)} to Rs ${n2(b.settle_up_to)}, the top of the usual range.` : `, which is above the top of the usual range (Rs ${n2(b.settle_up_to)}).`) : `Open at Rs ${n2(b.open_at)}; aim for Rs ${n2(b.settle_up_to)}.`) : null,
         b.weak.length ? h("li", {}, "Why no target: " + b.weak.join("; ") + ".") : null, (b.caveats || []).map(c => h("li", {}, c)),

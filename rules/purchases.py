@@ -671,9 +671,10 @@ def skipped_download(uid):
 
 
 def history(code):
-    """Price over time for one fabric code: each purchase (date, mill, metres, price) and its should-cost on today's rates;
-    and, since most codes were ordered once, its Fab group's purchases (every code of the same construction). ZLOI lines
-    are in none of it: they are listed apart, as outliers."""
+    """Price over time for one fabric code: each purchase (date, mill, metres, price) and its should-cost as Right cost
+    has it (on the yarn rates of its order month, today's where none is dated); and, since most codes were ordered once,
+    its Fab group's purchases (every code of the same construction). ZLOI lines are in none of it: they are listed
+    apart, as outliers."""
     st = need_db()
     code = str(code or "").strip()
     with st.tx() as c:
@@ -681,16 +682,17 @@ def history(code):
         if fab is None:
             raise common.Refused(404, f"No purchase of {code} is in the purchase history yet." + (
                 "" if dp.counts(c)["lines"] else " No purchase file has been loaded: see Purchase files, under your initials."))
-        lines = [fab_groups._line(r) for r in dp.lines(c, [fab["id"]])]
+        own = dp.lines(c, [fab["id"]])
+        lines = [fab_groups._line(r) for r in own]
         outliers = [fab_groups._line(r) for r in dp.lines(c, [fab["id"]], outliers=True)]
         groups = dp.groups(c)
         gid = fab_groups.final(groups, fab["fab_group_id"]) if fab["fab_group_id"] is not None else None
         got = fab_groups.gather(c, gid, groups) if gid is not None else None
         moves = [m for m in dp.regroups(c, [fab["fab_group_id"]] if fab["fab_group_id"] else []) if m["code"] == code]
     grp = fab_groups.history(got) if got is not None else None
-    should, why = fab_groups.shoulds({code: fab})[code]
+    should, why, on = fab_groups.shoulds({code: fab}, own)[code]          # on its order month's yarn rates, as in Right cost
     s = fab_groups.short_spec(fab["spec"]) if fab["spec"] else {}
-    out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "should": should, "should_why": why,
+    out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "should": should, "should_why": why, "should_on": on,
            "metres": round(sum(x["metres"] for x in lines), 2), "orders": len({x["po"] for x in lines}),
            "spec": {k: s.get(k, "") for k in ("blend_name", "dyemethod_name", "weavetype_name", "warpcount", "weftcount", "epi", "ppi",
                                               "finishedwidth", "finishedwidth_uom", "finish_name", "pattern_name")} if s else None,

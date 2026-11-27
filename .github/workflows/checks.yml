@@ -41,4 +41,4 @@ jobs:
       - name: Server gives the engine's numbers on files, SQLite and PostgreSQL; the move to a database changes nothing
         run: python check_server.py
       - name: Front end script parses
-        run: node --check web/app.js && node --check web/rightcost.js && node --check web/access.js && node --check web/purchases.js
+        run: node --check web/app.js && node --check web/rightcost.js && node --check web/dated.js && node --check web/access.js && node --check web/purchases.js

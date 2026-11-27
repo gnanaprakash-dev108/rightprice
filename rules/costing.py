@@ -205,6 +205,10 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         adjusted = (lo, hi) != (cat["p25"], cat["p75"])
         band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%".replace("-", "\u2212") if adjusted else "")
 
+    ro = res.get("rates_of") or {}
+    if ro.get("dated"):     # stage 5: the range is measured on today's rates; say so when this should-cost is not
+        band_why += (f". The range is measured on today's rates (the purchase orders as costed in the pilot); this should-cost "
+                     f"has its yarn on the dated rates of {ro['label']}")
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False
     if why_qty:
@@ -214,7 +218,8 @@ def brief(res, m, quantity=None, notes=(), sel=None):
                 alt = dict(sel, **{qty_fix["field"]: qty_fix["value"]})
                 if qty_fix["field"] == "Order size":
                     alt["Rate card quantity"] = rate_card.NO_QTY
-                same = abs(masters.cost(alt, m)["total_per_m"] - res["total_per_m"]) < 0.005
+                # on the same month's rates as the costing itself (stage 5); none named: today's, as before
+                same = abs(masters.cost(alt, m, on=(res.get("rates_of") or {}).get("month"))["total_per_m"] - res["total_per_m"]) < 0.005
             except Exception:
                 same = False
         if not same:
@@ -278,9 +283,9 @@ def result_json(res, quantity=None, notes=(), sel=None):
     }
 
 
-def cost_or_400(sel, m):
+def cost_or_400(sel, m, on=None):
     try:
-        return masters.cost({k: v for k, v in sel.items() if v not in ("", None)}, m)
+        return masters.cost({k: v for k, v in sel.items() if v not in ("", None)}, m, on=on)
     except Exception as e:      # a choice not on a list, a missing number: tell the user which
         raise common.Refused(400, str(e))
 
@@ -314,13 +319,25 @@ def _quantity_or_400(v):
 
 def cost(sel: dict):
     """One fabric costed. '_notes' (optional) are the remarks of the list row it was opened from, carried
-    into the negotiation brief; they are not choices and do not change the cost."""
+    into the negotiation brief; they are not choices and do not change the cost.
+    '_rates_on' (optional, stage 5): a purchase order's month, sent by a purchase-order page, to cost the yarn on the
+    dated rates of that month. Without it, today's rates (Cost a fabric and quotes, GP's decision of 27 Nov 2026).
+    Either way the answer says which rates it is on ('rates_of')."""
     dashboard._warm_pilot()
     sel = dict(sel)
     notes = sel.pop("_notes", None) or []
+    on = sel.pop("_rates_on", None) or None
+    if on is not None:
+        try:
+            masters.month_of(on)
+        except ValueError as e:
+            raise common.Refused(400, str(e))
     qty = _quantity_or_400(sel.get("Order quantity (m)"))
     m = common.get_masters()
-    out = result_json(cost_or_400(sel, m), qty, notes=notes, sel=sel)
+    res = cost_or_400(sel, m, on=on)
+    out = result_json(res, qty, notes=notes, sel=sel)
+    out["rates_of"] = res.get("rates_of") or {"month": None, "label": "today", "dated": False, "notes": [],
+                                               "text": "Today's rates: the rate master in use"}
     q = common._num_or_none(sel.get("Quoted price (Rs/m)"))
     if q is not None and q <= 0:
         out["warnings"].append(f"A quote of Rs {q:g} is not a price, so it is ignored: no negotiation brief is given.")

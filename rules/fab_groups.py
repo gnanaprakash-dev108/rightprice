@@ -20,7 +20,8 @@ import re
 import statistics
 import warnings
 
-from rules import common, costing
+from rules import common, costing, dated
+import data_dated
 import data_purchases as dp
 import grouping
 import masters
@@ -331,27 +332,35 @@ def price_range(lines):
     return out
 
 
-def _should(fabric, m):
-    """A fabric's should-cost on today's rates (Rs/m), or None with why."""
+def _should(fabric, m, om=None, table=None):
+    """A fabric's should-cost (Rs/m) as Right cost costs a purchase order: on the yarn rates of its order month (om, from
+    dated.month_of; today's where none is dated) and today's other rates. (should-cost or None, why, which rates)."""
     if not fabric.get("choices"):
-        return None, "; ".join(fabric.get("problems") or ["not costed"])
+        return None, "; ".join(fabric.get("problems") or ["not costed"]), None
     try:
-        return round(masters.cost(dict(fabric["choices"]), m)["total_per_m"], 2), None
+        res = masters.cost(dict(fabric["choices"]), m, on=om["month"] if om else None, dated=table)
     except Exception as e:          # a choice no longer on today's lists
-        return None, f"not costed on today's rates: {e}"
+        return None, f"not costed on today's rates: {e}", None
+    ro = res.get("rates_of") or {}
+    return round(res["total_per_m"], 2), None, f"on the dated yarn rates of {ro['label']}" if ro.get("dated") else "on today's rates"
 
 
-def shoulds(fabrics):
-    """{fabric code: (should-cost or None, why)} on today's rates, kept while the rates and the history are unchanged."""
+def shoulds(fabrics, lines=()):
+    """{fabric code: (should-cost or None, why, which rates)}, each on the yarn rates of its order month, worked out from
+    its own lines (rows of the history with fabric_code, doc_date and qty_m; ZLOI left out) as Right cost works it out.
+    Kept while the rates, the dated rates and the history are unchanged."""
     st = store.get()
-    key = (st.version("rates"), st.version(dp.KIND))
+    key = (st.version("rates"), st.version(dp.KIND), data_dated.version())
     if _memo.get("should", (None,))[0] != key:
         _memo["should"] = (key, {})
-    kept, m = _memo["should"][1], None
+    kept, m, table, by = _memo["should"][1], None, None, {}
+    for r in lines:
+        by.setdefault(r["fabric_code"], []).append((r["doc_date"], float(r["qty_m"])))
     for code, f in fabrics.items():
         if code not in kept:
-            m = m or common.get_masters()
-            kept[code] = _should(f, m)
+            if m is None:
+                m, table = common.get_masters(), data_dated.table()
+            kept[code] = _should(f, m, dated.month_of(by.get(code, [])), table)
     return {code: kept[code] for code in fabrics}
 
 
@@ -380,8 +389,8 @@ def history(got):
     gid, groups, member_ids, fabs, lines = got["gid"], got["groups"], got["member_ids"], got["fabs"], got["lines"]
     g = groups[gid]
     rng = price_range([(r["price"], r["po_number"]) for r in lines])
-    sh = shoulds(fabs)
-    costed = sorted(v for v, _ in sh.values() if v is not None)
+    sh = shoulds(fabs, lines)
+    costed = sorted(v for v, _, _ in sh.values() if v is not None)
     by_mill, out_by_mill = {}, {}
     for r in lines:
         by_mill.setdefault(r["mill_key"], []).append(r)
@@ -418,13 +427,14 @@ def history(got):
     fab_rows = []
     for code, f in fabs.items():
         rs = codes.get(code, [])
-        s, why = sh[code]
+        s, why, _ = sh[code]
         fab_rows.append({"code": code, "description": f["description"], "lines": len(rs), "metres": round(sum(float(r["qty_m"]) for r in rs), 2),
                          "mills": sorted({r["mill"] for r in rs}), "last_price": round(float(rs[-1]["price"]), 2) if rs else None,
                          "last_date": rs[-1]["doc_date"] if rs else None, "should": s, "should_why": why, "outliers": zcodes.get(code, 0),
                          "in_group": groups[f["fab_group_id"]]["code"]})
     fab_rows.sort(key=lambda x: (-x["lines"], x["code"]))
-    whys = sorted({why for v, why in sh.values() if v is None and why})
+    whys = sorted({why for v, why, _ in sh.values() if v is None and why})
+    dated_ = sorted({on for v, _, on in sh.values() if v is not None and on != "on today's rates"})
     name = lambda i: None if i is None else groups[i]["code"]
     members = set(member_ids)
     return {"code": g["code"], "name": g["name"], "fields": {k: g[k] for k in FIELDS}, "created": g["created_at"],
@@ -440,7 +450,8 @@ def history(got):
             "moved_out": [{"code": m["code"], "to": name(m["to_group_id"]), "why": m["why"], "at": m["at"]} for m in got["moves"]
                           if m["from_group_id"] in members and m["to_group_id"] not in members],
             "should": {"median": round(statistics.median(costed), 2) if costed else None, "low": costed[0] if costed else None,
-                       "high": costed[-1] if costed else None, "costed": len(costed), "fabrics": len(fabs), "why_not": whys[:3]}}
+                       "high": costed[-1] if costed else None, "costed": len(costed), "fabrics": len(fabs), "why_not": whys[:3],
+                       "dated": dated_}}          # which codes' order months have a dated yarn rate (stage 5), as Right cost costs them
 
 
 def page(code):

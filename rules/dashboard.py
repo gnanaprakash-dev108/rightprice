@@ -149,7 +149,9 @@ def insights():
     slab = m["Order_Slab"].set_index("Order size")["Overhead add (points)"].to_dict()
     card = {"print": m["Print_Methods"].set_index("Print method")["Rs per metre"].to_dict(),
             "quantity": common.records(m["Quantity_Terms"][["Quantity band", "Small-lot upcharge %", "Volume discount Rs per metre"]])}
-    return {"pilot": p, "cotton_years": years, "cotton_unit": str(cot["Unit"].iloc[-1]) if len(cot) else "",
+    from rules import dated          # stage 5: which rates panels 1, 2 and 4 are on, beside Right cost's
+    return {"pilot": p, "pilot_rates": dated.pilot_rates_note() if p else None,
+            "cotton_years": years, "cotton_unit": str(cot["Unit"].iloc[-1]) if len(cot) else "",
             "reference": {"name": masters.EXAMPLE_ROW["Description"], "total": ref["total_per_m"], **ys},
             "order_slab": {k: common.clean(v) for k, v in slab.items()}, "card": card,
             "placeholders": costing.placeholder_count(m), "benchmarks": common.records(m["Supplier_Benchmarks"])}

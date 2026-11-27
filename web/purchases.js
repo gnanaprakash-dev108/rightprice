@@ -130,7 +130,7 @@
       h("div", { class: "stiles" },
         tile("Bought", `${n0(x.lines.length)} ${x.lines.length === 1 ? "purchase" : "purchases"}`, `${n0(x.metres)} m on ${x.orders} ${x.orders === 1 ? "order" : "orders"}`),
         tile("Price paid", x.lines.length ? (x.lines.length > 1 ? `Rs ${n2(Math.min(...x.lines.map(l => l.price)))} to ${n2(Math.max(...x.lines.map(l => l.price)))}` : `Rs ${n2(x.lines[0].price)}`) : "None", x.lines.length ? `last on ${day(x.lines[x.lines.length - 1].date)}` : ""),
-        tile("Should-cost", x.should ? `Rs ${n2(x.should)}` : "Not costed", x.should ? "on today's rates" : x.should_why),
+        tile("Should-cost", x.should ? `Rs ${n2(x.should)}` : "Not costed", x.should ? (x.should_on || "on today's rates") : x.should_why),
         g ? tile(`Fab group ${g.code}`, g.range.enough ? rangeWords(g.range) : `${g.purchases} ${g.purchases === 1 ? "purchase" : "purchases"}`, g.range.enough ? `its usual range; median Rs ${n2(g.range.median)} on ${g.purchases} purchases, ${g.range.orders} orders` : `on ${g.range.orders || 0} separate ${g.range.orders === 1 ? "order" : "orders"}: too few for a usual range (needs ${g.min_for_range})`) : tile("Fab group", "Not grouped", x.not_grouped)),
       pts.length ? priceChart({ points: pts, series, marks, band: g && g.range.enough ? { lower: g.range.lower, upper: g.range.upper, label: `${g.code} usual range` } : null, label: `Price over time for ${x.code}` }) : null,
       g ? h("p", { class: "muted" }, others ? `Grey dots: the ${others} other ${others === 1 ? "purchase" : "purchases"} of ${g.codes - 1} other ${g.codes - 1 === 1 ? "code" : "codes"} in Fab group ${g.code}, ${g.name}. Most codes are ordered once, so the group shows the history.`
@@ -142,7 +142,7 @@
       outliers(x.outliers, "this code"),
       h("div", { class: "acts" }, g && may("page:groups") ? h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null,
         h("button", { type: "button", class: "btn line", onclick: () => s.remove() }, "Close")),
-      h("p", { class: "muted" }, "Should-cost is on today's rates, for the metres bought (ZLOI left out). Prices are the net price on each purchase-order line (ex-mill, Rs per metre)."));
+      h("p", { class: "muted" }, "Should-cost is as Right cost has it: for the metres bought (ZLOI left out), on the yarn rates of the order month (today's where none is dated) and today's other rates. Prices are the net price on each purchase-order line (ex-mill, Rs per metre)."));
   }
 
   // ---------------------------------------------------------------- #group/<code>: one Fab group
@@ -179,7 +179,7 @@
         tile("Mills", `${d.mills.length}`, d.mills.slice(0, 3).map(m => m.name).join(", ") + (d.mills.length > 3 ? ` and ${d.mills.length - 3} more` : "")),
         tile("Median price paid", r.median ? `Rs ${n2(r.median)}` : "None", r.median ? `paid Rs ${n2(r.low)} to ${n2(r.high)}` : ""),
         tile("Usual range", rangeWords(r), rangeSub(r, d.min_for_range), r.enough ? "" : "amber"),
-        tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + `on today's rates` + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
+        tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + (sh.dated && sh.dated.length ? `on the order months' yarn rates (some dated)` : `on today's rates`) + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
         tile("Priced well above the group", r.enough ? `${d.above.length} ${d.above.length === 1 ? "purchase" : "purchases"}` : "No range yet", r.enough ? (d.above.length ? `Rs ${n0(d.above_rs)} above the top of the usual range` : "none above the top of its usual range") : "too few orders to say", d.above.length ? "red" : "")),
       h("section", { class: "sec" }, h("h2", {}, "Price over time, by mill"),
         d.lines.length ? priceChart({ points: pts, series, marks, band: r.enough ? { lower: r.lower, upper: r.upper, label: "Usual range" } : null, label: `Prices paid for ${d.code} by date and mill`, height: 300 }) : h("p", { class: "muted" }, "No purchase on record."),

@@ -5,7 +5,8 @@ import json
 import os
 import re
 import pandas as pd
-from rules import common, costing, dashboard, fabric_list, mills
+from rules import common, costing, dashboard, dated, fabric_list, mills
+import data_dated
 import masters
 import mill_sheet
 import store
@@ -35,22 +36,34 @@ _briefs = {"key": None, "data": None, "running": False}
 
 
 def _pilot_briefs(rows, key):
-    """The negotiation brief's verdict for every purchase-order costing, on today's rates. About 12 ms a
-    fabric, so it runs once in the background and is kept until the rate master changes."""
+    """The negotiation brief's verdict for every purchase-order costing, on the yarn rates of its order month (stage 5,
+    GP's decision of 27 Nov 2026: a dated rate where there is one, today's rate otherwise, said per yarn) and today's
+    other rates. About 12 ms a fabric, so it runs once in the background and is kept until the rate master or the dated
+    rates change."""
     import threading
 
     def work():
         try:
             m, out = common.get_masters(), {}
+            months, table = dated.order_months(), data_dated.table()
             for r in rows:
+                om = months.get(str(r["code"]))
                 try:
-                    res = masters.cost(r["choices"], m)
+                    res = masters.cost(r["choices"], m, on=om["month"] if om else None, dated=table)
                     b = costing.brief(res, m, r["metres"], (), r["choices"])
-                    # stage 2: the should-cost on today's rates too, so a row and the price popup always agree
-                    today = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1), "gsm": round(res["gsm"], 1),
-                             "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]}}
-                    out[r["code"]] = dict(today) if b is None else dict(today, stance=b["stance"], implausible=b["implausible"],
-                                                                         lo=b["band"]["lo"] * 100, hi=b["band"]["hi"] * 100, weak=b["weak"])
+                    # the figures the row shows follow this costing, worked out as the pilot works them (masters.cost_many,
+                    # pilot.py): on the yarn rates of the order month (stage 5) and today's other rates, so a row, its verdict
+                    # and the price popup always agree (stage 2)
+                    v = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1), "gsm": round(res["gsm"], 1),
+                         "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]},
+                         "placeholders": ", ".join(res["placeholders"]) or None,
+                         "gap": None if res["gap"] is None else round(res["gap"], 2),
+                         "gap_pct": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
+                         "dated": bool((res.get("rates_of") or {}).get("dated")), "rates": dated.po_rates(r["code"], months, res)}
+                    if b is not None:
+                        v.update(stance=b["stance"], implausible=b["implausible"], lo=b["band"]["lo"] * 100, hi=b["band"]["hi"] * 100,
+                                 weak=b["weak"])
+                    out[r["code"]] = v
                 except Exception as e:      # a costing that no longer works on today's rates
                     out[r["code"]] = {"stance": "error", "weak": [str(e)]}
             _briefs.update(key=key, data=out)
@@ -80,7 +93,8 @@ def costs():
     from rules import fab_groups, purchases     # stage 2: Fab groups; the purchase-order rows worked out again, ZLOI left out
     gkey = fab_groups.version()
     pkey, pilot_rows = purchases.pilot_rows()
-    memo = (common._state_key(), _briefs["key"], _briefs["running"], gkey, pkey)
+    dv = data_dated.version()           # stage 5: the purchase orders' verdicts follow the dated yarn rates too
+    memo = (common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey)
     if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
         return _costs_memo["val"]
     out = []
@@ -104,16 +118,23 @@ def costs():
                 "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS)),
                 "outliers": r["Outliers (ZLOI)"], "worked_out_again": r["Worked out again"]})
     version = store.get().version("rates")
-    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, len(out), bool(cats), pkey, ins[0] if ins else None)) if out else {}
+    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"],
+                             (version, dv, len(out), bool(cats), pkey, ins[0] if ins else None)) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
-        if v and "should" in v and r["should"] is not None and abs(v["should"] - r["should"]) >= 0.005:
-            # a rate changed since the pilot: the row's should-cost follows today's rates, as its verdict does
-            r.update(should=v["should"], per_kg=v["per_kg"], gsm=v["gsm"], buckets={b: v["buckets"].get(b) for b in dashboard.BUCKETS})
-            if r["price"] is not None:
-                r["gap"] = round(r["price"] - v["should"], 2)
-                r["gap_pct"] = round((r["price"] / v["should"] - 1) * 100, 1)
-                r["excess"] = None if not r["metres"] else r["gap"] * r["metres"]
+        r["rates"] = None           # the rates the costing is on: the order month's (worked out with the verdict)
+        r["why_unsure"] = None      # set with the verdict (none on a row with no price: there is nothing to judge)
+        if v and "should" in v:
+            r["rates"] = v["rates"]
+            if r["should"] is not None and (v["dated"] or abs(v["should"] - r["should"]) >= 0.005):
+                # the figures follow the costing the verdict rests on: a dated yarn rate of the order month (stage 5), or a
+                # rate changed since the pilot (stage 2); the placeholder column too (a dated rate with no source is one)
+                r.update(should=v["should"], per_kg=v["per_kg"], gsm=v["gsm"], buckets={b: v["buckets"].get(b) for b in dashboard.BUCKETS},
+                         placeholders=v["placeholders"])
+                if r["price"] is not None:
+                    gap = v["gap"] if v["gap"] is not None else round(r["price"] - v["should"], 2)
+                    r.update(gap=gap, gap_pct=v["gap_pct"] if v["gap_pct"] is not None else round((r["price"] / v["should"] - 1) * 100, 1),
+                             excess=None if not r["metres"] else gap * r["metres"])
         if r["price"] is None:
             r["band"] = "No price"          # stage 2: bought only on ZLOI lines, left out of every figure
         elif v and "stance" in v:
@@ -139,7 +160,8 @@ def costs():
             "excess": i["at_stake"], "order_size": inp.get("Order size"), "qty_band": inp.get("Rate card quantity"),
             "placeholders": ", ".join(i["placeholders"]) or None, "held_back": None, "band": st or ("Not costed" if i["problems"] else "No price"),
             "range": None if b is None else [b["band"]["lo"] * 100, b["band"]["hi"] * 100], "buckets": None,
-            "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"]})
+            "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"],
+            "rates": dated.today_rates()})
     # an unsure verdict on a price above the top of its usual range is still money above should-cost:
     # it is marked "Ask break-up, above range" so it is not lost among the unsure rows
     for r in out:
@@ -159,6 +181,8 @@ def costs():
         if r["metres"] is None:
             q = mill_sheet._num(i["mill"].get("Total order qnty")) if i["mill"] else None
             r["metres"] = q if q and q > 0 else None
+    for r in out:           # stage 5: which rates each costing is on, in a few words, for the list and the spreadsheet
+        r["rates_of"] = "Working it out" if r["band"] == "Working it out" else dated.rates_label(r.get("rates"))
     mills._learn_mill_names({r["supplier"] for r in out})
     for r in out:
         r["mill"] = mills.mill_key(r["supplier"])
@@ -169,7 +193,7 @@ def costs():
             r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
     val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=(common._state_key(), _briefs["key"], _briefs["running"], gkey, pkey), val=val)
+    _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey), val=val)
     return val
 
 
@@ -192,7 +216,7 @@ def costs_download(payload: dict = None):
             ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid (purchase orders) or quoted (fabric list) Rs/m"),
             ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"),
             ("excess", "Above should-cost Rs (gap x metres; minus = below)"), ("band", "Against the usual range"),
-            ("placeholders", "Placeholder rates used"), ("status", "Status"), ("remarks", "Remarks")]
+            ("placeholders", "Placeholder rates used"), ("rates_of", "Rates of"), ("status", "Status"), ("remarks", "Remarks")]
     df = pd.DataFrame([{h: r.get(k) for k, h in cols} for r in pick], columns=[h for _, h in cols])
     buf = io.BytesIO()
     df.to_excel(buf, index=False)
