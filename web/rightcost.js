@@ -890,37 +890,54 @@ async function loadNegos(always) {
 }
 
 // ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
-/* One window over the page with the four costing screens as tabs. They are the earlier screens, in one
-   frame, so a fabric opened from the list in Bulk upload carries on in Create cost. */
+/* One window over the page with the four costing screens as tabs. A tab moved into the shell (web/pages/) is drawn
+   in the popup's own box; they share what is open (RP.state), so a fabric opened from the list in Bulk upload carries
+   on in Create cost. The tabs not moved yet are the earlier screens, in one frame. Each opening starts afresh. */
 function popupHash(tab) { return "#" + (decodeURIComponent(location.hash.slice(1)).split("?")[0] || "dashboard") + (tab ? "?new=" + tab : ""); }
 function openPopup(tab = "cost", r = null, fromAddress = false) {
   closeLayers();
   document.querySelectorAll(".scrim[data-popup]").forEach(e => e.remove());
   if (!CONFIG.popupTabs.some(t => t[0] === tab)) tab = "cost";
   if (!fromAddress) history.pushState({ popup: tab }, "", popupHash(tab));          // Back closes the popup
-  const frame = h("iframe", { src: `/?embed=1&bare=1#${tab}`, title: "Costing" });
+  RP.fresh();
+  if (tab === "cost" && r !== undefined && RP.cost) RP.cost.open(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null);
+  const box = h("div", { class: "pgbox" });
+  let frame = null;
   const close = () => { if (history.state && history.state.popup) history.back(); else { history.replaceState(null, "", popupHash(null)); s.remove(); load(); } };
   const tabs = h("div", { class: "ptabs", role: "tablist" });
   const mark = id => { s.dataset.tab = id; tabs.querySelectorAll(".ptab").forEach(b => { const on = b.dataset.tab === id; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }); };
   const switchTo = (id, fromAddr) => {
-    try { frame.contentWindow.location.replace(`/?embed=1&bare=1#${id}`); } catch (e) { frame.src = `/?embed=1&bare=1#${id}`; }
+    if (RP.pages[id]) { if (frame) { if (document.activeElement === frame) tabs.querySelector(`[data-tab="${id}"]`).focus(); frame.hidden = true; } box.hidden = false; RP.show(id, "", box, { inPopup: true, tab: t => switchTo(t) }); }
+    else if (!frame) {
+      box.hidden = true; box.replaceChildren();
+      frame = h("iframe", { src: `/?embed=1&bare=1#${id}`, title: "Costing" }); pop.append(frame);
+      frame.addEventListener("load", () => {
+        syncFrameTheme(frame);
+        const w = frame.contentWindow;
+        w.addEventListener("hashchange", () => { const id2 = (w.location.hash.slice(1) || "cost").split("/")[0]; if (CONFIG.popupTabs.some(t => t[0] === id2) && !RP.pages[id2] && !frame.hidden) { mark(id2); history.replaceState(history.state, "", popupHash(id2)); } });
+        if (id === "cost" && r !== undefined) { const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); }
+      }, { once: true });
+    } else {
+      box.hidden = true; box.replaceChildren(); frame.hidden = false;
+      try { frame.contentWindow.location.replace(`/?embed=1&bare=1#${id}`); } catch (e) { frame.src = `/?embed=1&bare=1#${id}`; }
+    }
     mark(id); if (!fromAddr) history.replaceState(history.state, "", popupHash(id));
   };
   for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
   const note = r ? h("span", { class: "pnote" }, `${r.code}${r.source === "Purchase orders" ? ": a purchase order (its price was paid); Add to list copies it into the fabric list" : ""}`) : null;
   const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "New cost" },
-    h("div", { class: "ph" }, h("h2", {}, "New cost"), h("div", { class: "ptabwrap" }, tabs), note, ib("x", "Close", close)), frame);
+    h("div", { class: "ph" }, h("h2", {}, "New cost"), h("div", { class: "ptabwrap" }, tabs), note, ib("x", "Close", close)), box);
   const s = h("div", { class: "scrim", onmousedown: e => { if (e.target === s) close(); } }, pop);
   s.dataset.popup = "1"; s.switchTo = switchTo; s.close = close;
-  mark(tab);
-  frame.addEventListener("load", () => {
-    syncFrameTheme(frame);
-    const w = frame.contentWindow;
-    w.addEventListener("hashchange", () => { const id = (w.location.hash.slice(1) || "cost").split("/")[0]; if (CONFIG.popupTabs.some(t => t[0] === id)) { mark(id); history.replaceState(history.state, "", popupHash(id)); } });
-    if (tab === "cost" && r !== undefined) { const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); }
-  }, { once: true });
   $("#layer").append(s);
+  switchTo(tab, true);
 }
+// a tab still in the frame went to a tab the shell draws itself: carry on there, with the fabric it had open
+RP.shell.tabFromFrame = (id, data) => {
+  const pop = document.querySelector(".scrim[data-popup]"); if (!pop) return;
+  if (data) { const d = JSON.parse(data); Object.assign(RP.state, d, { visited: new Set(d.visited || []) }); }
+  pop.switchTo(id);
+};
 const openCostPopup = r => openPopup("cost", r || null);
 
 // ------------------------------------------------------------------ Library: setup lists (kept in this browser)

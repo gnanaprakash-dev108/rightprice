@@ -105,6 +105,13 @@ function route() {
     if (route.last) history.replaceState(null, "", "#" + route.last); else history.back();
     return;
   }
+  // in the shell's popup, a tab the shell now draws itself (web/pages/) is shown by the shell, with the fabric open here
+  if (EMBED && !IN_PAGE && parent !== window && parent.RP && parent.RP.pages[id] && POPUP_PAGES.includes(id)) {
+    const data = state.sel ? JSON.stringify({ sel: state.sel, listId: state.listId, rowNotes: state.rowNotes, reopened: state.reopened, sim: state.sim, openStep: state.openStep, visited: [...state.visited] }) : null;
+    addEventListener("hashchange", () => parent.RP.shell.tabFromFrame(id, data), { once: true });    // once this frame is back where it was
+    history.back();
+    return;
+  }
   route.last = location.hash.slice(1) || "dashboard";
   if (IN_PAGE) parent.postMessage({ rp: "nav", hash: decodeURIComponent(route.last) }, location.origin);   // the shell's heading and address follow
   const page = PAGES[id] ? id : "dashboard";
