@@ -45,7 +45,7 @@ Stage 1, where it stands (27 Nov, second session): **built, reviewed, pull reque
 - **`DATABASE_URL` is not set on the web app** (GP, 27 Nov: "I have not added DATABASE_URL to the web app and will not
   until you ask"). The steps GP follows are in docs/AZURE_DEPLOY.md, "The database". Its value:
   `postgresql://rpadmin:PASSWORD@rightprice-db.postgres.database.azure.com:5432/postgres?sslmode=require` (the password
-  may be typed as it is).
+  typed exactly as it is, never percent-encoded: the app finds where it ends; the rest is read by libpq).
 - **Cost, as GP was told:** the form showed USD 22.08 a month (compute 17.89, storage 4.19) with "Free up to 750 hours"
   and "Free up to 32 GB"; GP's Free services page lists Azure Database for PostgreSQL among the services free for 12
   months. The subscription is Azure for Students (a fixed credit, which the web app plan also draws on). GP finds USD 17
@@ -101,15 +101,24 @@ Stage 1, where it stands (27 Nov, second session): **built, reviewed, pull reque
   uses `DATABASE_URL`: PostgreSQL comes from `RIGHTPRICE_TEST_DATABASE_URL` (refused if it names an azure.com host), with a
   throwaway database per run, dropped at the end. The "checks" job brings PostgreSQL 16 and requires it
   (`RIGHTPRICE_CHECK_REQUIRE_POSTGRES=1`).
-- **Reviews.** Two cold reviews ran side by side (one on the running app across the stores, one reading the change). They
-  found 11 and 8 faults, mostly confirmed by running them; every one listed under "Fixes" in the commit
-  "Fixes from the two cold reviews" was fixed and checked by `check_server.py`. A second reviewer then checked the fixes
-  (see the result below).
+- **Reviews.** Two cold reviews ran side by side (one on the running app across the stores, one reading the change):
+  11 and 8 findings, most confirmed by running them (a dropped connection freezing the site, an outage at start lasting
+  until a restart, the files' guard locking GP out when nothing was worked on, export failing when needed, older tracker
+  steps blocking the move, a tracker read failing during another process's write, uploads overlapping, the day's backup
+  skipped on applying drafts, a password leaking in error text, an empty database refilled from stale files). All were
+  fixed. **A second reviewer confirmed most fixes by running them** (and the placeholder fix across two seeds) and found
+  more: a refused setting used anyway on the first request (serious), `/mcp/health` touching the database on the web
+  server's own loop, the app's own URL reading differing from libpq (now only where the password ends is decided by the
+  app; libpq reads the rest; the password is always taken as typed), waits of up to 90 s, a rate save waiting on another
+  dropping its connection, the guard still refusing in the usual archive case. Those were fixed after it and checked by
+  `check_server.py` (613 checks), **not by a third reviewer**.
 - **Left as they are (told to GP):** two people saving rate tables at the same moment can lose one edit (as on the files);
   on the database, an old fabric code with leading zeros keeps them ("00123"), where the files dropped them on their
   first rewrite; offline scripts (`pilot.py`, `calibrate.py`, `rate_card.py`, `build_masters.py`) work on the files;
   `apply_proposals.py` now keeps its copy through the store; the `python store.py` commands in Azure's SSH window have not
-  been tried.
+  been tried; a URL with several hosts is refused; a file-mode start with newer code that adds tables to an old rate master
+  writes a master the guard counts as changed (`keep-database` clears it); while the database is slow, pages wait up to
+  about 20 to 30 seconds before a 503 (120 worker threads, so pages and static files keep answering).
 
 Found while measuring on 27 Nov, and told to GP:
 - **The calibration's "held-back third" is not a fair test.** It splits by fabric code (`pilot.held_back`), and the 1,696

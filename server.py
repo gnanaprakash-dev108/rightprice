@@ -49,7 +49,10 @@ _classic = None
 @asynccontextmanager
 async def lifespan(_app):
     global _classic
-    store.get()             # with DATABASE_URL set: connect, add any new tables, and copy the files in on the first start
+    # more worker threads than the default 40, so that requests waiting on a slow database cannot hold up the pages and files
+    import anyio.to_thread
+    anyio.to_thread.current_default_thread_limiter().total_tokens = 120
+    await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
     if os.environ.get("RIGHTPRICE_NO_CLASSIC") != "1":
         _classic = subprocess.Popen(
             [sys.executable, "-m", "streamlit", "run", os.path.join(HERE, "app.py"),
@@ -109,10 +112,12 @@ class McpGate:
             # one JSON answer per POST and no sessions: there is no stream to open and nothing to delete
             return await answer(405, {"detail": "The MCP endpoint takes POST requests only."}, [(b"allow", b"POST")])
         if path == "/mcp/health":
-            try:
-                version, unavailable = store.get().version("rates"), None
-            except store.StoreUnavailable as e:
-                version, unavailable = None, str(e)
+            def rates_version():        # in a worker thread: a slow database must not hold up the web server's own loop
+                try:
+                    return store.get().version("rates"), None
+                except store.StoreUnavailable as e:
+                    return None, str(e)
+            version, unavailable = await asyncio.to_thread(rates_version)
             return await answer(200, {"ok": True, "app": "RightPrice", "code": _code_version(), "store": store.get().kind,
                                       "rate_master_version": version, "store_unavailable": unavailable,
                                       "tools": len(await mcp_server.mcp.list_tools())})

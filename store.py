@@ -70,6 +70,10 @@ class Refusal(StoreUnavailable):
     move, an empty database where one was expected, a setting that cannot be read). The words say why and what to do."""
 
 
+class Busy(StoreUnavailable):
+    """Waited too long for another request or another writer; nothing is wrong with the database."""
+
+
 class Conflict(Exception):
     """Someone else changed it since the page read it (the tracker's 'seen' count)."""
 
@@ -301,25 +305,26 @@ class SqlStore:
     so an outage passes by itself."""
     LOCK_KEY = 727274190        # PostgreSQL advisory locks: this one for adding tables and copying in, +1 ... +5 for each kind
     RETRY, RETRY_REFUSED = 15, 300      # seconds between tries to start: while unreachable; after a refusal
-    WAIT = 45                   # seconds a request waits for another one using the database before it is told to try again
+    WAIT = 20                   # seconds a request waits for another one using the database before it is told to try again
 
     def __init__(self, url, folder=None, start=True):
         self.url, self.folder = url, folder or data_dir()
         self._lock, self._conn, self.imported, self._secret = threading.RLock(), None, None, ""
-        self.error, self.refused, self._tried, self._starter = None, False, 0.0, None
+        self.error, self.refused, self._tried, self._starter, self._unreadable = None, False, time.monotonic(), None, False
         self.kind, self.path, self._pg = "postgres" if url.startswith(("postgresql://", "postgres://")) else "sqlite", None, {}
         self.started = not start
         try:
             self._parse(url)
         except Refusal as e:
-            self.started, self.error, self.refused = False, str(e), True
+            self.started, self.error, self.refused, self._unreadable = False, str(e), True, True
             print(f"RightPrice: the database is not in use: {self.error}", file=sys.stderr)
             return
         if start:
             self._start()
 
     def _parse(self, url):
-        """Read the setting. The password may be written as it is (P@ss#1) or percent-encoded (P%40ss%231)."""
+        """Read the setting: postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require, the password typed as it is
+        (any characters, not percent-encoded). Everything after the password is read by PostgreSQL's own library."""
         if self.kind == "sqlite":
             if not url.startswith("sqlite:///"):
                 raise Refusal("DATABASE_URL is neither postgresql://... nor sqlite:///<full path to a file>")
@@ -329,20 +334,20 @@ class SqlStore:
                               "sqlite:////home/rightprice-data/rightprice.db (a relative one would sit in the code folder, "
                               "which a deploy replaces)")
             return
-        from urllib.parse import parse_qsl, unquote, urlsplit
-        rest = url.split("://", 1)[1]
-        userinfo, hostpart = rest.rsplit("@", 1) if "@" in rest else ("", rest)
-        user, _, pw = userinfo.partition(":")
+        from urllib.parse import quote
+        from psycopg.conninfo import conninfo_to_dict
+        scheme, rest = url.split("://", 1)
+        host = r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._\-]+)(:\d+)?"
+        cut = next((i for i, ch in enumerate(rest) if ch == "@" and re.fullmatch(rf"{host}(,{host})*", re.split(r"[/?]", rest[i + 1:], 1)[0])), None)
+        userinfo, hostpart = (rest[:cut], rest[cut + 1:]) if cut is not None else ("", rest)
+        user, colon, pw = userinfo.partition(":")
         self._secret = pw
-        encoded = re.fullmatch(r"(?:[^%@:/?#\[\]\s]|%[0-9A-Fa-f]{2})*", pw)
+        login = (quote(user, safe="") + (":" + quote(pw, safe="") if colon else "") + "@") if userinfo else ""
         try:
-            u = urlsplit("postgresql://" + hostpart)
-            port = u.port or 5432
-        except ValueError:
-            raise Refusal("DATABASE_URL could not be read: after the password it should say <host>:5432/postgres?sslmode=require") from None
-        self._pg = dict(parse_qsl(u.query), host=u.hostname or "localhost", port=port,
-                        dbname=unquote(u.path.lstrip("/")) or "postgres", user=unquote(user),
-                        password=unquote(pw) if encoded else pw)
+            self._pg = conninfo_to_dict(f"{scheme}://{login}{hostpart}")
+        except Exception:
+            raise Refusal("DATABASE_URL could not be read. It should be postgresql://rpadmin:PASSWORD@rightprice-db."
+                          "postgres.database.azure.com:5432/postgres?sslmode=require, with the password typed as it is") from None
 
     def _start(self):
         """Add any new tables, copy the files in on the first start, and check the files are as they were then."""
@@ -369,12 +374,13 @@ class SqlStore:
         """Where the database is (host and database), never the user or the password."""
         if self.kind == "sqlite":
             return self.path or "a SQLite file"
-        return f"{self._pg.get('host')}:{self._pg.get('port')}/{self._pg.get('dbname')}" if self._pg else "PostgreSQL"
+        return f"{self._pg.get('host', 'localhost')}:{self._pg.get('port', 5432)}/{self._pg.get('dbname', '')}" if self._pg else "PostgreSQL"
 
     def scrub(self, text):
         """An error's words with the password, and the whole setting, taken out."""
         text = str(text).replace(self.url, "<DATABASE_URL>")
-        for s in {self._secret, self._pg.get("password", "")} - {""}:
+        from urllib.parse import quote
+        for s in sorted({self._secret, quote(self._secret, safe=""), self._pg.get("password", "")} - {""}, key=len, reverse=True):
             text = text.replace(s, "***")
         return text
 
@@ -387,9 +393,10 @@ class SqlStore:
                 # keepalives and a user timeout: a connection a network device has dropped without a word is noticed
                 # in about a minute, not the quarter of an hour the operating system would wait
                 params = dict(connect_timeout=15, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
-                              tcp_user_timeout=30000, application_name="rightprice",
-                              options="-c statement_timeout=120000 -c lock_timeout=30000 -c idle_in_transaction_session_timeout=300000")
+                              tcp_user_timeout=30000, application_name="rightprice")
                 params.update(self._pg)
+                # timeouts first; any options in the setting come after them (and win only where they name the same one)
+                params["options"] = ("-c statement_timeout=120000 -c lock_timeout=30000 " + self._pg.get("options", "")).strip()
                 self._conn = psycopg.connect(**params)
             else:
                 os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -413,6 +420,9 @@ class SqlStore:
     def _broken(self, e):
         if self.kind == "postgres":
             import psycopg
+            from psycopg import errors
+            if isinstance(e, (errors.LockNotAvailable, errors.QueryCanceled)):
+                return False            # waited too long for another writer: the connection is fine
             return isinstance(e, (psycopg.OperationalError, psycopg.InterfaceError))
         return False
 
@@ -420,9 +430,10 @@ class SqlStore:
         """Not started yet (unreachable, or refused): try to start again once its wait is over; else say why not."""
         if self.started or self._starter == threading.get_ident():
             return
-        if time.monotonic() - self._tried >= (self.RETRY_REFUSED if self.refused else self.RETRY) and self._lock.acquire(timeout=self.WAIT):
+        due = lambda: not self._unreadable and time.monotonic() - self._tried >= (self.RETRY_REFUSED if self.refused else self.RETRY)
+        if due() and self._lock.acquire(timeout=self.WAIT):
             try:
-                if not self.started:
+                if not self.started and due():          # another request may have tried while this one waited
                     self._start()
             finally:
                 self._lock.release()
@@ -436,7 +447,7 @@ class SqlStore:
         A read sees one moment of the database throughout."""
         self._ready()
         if not self._lock.acquire(timeout=self.WAIT):
-            raise StoreUnavailable("The database is busy with another request; try again in a moment")
+            raise Busy("The database is busy with another request; try again in a moment")
         try:
             conn = self._connect()
             try:
@@ -456,6 +467,10 @@ class SqlStore:
                     conn.rollback()
                 except Exception:
                     self._drop()
+                if self.kind == "postgres" and not self._broken(e):
+                    from psycopg import errors
+                    if isinstance(e, (errors.LockNotAvailable, errors.QueryCanceled)):
+                        raise Busy("The database is busy with another change; try again in a moment") from e
                 if self._broken(e):
                     self._drop()
                     raise StoreUnavailable(self.scrub(f"The database at {self.where()} stopped answering ({type(e).__name__}: "
@@ -469,8 +484,8 @@ class SqlStore:
         try:
             with self.tx() as c:
                 return fn(c)
-        except Refusal:
-            raise
+        except (Refusal, Busy):
+            raise                       # a refusal stands, and a wait is not made twice
         except StoreUnavailable:
             if not self.started:
                 raise
@@ -535,6 +550,10 @@ class SqlStore:
 
     def _advice(self):
         if not self.refused:
+            if self._moved() is None:
+                return ("The app tries the database again by itself every few seconds. Nothing has been copied in yet and the "
+                        "files are unchanged. If this lasts, look at the database in the Azure portal (is it running?), or remove "
+                        "DATABASE_URL and restart to go on working on the files meanwhile.")
             return ("The app tries the database again by itself every few seconds; nothing is lost. If this lasts, look at the "
                     "database in the Azure portal (is it running?). Do not remove DATABASE_URL for this: the files are as they "
                     "were when they were copied in, and work done on them would later have to be brought together by hand.")
@@ -882,13 +901,19 @@ class SqlStore:
     def _baseline(self, c):
         """The files as the database last took them: at the copying in, or when keep_database() was run."""
         kept = c.one("SELECT value FROM store_meta WHERE key = 'files_baseline'")
-        if kept:
-            b = json.loads(kept[0])
-            return b["when"], b["files"]
         r = c.one("SELECT finished_at, files FROM import_run ORDER BY id DESC LIMIT 1")
         if r is None:
             return None, None
-        return r[0], {f["name"]: f["sha256"] for f in json.loads(r[1]) if f.get("as") != "an earlier rate version"}
+        when, ok = r[0], {}
+        for f in json.loads(r[1]):
+            if f.get("as") != "an earlier rate version":
+                ok.setdefault(f["name"], set()).add(f["sha256"])
+        if kept:            # keep-database: these hashes too (the files as they were when it was run)
+            b = json.loads(kept[0])
+            when = b["when"]
+            for name, shas in b["files"].items():
+                ok.setdefault(name, set()).update(shas if isinstance(shas, list) else [shas])
+        return when, ok
 
     def _files_unchanged(self):
         """After the move the database is the one to work on. If the files have been worked on since (the setting was
@@ -897,10 +922,10 @@ class SqlStore:
         when, then = self._read(self._baseline)
         if then is None:
             return
-        shipped = {_sha(open(SHIPPED_MASTER, "rb").read())} | {v for k, v in then.items() if "(with the code)" in k}
+        shipped = {_sha(open(SHIPPED_MASTER, "rb").read())}
         now = {name: sha for name, (_, sha) in self._source_files().items()}
-        changed = sorted(n for n, sha in now.items()
-                         if (n in then and then[n] != sha) or (n not in then and not (n == FILES["rates"] and sha in shipped)))
+        shipped |= {sha for k, v in then.items() if "(with the code)" in k for sha in v}
+        changed = sorted(n for n, sha in now.items() if sha not in then.get(n, set()) and not (n == FILES["rates"] and sha in shipped))
         if changed:
             raise Refusal(
                 f"The data files in {self.folder} changed after the database took them on {when} ({', '.join(changed)}): "
@@ -910,11 +935,17 @@ class SqlStore:
 
     def keep_database(self):
         """The database is the one to keep: the files as they are now are taken as seen, and no longer stop the start."""
-        files = {name: sha for name, (_, sha) in self._source_files().items()}
+        now = {name: sha for name, (_, sha) in self._source_files().items()}
         with self.tx(write="import") as c:
+            kept = c.one("SELECT value FROM store_meta WHERE key = 'files_baseline'")
+            files = {k: (v if isinstance(v, list) else [v]) for k, v in (json.loads(kept[0])["files"] if kept else {}).items()}
+            for name, sha in now.items():
+                files.setdefault(name, [])
+                if sha not in files[name]:
+                    files[name].append(sha)
             c.run("DELETE FROM store_meta WHERE key = 'files_baseline'")
             c.run("INSERT INTO store_meta (key, value) VALUES ('files_baseline', %s)", (json.dumps({"when": _now(), "files": files}),))
-        return files
+        return now
 
 
 # ===================================================================== which one, chosen once by the setting
@@ -939,6 +970,10 @@ def reset():
     if isinstance(_store, SqlStore):
         _store._drop()
     _store = None
+
+
+def store_folder():
+    return data_dir()
 
 
 def _database():
@@ -982,8 +1017,8 @@ if __name__ == "__main__":
         print("Written:", ", ".join(export(args[1])))
     elif args == ["keep-database"]:
         kept = _database().keep_database()
-        print("The database is the one to keep. The files as they are now no longer stop the app starting on it:",
-              ", ".join(kept) or "(none)")
+        print(f"The database is the one to keep. The files in {store_folder()} as they are now no longer stop the app "
+              "starting on it:", ", ".join(kept) or "(none)")
     elif args[:1] in (["status"], []):
         print(json.dumps(get().describe(), indent=1, default=str))
     else:

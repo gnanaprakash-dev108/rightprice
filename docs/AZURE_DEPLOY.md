@@ -117,9 +117,9 @@ setting.
    |---|---|
    | `DATABASE_URL` | `postgresql://rpadmin:YOUR-PASSWORD@rightprice-db.postgres.database.azure.com:5432/postgres?sslmode=require` |
 
-   Type the password as it is, even with `@ # : / ? %` in it: the app reads the setting itself. (Only if the password
-   contains `%` followed by two letters or digits, such as `%41`, write that `%` as `%25`.) Apply, and confirm the
-   restart. The password stays in Azure; never paste it into a chat.
+   Type the password exactly as it is, even with `@ # : / ? %` in it, and do not percent-encode it (write `@`, not
+   `%40`): the app reads the setting itself. Apply, and confirm the restart. The password stays in Azure; never paste it
+   into a chat.
 3. Wait two or three minutes, then open `https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/api/store`
    (signed in). It should show `"store": "postgres"`, `"ok": true`, and under `copied_in` > `checked` > `summary`:
    the rate master the same workbook byte for byte; the fabric list's rows the same and each costed on both, equal to

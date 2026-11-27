@@ -18,6 +18,7 @@ and sets RIGHTPRICE_CHECK_REQUIRE_POSTGRES=1 so that a missing PostgreSQL fails 
 import datetime as _dt
 import hashlib
 import io
+import re
 import json
 import os
 import shutil
@@ -960,12 +961,25 @@ def store_checks(check, kinds, fresh, pg_url=None):
         d._drop()
     # passwords as people type them; a relative SQLite path
     p = store.SqlStore("postgresql://rpadmin:Pa@ss:w/rd#1%x?y@db.example.com:5432/postgres?sslmode=require", start=False)
-    q = store.SqlStore("postgresql://rpadmin:P%40ss%23w0rd@db.example.com/postgres?sslmode=require", start=False)
-    check("A password in DATABASE_URL may be written as it is or percent-encoded; neither is shown",
+    q = store.SqlStore("postgresql://rpadmin:Summer%2026@db.example.com/postgres?sslmode=require&application_name=me@laptop"
+                       "&options=-c%20search_path%3Dpublic", start=False)
+    v = store.SqlStore("postgresql:///postgres?host=db.example.com&port=6432&user=gp", start=False)
+    check("A password in DATABASE_URL is typed as it is, whatever its characters, and is never shown; the rest is read as PostgreSQL reads it",
           p._pg["password"] == "Pa@ss:w/rd#1%x?y" and p._pg["host"] == "db.example.com" and p._pg["sslmode"] == "require"
-          and q._pg["password"] == "P@ss#w0rd" and "ss:w" not in p.where() + p.scrub("x Pa@ss:w/rd#1%x?y x") and q.where() == "db.example.com:5432/postgres")
-    r = store.SqlStore("sqlite:///rightprice-data/rp.db")
-    check("A SQLite file named by a relative path is refused (a deploy would replace it)", r.started is False and "full path" in (r.error or ""))
+          and "ss:w" not in p.where() + p.scrub("x Pa@ss:w/rd#1%x?y x") and q._pg["password"] == "Summer%2026"
+          and q._pg["application_name"] == "me@laptop" and q.where() == "db.example.com:5432/postgres"
+          and v._pg.get("user") == "gp" and v.where() == "db.example.com:6432/postgres")
+    rel = os.path.join(HERE, "rightprice-data-check-relative")
+    r = store.SqlStore("sqlite:///rightprice-data-check-relative/rp.db", folder=tempfile.mkdtemp(prefix="rightprice-rel-"))
+    try:
+        r.read_seen()
+        used = True
+    except store.StoreUnavailable:
+        used = False
+    check("A SQLite file named by a relative path is refused (a deploy would replace it), and stays refused at the next request",
+          r.started is False and "full path" in (r.error or "") and not used and not os.path.exists(rel))
+    m = store.SqlStore("mysql://x@y/z")
+    check("A setting that is neither PostgreSQL nor SQLite is refused, and says so", m.started is False and "neither postgresql" in (m.error or ""))
 
 
 def parent():
@@ -1034,7 +1048,8 @@ def _parent(pg):
         copied = moved.get("copied_in") or {}
         check(f"Moved into {kind}: the app copied the files in at its start and checked them",
               moved.get("store") == kind and moved.get("ok") and copied.get("checked", {}).get("equal") is True
-              and any("costed on both, equal to the paisa" in x for x in copied["checked"]["summary"])
+              and any(int(re.search(r"(\d+) costed on both, equal to the paisa", x).group(1)) >= 6 for x in copied["checked"]["summary"]
+                      if "costed on both" in x)
               and moved["counts"]["fabric list rows"] == len(files_answers["list"]["rows"])
               and moved["counts"]["rate versions"] >= 2,          # the dated copy of the rate edit came in as an earlier version
               "; ".join(copied.get("checked", {}).get("summary", [])))
@@ -1085,15 +1100,26 @@ def _parent(pg):
         check("While the files' guard has stopped the app, the database can still be written out as files",
               good and os.path.exists(os.path.join(sp, "exported2", "negotiations.json")))
     secret = "S3cret-Pa55word-x"
-    p = _run("postgres", "refused", data=tempfile.mkdtemp(prefix="rightprice-none-"), out=os.path.join(sp, "down.json"),
-             url=f"postgresql://rpadmin:{secret}@127.0.0.1:9/postgres?sslmode=disable&connect_timeout=3")
-    _, text = _finish(p, "a database that cannot be reached")
+    down_url = f"postgresql://rpadmin:{secret}@127.0.0.1:9/postgres?sslmode=disable&connect_timeout=3"
+    p = _run("postgres", "refused", data=tempfile.mkdtemp(prefix="rightprice-none-"), out=os.path.join(sp, "down.json"), url=down_url)
+    _, text = _finish(p, "a database that cannot be reached, before any move")
     with open(os.path.join(sp, "down.json"), encoding="utf8") as f:
         r = json.load(f)
-    check("A database that cannot be reached: the pages answer 503 and say so; the home page still opens; no advice to go back to the files",
+    check("A database that cannot be reached at a first start: 503 saying so, the home page opens, the files untouched and usable meanwhile",
           r["list"][0] == 503 and "could not be reached" in r["list"][1]["detail"] and r["cost"] == 503 and r["home"] == 200
           and r["store"]["ok"] is False and "tries the database again by itself" in r["store"]["advice"]
-          and "Do not remove DATABASE_URL" in r["store"]["advice"])
+          and "Nothing has been copied in yet" in r["store"]["advice"])
+    if moves:
+        after = os.path.join(sp, "after")
+        shutil.copytree(folder, after)          # holds the note of the move
+        p2 = _run("postgres", "refused", data=after, out=os.path.join(sp, "down2.json"), url=down_url)
+        _, text2 = _finish(p2, "a database that cannot be reached, after the move")
+        with open(os.path.join(sp, "down2.json"), encoding="utf8") as f:
+            r2 = json.load(f)
+        text += text2
+        check("A database that cannot be reached after the move: no advice to go back to the files (they are as at the move)",
+              r2["list"][0] == 503 and "Do not remove DATABASE_URL" in r2["store"]["advice"])
+        r = [r, r2]
     check("A database that cannot be reached: the password is in no answer and no log line", secret not in json.dumps(r) and secret not in text)
     # the data layer on its own
     n_db = [0]
