@@ -39,16 +39,27 @@ mcp = MCPServer(
         "the person before calling it."))
 
 
-def tool(fn=None, *, writes=False, destroys=False):
+MIRRORS = {}        # each tool and the screen's address it mirrors: its permission is that address's (rules/access.py)
+
+
+def tool(*, mirrors, writes=False, destroys=False):
     """Register a tool. The app's functions are ordinary blocking ones (the first Right cost answer after a restart takes
     about 20 seconds), so each runs in a worker thread and the web app stays responsive meanwhile. Tools are marked
-    read-only unless they write, so a client can ask the person before a writing one."""
+    read-only unless they write, so a client can ask the person before a writing one. `mirrors` names the address of the
+    screens the tool does the work of ("POST /api/negotiations/event"): before it runs, the AI assistant's fixed role must
+    hold that address's permission (rules/access.py assistant_refusal), so a tool cannot do more than its address allows."""
     def register(f):
+        MIRRORS[f.__name__] = mirrors
+
         @functools.wraps(f)
         async def run(*args, **kwargs):
+            from rules import access
+            refused = access.assistant_refusal(mirrors)
+            if refused:
+                return {"error": refused}
             return await anyio.to_thread.run_sync(functools.partial(f, *args, **kwargs))
         return mcp.tool(annotations=ToolAnnotations(read_only_hint=not writes, destructive_hint=destroys, open_world_hint=False))(run)
-    return register(fn) if fn is not None else register
+    return register
 
 
 def token():
@@ -124,7 +135,7 @@ def _fields():
     return fields
 
 
-@tool
+@tool(mirrors="GET /api/meta")
 def list_choices() -> dict:
     """Every field RightPrice accepts when costing a fabric, with the values to choose from (choose_from is null for a
     field that is typed: a number or free text). Call this before cost_fabric and use field names and values exactly."""
@@ -134,7 +145,7 @@ def list_choices() -> dict:
                     "cost_fabric refuses a field name it does not know, so a misspelt field cannot be silently ignored."}
 
 
-@tool
+@tool(mirrors="POST /api/cost")
 def cost_fabric(choices: dict) -> dict:
     """Work out the should-cost of one fabric, ex-mill, in rupees per metre and per kilo, from its construction.
     `choices` uses the field names and values of list_choices (see its example). Add "Quoted price (Rs/m)" and
@@ -199,7 +210,7 @@ def _brief0(b):
             "rupees_above_should_cost_on_the_quantity": b["at_stake"]}
 
 
-@tool
+@tool(mirrors="GET /api/costs")
 def find_fabrics(search: str = "", mill: str = "", verdict: str = "", source: str = "", limit: int = 20) -> dict:
     """Find costings in Right cost: purchase-order fabrics (price paid) and fabric-list rows (price quoted).
     search: words in the fabric code, description or supplier. mill: a mill's name, any spelling. verdict: Push, Fair,
@@ -232,7 +243,7 @@ def find_fabrics(search: str = "", mill: str = "", verdict: str = "", source: st
             "fabrics": [_row(r) for r in rows[:n]]}
 
 
-@tool
+@tool(mirrors="GET /api/costs")
 def fabric_brief(key: str) -> dict:
     """The negotiation brief for one fabric (key from find_fabrics): verdict, should-cost, usual range, where to open and
     what to aim for, why the tool is unsure if it is, the quote alerts on it, and where its negotiation stands. The brief
@@ -289,7 +300,7 @@ def _nego(rec, summ):
                       for e in _s().tracker._nego_order(rec.get("events", []))]}
 
 
-@tool
+@tool(mirrors="GET /api/supplier")
 def supplier_summary(mill: str) -> dict:
     """One mill, for the meeting with it: what was bought and what is quoted with verdict counts, the rupees above the
     usual range (counted only where the tool is sure), its sheets' sums that are off, negotiations and what was won,
@@ -314,7 +325,7 @@ def supplier_summary(mill: str) -> dict:
                                    "use find_fabrics for keys. Purchases are already paid: use them for the next order of the same cloth."}
 
 
-@tool
+@tool(mirrors="POST /api/pack")
 def negotiation_pack(mill: str = "", keys: list[str] | None = None) -> dict:
     """The negotiation pack for a mill's quoted fabrics (fabric-list rows): totals, the rows to lead with, every row with
     its verdict, open and aim prices, rupees at stake, the mill's own sums done again, and the questions per row.
@@ -351,7 +362,7 @@ def negotiation_pack(mill: str = "", keys: list[str] | None = None) -> dict:
             "lead_with": p["lead"], "rows": rows_out, "not_costed": p["not_costed"]}
 
 
-@tool
+@tool(mirrors="GET /api/negotiations")
 def tracker_steps(key: str) -> dict:
     """The negotiation recorded on one fabric (key from find_fabrics): each step with the mill and where it stands."""
     s = _s()
@@ -363,7 +374,7 @@ def tracker_steps(key: str) -> dict:
     return dict(_nego(rec, s.tracker.nego_summary(rec)), kinds_you_can_record=s.NEGO_KINDS)
 
 
-@tool(writes=True)
+@tool(mirrors="POST /api/negotiations/event", writes=True)
 def record_tracker_step(key: str, kind: str, price_per_m: float, date: str = "", note: str = "") -> dict:
     """Record one negotiation step on a fabric. THIS CHANGES DATA EVERYONE SHARES: confirm with the person first.
     key: from find_fabrics. kind: exactly one of "Mill's quote", "Our counter", "Mill's revised quote", "Agreed".
@@ -420,7 +431,7 @@ def record_tracker_step(key: str, kind: str, price_per_m: float, date: str = "",
             "effects": "Everyone using RightPrice sees this step." + (" An agreed price also clears the fabric's quote alert and is counted in what was won." if kind == "Agreed" else "")}
 
 
-@tool(writes=True, destroys=True)
+@tool(mirrors="POST /api/negotiations/remove", writes=True, destroys=True)
 def remove_my_tracker_step(key: str, kind: str, price_per_m: float, date: str = "") -> dict:
     """Undo a step THIS ASSISTANT recorded by mistake (steps recorded by a person on the screen cannot be removed here).
     Give the fabric's key and the kind and price of the step (and its date, YYYY-MM-DD, if two match). The mill's first
@@ -444,7 +455,7 @@ def remove_my_tracker_step(key: str, kind: str, price_per_m: float, date: str = 
     return {"removed": True, "removed_step": {"kind": mine[-1]["kind"], "price_per_m": mine[-1]["price"], "date": mine[-1]["date"]}, "now": _nego(rec, s.tracker.nego_summary(rec)) if rec.get("events") else {"status": "Not tracked", "steps": []}}
 
 
-@tool
+@tool(mirrors="GET /api/alerts")
 def quote_alerts() -> dict:
     """Newly quoted fabrics that need a look before their price is accepted: above the usual range, the mill's own sums
     off, repeating an order already on the list, or far below should-cost. Newest upload first."""

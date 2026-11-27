@@ -70,7 +70,7 @@ def table():
 
 def add(entries, who="", keep=None):
     """Add dated rates, in one transaction. Each entry: yarn_key, month ('YYYY-MM'), rate, low, high, entries, basis,
-    source, detail (a dict). An active rate for the same yarn and month is marked replaced and kept, unless keep(row)
+    source, detail (a dict). An active rate for the same yarn and month is marked replaced and kept, unless keep(row, entry)
     says it must stay (then the entry is not added). Returns (added, kept back): the rows added, and the entries not
     added because of keep."""
     added, held = [], []
@@ -79,7 +79,7 @@ def add(entries, who="", keep=None):
             vf = e["month"] + "-01"
             old = [_row(r) for r in c.all(f"SELECT {', '.join(COLS)} FROM yarn_rate_dated WHERE yarn_key = %s AND valid_from = %s "
                                           "AND removed_at IS NULL ORDER BY id", (e["yarn_key"], vf))]
-            if keep and any(keep(o) for o in old):
+            if keep and any(keep(o, e) for o in old):
                 held.append(e)
                 continue
             for o in old:

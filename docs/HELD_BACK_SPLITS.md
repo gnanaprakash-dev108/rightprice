@@ -5,10 +5,12 @@
 
 ## In one line
 
-**On cloth the draft was not fitted on, it shows no measurable gain.** On every fair split the change in the share of
-fabrics within 10% of the price paid is about one point, with a 95% interval that runs from a loss of several points to a
-gain of several. Some kinds of cloth get clearly worse with it, and several of its proposals change with the split. On
-this evidence the draft should not be applied.
+**On cloth the draft was not fitted on, it shows no measurable gain.** On the construction split and the main time split
+the change in the share of fabrics within 10% of the price paid is about one point, with a 95% interval that runs from a
+loss of several points to a gain of several. On November alone (135 fabrics) the change is larger, +5.9 points (+13.5 on
+its unseen constructions), but its interval is wide (−1.7 to +16.7; −7.3 to +32.3 on the unseen ones), so it shows no
+measurable gain either. Some kinds of cloth get clearly worse with the draft, and several of its proposals change with
+the split. On this evidence the draft should not be applied.
 
 ## Why it was re-run
 
@@ -45,12 +47,16 @@ from 4,000 bootstrap draws that resample whole tested constructions (so a cloth 
 | **By construction** | 531 | 48.6% → 49.7% | 29 / 23 | **+1.1 (−4.7 to +8.4)** | **24.3% → 23.0%** | 79.3% → 79.1% |
 | ...without the 58 near constructions | 254 | | | −0.8 (−8.4 to +7.3) | | |
 | **By time: fit Aug–Sep, test Oct–Nov** | 612 | 49.8% → 51.1% | 24 / 16 | **+1.3 (−2.1 to +4.9)** | 29.1% → 34.0% | **79.4% → 78.4%** |
+| ...without constructions near or equal to a fitted one | 226 | | | −0.4 (−5.3 to +4.1) | | |
 | By time: fit Aug–Oct, test Nov | 135 | 44.4% → 50.4% | 9 / 1 | +5.9 (−1.7 to +16.7) | **27.4% → 25.2%** | 64.4% → 68.1% |
+| ...without constructions near or equal to a fitted one | 52 | | | +13.5 (−7.3 to +32.3) | | |
 
 What this says:
 
 1. **No measurable gain.** Every interval crosses zero. On unseen constructions the draft moves 29 fabrics into 10% and
-   23 out (net 6 of 531). Leaving out the tested constructions that are near a fitted one, the change is −0.8 points.
+   23 out (net 6 of 531). Leaving out the tested constructions that are near or equal to a fitted one, the change is
+   −0.8 points on the construction split and −0.4 on the time split. November alone moves more (+5.9, 9 in and 1 out of
+   135), but on so few fabrics the interval runs from −1.7 to +16.7.
 2. **Things that got worse with the draft.** Within 5% falls on the construction split (24.3% → 23.0%) and in November
    (27.4% → 25.2%); within 20% falls on the time split (79.4% → 78.4%). By kind of cloth (sheet "Tested by cell", cells
    of 8 or more):

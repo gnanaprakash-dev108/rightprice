@@ -167,6 +167,132 @@ agreed fallback is a database file on the web app's own storage: `DATABASE_URL=s
 (four slashes). The build session should look at that again before it is used: `/home` on App Service is a network
 share, and SQLite needs care there with two processes (the app and the classic screens).
 
+## Users and roles (stage 3 of the rebuild)
+
+Microsoft sign-in decides who can reach the site; RightPrice's own list decides what each person may do there. Until
+the app setting `RIGHTPRICE_ADMINS` is added, the app behaves as before: everyone who can sign in may use everything
+(the page Users and roles, under the user icon, says "Permissions are off"). Deploying the code changes nothing for
+anyone.
+
+With the setting on:
+- nobody gets in until an admin adds them on Users and roles (their e-mail address, name and role). Someone signed in
+  but not added sees: "You have not been given access yet. Ask an admin to add you: you are signed in as <their
+  address>". Everything with data they ask the server for is refused (403); the page itself (which holds no data) opens
+  without the database, so a slow database never stops the site from opening;
+- the addresses in the setting are always Admin, whether or not they are in the list;
+- the server checks every request against the person's role; the screens only hide what the role may not use;
+- every change on Users and roles (a person added, a role changed, someone switched off or on, a permission given or
+  taken away) is kept in the record at the foot of that page, with who made it and when;
+- `/mcp` (the AI assistant) is not affected: it still needs its token, and nothing else.
+
+The four roles, as GP decided on 27 Nov 2026 (the pages and actions of each can be changed on Users and roles):
+
+| Role | May |
+|---|---|
+| Admin | Everything, users included |
+| Rates editor | Every page; edit rates and apply mill cost sheet drafts; uploads, tracker steps, alerts seen, drafts; no user admin |
+| Buyer | Every page; uploads, tracker steps, alerts seen, drafts; no rate edits; no user admin |
+| Viewer | Every page, to read; changes nothing |
+
+The earlier screens (`/classic`, "Earlier screens" under the user icon) can change rates, so they open only for roles
+that may edit rates. Each person's own marks (Status and Remarks in Right cost, saved searches, Library lists) stay in
+their own browser, as before.
+
+What a tick does, plainly:
+- **Actions** (edit rates, apply drafts, upload, record steps, mark alerts seen, draft messages, manage users) are
+  strict: a role without one cannot do it anywhere, whatever a screen shows.
+- **Pages** decide which pages a role can open. They are **not** a way to keep figures secret. Data several pages read
+  stays open to a role that has any of them, so unticking one page never breaks another (the Dashboard reads the fabric
+  list and the quote alerts; Compare reads the fabric list; Right cost's fabric pages cost the fabric). Many figures
+  show on more than one page: the Dashboard shows the pilot results by fabric type and by supplier, the cotton price by
+  year and the mill rate card's terms; the drop-down lists every screen loads carry the yarn master with its rates, for
+  anyone let in. The admin page says, for each page, what unticking it hides and where its figures still show.
+- The screens shown inside the shell from the earlier front end (the Dashboard, the price pages, Bulk upload, Create
+  cost, Compare, the pack, Mill cost sheets) still show their buttons to a role that may not use them; pressing one
+  answers "Your role (...) may not ...". Stage 4 moves these screens into the shell and can hide them then.
+
+How the person is read: from `X-MS-CLIENT-PRINCIPAL-NAME` alone, as App Service's sign-in sets it, or, only when that is
+absent, from the sign-in's `preferred_username` or `upn` claim; never from the display name. Microsoft describes that
+header as "a human-readable name ... such as an email address or user principal name" and does not say which it is for
+a personal or a guest account, so add each person by the address the refusal shows them (a personal account written
+`live.com#name@example.com` is read as `name@example.com`). A request carrying a sign-in header twice is refused.
+
+App Service sign-in must stay on. On Azure the app trusts the sign-in headers only while App Service says sign-in is on
+(the setting `WEBSITE_AUTH_ENABLED`, which App Service sets itself). If Authentication is ever turned off while
+`RIGHTPRICE_ADMINS` is set, nobody is let in, admins included, and the page says why: turn sign-in back on, or remove
+`RIGHTPRICE_ADMINS`.
+
+### Switching it on
+
+Do this only with the database in use (`/api/store` says `"store": "postgres"` and `"ok": true`): the list of people
+is kept in the database. With the setting on and no database, only the addresses in the setting can use the site, and
+everyone else is told a database is needed.
+
+Going back is always one step: deleting the app setting `RIGHTPRICE_ADMINS` (and restarting) returns the site to how it
+is today, open to everyone who can sign in. The list of people and the record are kept for later.
+
+1. Before adding anything, open `https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/api/me`
+   (signed in) and check two things:
+   - `"email"` is your own address, as you sign in. That exact address goes into the setting.
+   - `"sign_in"` says `"on"`. It is how the app reads App Service's own setting `WEBSITE_AUTH_ENABLED`, which the
+     build session could not see on the live site. If it says `"off"` while Authentication is on in the portal, do not
+     add `RIGHTPRICE_ADMINS`: with it, nobody would be let in. Tell the build session what `/api/me` shows.
+2. Web app `rightprice` > **Settings** > **Environment variables** > **App settings** > **+ Add**:
+
+   | Name | Value |
+   |---|---|
+   | `RIGHTPRICE_ADMINS` | that address, for example `gp@yourcompany.com` (more than one: separate them with commas) |
+
+   Apply, and confirm the restart. The app also reads `"gp@yourcompany.com"`, `GP <gp@yourcompany.com>`,
+   `mailto:gp@yourcompany.com`, `live.com#gp@outlook.com` and a full stop after the address. Anything that is still not an e-mail address is
+   ignored (an admin sees which on Users and roles). If the setting names no valid address at all, nobody is an admin
+   from it: everyone refused is told "the app setting RIGHTPRICE_ADMINS names no valid e-mail address", and the Log
+   stream says so too.
+3. After a minute, open the site, then the user icon > **Users and roles**. It should say "Permissions are on" and show
+   your address as always Admin. (If instead you are shut out, delete `RIGHTPRICE_ADMINS` again: the site is as before.) Add yourself as Admin in the list too, so you stay an admin if the setting is changed
+   later. From now on, the others see "You have not been given access yet" until you add them, so add them straight
+   away (next steps).
+
+### Adding the 10 people
+
+1. Each person must be able to sign in to the site with Microsoft. The sign-in was set up with the express settings
+   ("Workforce configuration (current tenant)", supported account type "Current tenant - Single tenant"), which lets in
+   the accounts of your own Microsoft Entra directory and its guests. Someone from outside it is invited as a guest:
+   [Microsoft Entra admin center](https://entra.microsoft.com) > **Entra ID** > **Users** > **Invite external user**:
+   their e-mail address and name, tick **Send invite message**, **Review and invite**, **Invite**. They open the
+   e-mail "Microsoft Invitations on behalf of ..." and press **Accept invitation**. Inviting needs at least the
+   "Guest Inviter" or "User Administrator" role in that directory. If the directory belongs to a college (an Azure for
+   Students subscription can sit in one), you may not have that role: ask the build session for the other way (a
+   directory of your own).
+2. On Users and roles > **Add a person**: their e-mail address (as they sign in), name and role, then **Add**.
+3. Ask each to open the site. If one sees "You have not been given access yet", the page shows the address Microsoft
+   gave for them: add exactly that address (a guest account can arrive under another address than the one invited).
+
+Changing a role, switching someone off or on, and changing what a role may do are on the same page. Nobody is ever
+deleted, only switched off, so the record keeps its meaning. The last Admin in the list cannot be made something else or
+switched off: make someone else Admin first.
+
+### Switching it off
+
+Delete the app setting `RIGHTPRICE_ADMINS` and restart: everyone who can sign in may use everything again. The list of
+people and the record are kept for when it is added back. While it is off, the Users and roles page is not shown and
+nothing on it can be changed (the app cannot tell an admin from anyone else then, and the page lists people's addresses).
+
+**Do not use `RIGHTPRICE_UI=classic` while permissions are on**: it runs the earlier screens alone, without the app that
+checks permissions, so everyone signed in could change rates.
+
+**Not tried by the build session** (it has no Azure access and cannot sign in): everything above on the live site.
+What was tried: the app, on a test PostgreSQL 16 and on SQLite, given the headers Microsoft documents for a signed-in
+person ("Work with user identities in AuthN/AuthZ", updated November 2026: `X-MS-CLIENT-PRINCIPAL-NAME`, and
+`X-MS-CLIENT-PRINCIPAL` holding the claims, which "external requests aren't allowed to set"). Which address Microsoft
+puts there for a guest or a personal Microsoft account was not seen, nor the value App Service gives
+`WEBSITE_AUTH_ENABLED` on this web app (Microsoft's reference says only that it is "injected ... to indicate whether App
+Service authentication is enabled"; the app takes `True` or `1` as on). If switching permissions on shows everyone
+"App Service sign-in (Authentication) is off" although it is on, remove `RIGHTPRICE_ADMINS` (the site opens as before)
+and tell the build session. Optional, also not tried: in the
+Entra admin center, the app's Enterprise application > Properties > "Assignment required?" = Yes, then Users and
+groups > add the 10, so that nobody else can even sign in.
+
 ## Letting an AI assistant in (MCP), and e-mail drafts
 
 Two app settings, both optional. Web app > **Settings** > **Environment variables** > App settings:
@@ -240,6 +366,8 @@ pack, the quote alerts and a fabric's negotiation steps, and **record a negotiat
 mill's first quote before a revised quote or an agreement). It can undo a step it recorded itself, but not one a
 person recorded. It cannot change rates, upload or remove rows, or mark alerts seen. Every step it records carries
 the same name, "AI assistant": there is one token, so the tool cannot tell which person was behind it.
+On Users and roles it shows as the fixed role "AI assistant": exactly what its tools do, not changed there, and not
+affected by `RIGHTPRICE_ADMINS` (it still needs its token, and only its token).
 
 ## If the page does not load
 

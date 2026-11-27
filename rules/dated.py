@@ -11,10 +11,11 @@ import math
 import os
 import re
 import pandas as pd
-from rules import common
+from rules import common, rates
 import data_dated
 import masters
 import paths
+import price_import as pi
 
 # The rule, as the Yarn prices page shows it. One place: the code below follows it line by line.
 RULE = [
@@ -24,11 +25,13 @@ RULE = [
     "the market history. A rate typed with no source is a Placeholder, as in the rate master: the costing warns about "
     "it and the brief treats it as it treats any placeholder.",
     "A price given as a range (low to high) counts as its midpoint, typed or brought in.",
-    "Several prices for one yarn in one month count as their average, each range as its midpoint. Each import says "
-    "whether its prices include GST, and prices with GST and without are never averaged together: where a month has "
-    "both, only those without GST are used.",
-    "The month comes from the document's own date where it can be read; otherwise the person chooses the month before "
-    "anything is added. It is never taken from today's date.",
+    "Several prices for one yarn in one month count as their average, each range as its midpoint. Each price says "
+    "whether it includes GST, and prices with GST and without are never averaged together: where a month has both, only "
+    "those without GST are used, and a rate with GST never takes the place of one without GST for that month.",
+    "The month comes from the document's own date where the server can read it (a month named in words before a day; not "
+    "a phone's or a screen's file name; when the dates found disagree or are more than a year apart, the person is asked). "
+    "A row with no date of the document's, a row typed in among them included, takes the document's month or the month "
+    "the person chooses. It is never taken from today's date.",
     "A rate a person enters for a yarn and a month takes the place of any earlier one for that yarn and month; the "
     "earlier one is kept, marked replaced. Loading the market history never replaces a rate a person entered, never "
     "brings back a rate a person removed, and writes nothing when nothing has changed.",
@@ -71,6 +74,16 @@ LEFT_OUT = {
     "linen yarn": "Linen not matching a yarn of the master in fibre, blend, count, kind and spinner (44 lea, or another kind)",
 }
 PO_FILE = paths.find("Fabric _ 3Months_4746.xlsx")
+
+
+def _has_gst(row):
+    """Whether a dated rate in force includes GST (its basis says so, as every source writes it)."""
+    return "includes GST" in str(row.get("basis") or "")
+
+
+def _gst_keep(old, e):
+    """RULE: a rate with GST never takes the place of one without GST for that month."""
+    return _has_gst(e) and not _has_gst(old)
 
 
 def _need_db():
@@ -206,8 +219,9 @@ def po_rates(code, months, res):
     rate was used. res: the costing (with rates_of when it was costed on a month)."""
     om = months.get(str(code))
     if om is None or "rates_of" not in res:
-        return {"month": None, "label": "today", "dated": False,
-                "note": "The order month is not known (the purchase file is not on this server): costed on today's rates."}
+        why = (f"{code} is not in the purchase file, so its order month is not known" if months else
+               "The order month is not known (the purchase file is not on this server)")
+        return {"month": None, "label": "today", "dated": False, "note": why + ": costed on today's rates."}
     ro = res["rates_of"]
     more = ""
     if om.get("tie"):
@@ -226,14 +240,11 @@ def today_rates():
 
 
 def pilot_rates_note():
-    """Which rates the dashboard's purchase-order panels are on, beside Right cost's (for the dashboard)."""
-    from rules import rightcost          # late: rightcost uses this module
-    data = rightcost._briefs.get("data") or {}
-    n = sum(1 for v in data.values() if v and (v.get("rates") or {}).get("dated"))
+    """Which rates the dashboard's purchase-order panels are on, beside Right cost's (for the dashboard). The count of
+    orders on a dated yarn rate is worked out here from the dated rates and the order months, not read from Right cost."""
     base = ("Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (no dated yarn rate), and "
             "every usual range comes from them.")
-    if not data:
-        return base
+    n = sum(o["both"] + o["one"] for o in _orders_by_month(data_dated.rows())) if data_dated.available() else 0
     return base + (f" Right cost costs {n} of these orders on a dated yarn rate of their order month, so for those its should-cost "
                    "and verdict can differ from these panels." if n else
                    " Right cost costs each order on the yarn rates of its order month where a dated rate exists; none does yet, so they agree.")
@@ -324,8 +335,11 @@ def add(payload: dict, who: str = ""):
     else:
         basis = f"{SOURCES['typed']}: {RESTS_ON[rests]}" + (f", {note}" if note else "")
     basis += "; includes GST" if gst else ""
-    data_dated.add([{"yarn_key": key, "month": month, "rate": round(rate, 2), "low": low, "high": high, "entries": 1,
-                     "basis": basis, "source": "typed", "detail": {"note": note, "rests_on": rests, "gst": gst}}], who=who)
+    _, held = data_dated.add([{"yarn_key": key, "month": month, "rate": round(rate, 2), "low": low, "high": high, "entries": 1,
+                               "basis": basis, "source": "typed", "detail": {"note": note, "rests_on": rests, "gst": gst}}], who=who, keep=_gst_keep)
+    if held:
+        raise common.Refused(409, f"{key} already has a rate without GST for {masters.month_label(month)}, and it stays: a price with GST "
+                                  "never takes the place of one without GST for the same month (the rule). Remove that rate first if it is wrong.")
     return {"saved": True, "yarn_key": key, "month": month, "rate": round(rate, 2), "placeholder": basis.startswith("Placeholder")}
 
 
@@ -341,35 +355,43 @@ def remove(payload: dict, who: str = ""):
 
 
 # ------------------------------------------------------------------ from Bring in prices
-def intake_add(payload: dict, who: str = ""):
-    """Rows reviewed on Bring in prices, each given a yarn of the yarn master, added as dated rates: by RULE, one rate per
-    yarn and month (a range as its midpoint, several prices as their average). The month is the one the person chose for
-    the whole document, or, only where the document's own dates were read (dates_read), each row's date: never today's.
-    gst: whether these prices include GST (asked once per import). Rows given no yarn are left out."""
-    _need_db()
-    payload = payload or {}
+def intake_plan(payload):
+    """Which month each reviewed row would take, decided here from what the server itself read of the document (the read
+    token of its review table; never a flag the page sends): a row whose date is one the server read takes that date's
+    month; any other row (a row typed in, a blank cell) takes the document's month where one was read, else the month the
+    person chose for rows without a date. month: one month the person chose for every row instead.
+    Returns (plan, rows needing a month, groups by yarn and month, rows given no yarn)."""
     yarns = _yarns()
-    rows = payload.get("rows") or []
-    source = str(payload.get("source") or "").strip()[:120]
-    if payload.get("gst") not in (True, False):
-        raise common.Refused(400, "Say whether these prices include GST")
-    gst = payload["gst"]
-    chosen = payload.get("month") or None
-    chosen = None if chosen is None else _month_ok(chosen, "Month")
-    if chosen is None and not payload.get("dates_read"):
-        raise common.Refused(400, "The document's own date was not read, so choose the month these prices are for")
-    date_from = str(payload.get("date_from") or "").strip()[:120]
-    groups, skipped = {}, 0
-    for n, r in enumerate(rows, start=1):
-        r = list(r) + [None] * (7 - len(r))
-        date, yarn, count, low, high, src, key = r[:7]
+    reads = rates._reads.get(str(payload.get("read_token") or "")) or {"dates": set(), "month": None, "from": None}
+    every = _month_ok(payload["month"], "Month") if payload.get("month") else None
+    undated = _month_ok(payload["month_undated"], "Month for the rows without a date") if payload.get("month_undated") else None
+    plan, need, groups, skipped = [], [], {}, 0
+    for n, r in enumerate(payload.get("rows") or [], start=1):
+        r = list(r) + [None] * (8 - len(r))
+        date, yarn, count, low, high, src, key, gst = r[:8]
         key = str(key or "").strip()
         if not key:
             skipped += 1
             continue
         if key not in yarns:
             raise common.Refused(400, f"Row {n}: '{key}' is not a yarn of the yarn master")
-        month = chosen or _month_ok(str(date or "")[:10], f"Row {n}")
+        if gst not in (True, False):
+            raise common.Refused(400, f"Row {n}: say whether its price includes GST")
+        d = pi.read_date(date)
+        if every:
+            month, how = every, "month chosen for the document"
+        elif d and d in reads["dates"]:
+            month, how = d[:7], f"dated from {reads['from']}"
+        elif reads["month"]:
+            month, how = reads["month"], f"the document's month, read from {reads['from']}"
+        elif undated:
+            month, how = undated, "month chosen for the rows without a date"
+        else:
+            need.append({"row": n, "date": None if date in (None, "") else str(date),
+                         "why": "no date of the document's: choose the month" if not d else f"its date {d} is not one read from the document: choose the month"})
+            plan.append({"row": n, "month": None, "how": None})
+            continue
+        month = _month_ok(month, f"Row {n}")
         low, high = _num(low), _num(high)
         high = low if high is None else high
         if low is None:
@@ -378,22 +400,41 @@ def intake_add(payload: dict, who: str = ""):
             raise common.Refused(400, f"Row {n}: the high rate is below the low rate")
         _rate_ok(low, f"Row {n}")
         _rate_ok(high, f"Row {n}")
-        groups.setdefault((key, month), []).append({"low": low, "high": high, "gst": gst, "date": str(date or "")[:10],
-                                                    "yarn": yarn, "count": count, "source": src or source})
+        plan.append({"row": n, "month": month, "how": how})
+        groups.setdefault((key, month), []).append({"low": low, "high": high, "gst": gst, "date": d, "how": how,
+                                                    "yarn": yarn, "count": count, "source": src})
+    return plan, need, groups, skipped
+
+
+def intake_add(payload: dict, who: str = ""):
+    """Rows reviewed on Bring in prices, each given a yarn of the yarn master and saying whether its price includes GST,
+    added as dated rates: by RULE, one rate per yarn and month (a range as its midpoint, several prices as their average,
+    those without GST before those with). The month of each row is decided by intake_plan, never from today. preview:
+    only say which month each row would take, and which rows need a month. Rows given no yarn are left out."""
+    _need_db()
+    payload = payload or {}
+    source = str(payload.get("source") or "").strip()[:120]
+    plan, need, groups, skipped = intake_plan(payload)
+    if payload.get("preview"):
+        return {"plan": plan, "need_month": need, "left_out": skipped}
+    if need:
+        raise common.Refused(400, f"{'Row' if len(need) == 1 else 'Rows'} {', '.join(str(x['row']) for x in need)}: no date of the document's, "
+                                  "so choose the month for the rows without a date (nothing was added)")
     if not groups:
         raise common.Refused(400, "No row was given a yarn of the yarn master: choose the yarn for each row to add as a dated rate")
     entries = []
     for (key, month), prices in sorted(groups.items()):
         rate, low, high, used, note = month_figure(prices)
         what = source or next((p["source"] for p in prices if p["source"]), "") or "Bring in prices"
-        when = f"month chosen: {masters.month_label(month)}" if chosen else (f"dated from {date_from}" if date_from else "dated from the document")
+        gst = all(p["gst"] for p in used)
         entries.append({"yarn_key": key, "month": month, "rate": rate, "low": low, "high": high, "entries": len(used),
-                        "basis": f"{SOURCES['brought in']}: {what}, {when}" + (f", {len(used)} prices averaged" if len(used) > 1 else "")
-                                 + ("; includes GST" if gst else ""),
-                        "source": "brought in", "detail": {"prices": used, "file": what, "month_chosen": bool(chosen), "date_from": date_from, "gst": gst}})
-    data_dated.add(entries, who=who)
-    return {"added": len(entries), "rows": sum(len(g) for g in groups.values()), "left_out": skipped,
-            "rates": [{"yarn_key": e["yarn_key"], "month": e["month"], "rate": e["rate"], "entries": e["entries"]} for e in entries]}
+                        "basis": f"{SOURCES['brought in']}: {what}, {used[0]['how']}" + (f", {len(used)} prices averaged" if len(used) > 1 else "")
+                                 + (f"; {note}" if note and not gst else "") + ("; includes GST" if gst else ""),
+                        "source": "brought in", "detail": {"prices": used, "file": what, "gst": gst}})
+    added, held = data_dated.add(entries, who=who, keep=_gst_keep)
+    return {"added": len(added), "rows": sum(len(g) for g in groups.values()), "left_out": skipped,
+            "rates": [{"yarn_key": e["yarn_key"], "month": e["month"], "rate": e["rate"], "entries": e["entries"]} for e in added],
+            "kept": [{"yarn_key": e["yarn_key"], "month": e["month"], "why": "a rate without GST is in force for that month and stays"} for e in held]}
 
 
 # ------------------------------------------------------------------ the market history in hand
@@ -562,7 +603,7 @@ def market_load(who: str = ""):
     plan, _, _ = _market_plan()
     write = [e for e, s in plan if s in ("new", "changed")]
     count = lambda st: sum(1 for _, s in plan if s == st)
-    added, held = data_dated.add(write, who=who or "market history", keep=lambda old: old["source"] != "market history") if write else ([], [])
+    added, held = data_dated.add(write, who=who or "market history", keep=lambda old, e: old["source"] != "market history" or _gst_keep(old, e)) if write else ([], [])
     return {"added": len(added), "kept": count("kept") + len(held), "held_removed": count("held"), "unchanged": count("unchanged"),
             "kept_rates": [{"yarn_key": e["yarn_key"], "month": e["month"]} for e, s in plan if s == "kept"] +
                           [{"yarn_key": e["yarn_key"], "month": e["month"]} for e in held]}
