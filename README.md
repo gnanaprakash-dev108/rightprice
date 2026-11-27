@@ -42,6 +42,18 @@ To host it on Azure, follow [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md). The en
 `RIGHTPRICE_DATA` moves the rate master, saved costings and imported price files to a folder that
 survives redeploys.
 
+## Users and roles
+
+Off until the app setting `RIGHTPRICE_ADMINS` (the first admins' sign-in addresses) is added; until then everyone
+signed in may use everything, as before. With it, nobody gets in until an admin adds them under the user icon >
+Users and roles, with a role: Admin, Rates editor, Buyer or Viewer (what each may see and do can be changed there; every
+change is recorded). Every address the server answers needs a permission (`rules/access.py`, `ROUTES`), checked in
+one place before the request reaches it (`server.py`, `AccessGate`); `check_server.py` fails if an address has none.
+Actions (edit rates, upload, record steps ...) are strict; a page's tick decides which pages a role can open, not which
+figures it can read (data several pages read stays open to a role with any of them).
+The people are kept in the database (`db/003_users_and_roles.sql`). Steps: [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md),
+"Users and roles".
+
 ## Screens
 
 Since 26 Nov 2026 the app opens in one shell: a left rail with Home (Dashboard and Pilot results),
@@ -70,7 +82,7 @@ full-screen view.
 | Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |
 | Settings | Shrinkage, reed space factor, mill tiers, order size slabs |
 | Pilot results | Should-cost against purchase order prices, and the calibration draft |
-| Purchase history and Fab groups (stage 2, on a database only) | Purchase-order files uploaded and read in the background (user icon > Admin > Purchase files); every fabric code in a Fab group (the same construction in any colour, across mills: Fab-0001 onward); a Fab group column in Right cost; price over time per fabric code (a popup from the row or its detail page); a page per Fab group (`#group/Fab-0001`) with its median, usual range, should-cost, price over time by mill and the purchases priced above the range; the list of groups and an admin merge (user icon > Admin > Fab groups) |
+| Purchase history and Fab groups (stage 2, on a database only) | Purchase-order files uploaded and read in the background (user icon > Purchase history > Purchase files); every fabric code in a Fab group (the same construction in any colour, across mills: Fab-0001 onward); a Fab group column in Right cost; price over time per fabric code (a popup from the row or its detail page); a page per Fab group (`#group/Fab-0001`) with its median, usual range, should-cost, price over time by mill and the purchases priced above the range; the list of groups and an admin merge (user icon > Purchase history). The newest file's figures win; ZLOI order lines are kept but left out of every figure, Right cost's purchase-order rows included, and listed apart as outliers (GP, 27 Nov 2026). Uploading and merging are admin actions |
 
 ## The calculation
 
@@ -111,6 +123,8 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
 | `draft.py` | E-mail and WhatsApp drafts to a mill, written by Claude (app setting `ANTHROPIC_API_KEY`), with a fixed template when there is no key |
 | `mcp_server.py` | RightPrice as an MCP server for an AI assistant: at `/mcp` on the web app behind the token `RIGHTPRICE_MCP_TOKEN`, or `python mcp_server.py` on a laptop. See [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md) |
+| `rules/access.py`, `data_users.py` | Users and roles: who is signed in (Azure's sign-in headers), the four roles and their default permissions, which permission each address needs, the admin page's changes and their record (the SQL is in `data_users.py`) |
+| `web/access.js`, `web/access.css` | The Users and roles page, and what the shell hides from a role that may not use it |
 | `check_server.py` | Checks the server gives the engine's numbers and refuses bad input, on the files, SQLite and PostgreSQL (`RIGHTPRICE_TEST_DATABASE_URL`, never `DATABASE_URL`), and proves the move from files to a database changes no answer. Must print `ALL OK` |
 | `grouping.py` | Folds blend spellings into 17 content groups and weave names into 7 weave groups |
 | `price_import.py` | Yarn price intake from Excel, PDF, image, link or API |

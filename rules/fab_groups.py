@@ -494,8 +494,7 @@ def differences(a, b):
 def merge(payload, who=""):
     """An admin merges one group into another: its fabrics count in the other from now on; its code is kept (its page
     says where it went) and is never handed out again. When the two differ in more than width or finish, nothing is
-    merged until the person confirms (payload "confirm": true). Anyone signed in may do it until stage 3 makes merges
-    admin-only."""
+    merged until the person confirms (payload "confirm": true). An admin action: do:merge_groups (rules/access.py)."""
     st = need_db()
     a, b = str(payload.get("code") or "").strip(), str(payload.get("into") or "").strip()
     if not a or not b:

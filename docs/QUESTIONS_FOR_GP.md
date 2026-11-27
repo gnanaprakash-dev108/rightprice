@@ -12,6 +12,26 @@
 - Dark mode: added, following RightPrice's switch. Avatar: initials from the Microsoft sign-in
   (read from Azure's /.auth/me; off Azure it shows RP).
 
+## Answered 27 Nov 2026 (stage 2's review: purchase history and Fab groups)
+
+- **ZLOI order lines: kept out of every calculation, everywhere** ("Yes, everywhere"). 402 of the 1,377 priced ZLOI lines
+  are at exactly Rs 550; 661 are followed by a regular BO order for the same code and mill (239 with the same metres); they
+  made Rs 2.61 crore of the Rs 3.24 crore "above the range". They stay in the database and are shown apart as "Outliers
+  (ZLOI)", with date, metres and price: beside the fabric (the price popup, Right cost's fabric page) and beside the mill
+  (the supplier page, the group page's by-mill table). Left out of: price paid, metres, medians, ranges, "above the range",
+  a should-cost's quantity band, and Right cost's purchase-order rows (price paid, metres, should-cost, verdict), so also the
+  supplier pages, alerts, drafts and the dashboard's fit by fabric type. pilot/Pilot_Results.xlsx is not changed or re-run:
+  Right cost works its rows out again from the purchase lines. A code bought only on ZLOI shows no price paid, only its
+  outliers. Done.
+- **Width: within half an inch is one group.** Done as a fixed rule that does not depend on the order files come in:
+  each width is put on the nearest whole inch (a half goes up), so every code of a group is within half an inch of the
+  group's width; 57 in and 145 cm (57.1 in) are one group, 57 in and 58 in two. Two widths either side of a half inch
+  (57.4 and 57.6) stay apart: merge them by hand if they are one cloth.
+- **A usual range needs purchases on at least 5 separate orders** (distinct order numbers, ZLOI left out), not 5 lines. The
+  price popup draws a group's median only when the group has a range. Done.
+- Finish names written differently ("Normal Soft" and "Soft Finish", "Regular" and "Normal Soft") stay apart unless an
+  admin merges them. Kept.
+
 ## Answered 27 Nov 2026 (for stages 2, 3 and 5)
 
 - Stage 2, "priced well above its group": **the same rule as the brief**: above the group's usual range (the middle half

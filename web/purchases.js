@@ -7,6 +7,9 @@
 "use strict";
 (function () {
   // ---------------------------------------------------------------- small helpers
+  // who may (stage 3, web/access.js): a page's data is asked for only once the person's permissions are known
+  const may = perm => typeof can !== "function" || can(perm);
+  const known = async () => { if (typeof RPA !== "undefined") await RPA.ready; };
   const api = async (path, opts) => {
     const r = await fetch(path, opts);
     let body = null; try { body = await r.json(); } catch (e) { /* not JSON */ }
@@ -21,7 +24,7 @@
     h("thead", {}, h("tr", {}, heads.map((t, i) => h("th", { class: numeric.includes(i) ? "n" : "" }, t)))),
     h("tbody", {}, rows.map(cells => h("tr", {}, cells.map((c, i) => h("td", { class: numeric.includes(i) ? "n" : (c && c.wide ? "w" : "") }, c && c.wide ? c.el : c)))))));
   const wide = el => ({ wide: true, el });
-  const groupLink = code => h("button", { type: "button", class: "code", onclick: () => { closePopups(); location.hash = "#group/" + encodeURIComponent(code); } }, code);
+  const groupLink = code => may("page:groups") ? h("button", { type: "button", class: "code", onclick: () => { closePopups(); location.hash = "#group/" + encodeURIComponent(code); } }, code) : code;
   const codeLink = code => h("button", { type: "button", class: "code", title: "Price over time for this code", onclick: () => openHistory(code) }, code);
   const closePopups = () => document.querySelectorAll(".scrim.pdlg").forEach(e => e.remove());
   const millLink = (name, key) => (state.rows || []).some(r => r.mill === key) ? h("button", { type: "button", class: "code", onclick: () => { closePopups(); location.hash = "#supplier/" + encodeURIComponent(key); } }, name) : name;
@@ -137,7 +140,7 @@
       x.lines.length ? table(["Date", "Order", "Mill", "Metres", "Price Rs/m", "Against should-cost"], x.lines.map(l => [day(l.date), `${l.po}/${l.item}`, l.mill, n0(l.metres), n2(l.price), x.should ? pc((l.price / x.should - 1) * 100) : ""]), [3, 4, 5])
         : h("p", { class: "muted" }, x.outliers.length ? "None but ZLOI orders, which are listed apart below: no price paid is shown." : "None."),
       outliers(x.outliers, "this code"),
-      h("div", { class: "acts" }, g ? h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null,
+      h("div", { class: "acts" }, g && may("page:groups") ? h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null,
         h("button", { type: "button", class: "btn line", onclick: () => s.remove() }, "Close")),
       h("p", { class: "muted" }, "Should-cost is on today's rates, for the metres bought (ZLOI left out). Prices are the net price on each purchase-order line (ex-mill, Rs per metre)."));
   }
@@ -145,6 +148,7 @@
   // ---------------------------------------------------------------- #group/<code>: one Fab group
   const page = { group: null };
   async function enterGroup(p) {
+    await known(); if (!may("page:groups")) return;
     const code = p.arg;
     if (page.group && page.group.code === code && page.group.data) return;
     page.group = { code, data: null, error: null };
@@ -209,6 +213,7 @@
   // ---------------------------------------------------------------- #groups: every Fab group, and the admin merge
   const list = { data: null, error: null, q: "", shown: 100 };
   async function enterGroups(force) {
+    await known(); if (!may("page:groups")) return;
     if (list.data && !force) return;
     try { list.data = await api("/api/groups"); list.error = null; } catch (e) { list.error = e.message; }
     if (state.page && state.page.id === "groups") render();
@@ -252,15 +257,16 @@
     const c = d.counts;
     fill(main, top, h("div", { class: "headrow" }, h("h1", { class: "ptitle" }, "Fab groups")),
       h("p", { class: "muted" }, `${n0(c.groups)} groups of ${n0(c.fabrics_grouped)} fabric codes (the same construction in any colour, across mills), from ${n0(c.lines)} purchase lines` + (c.first ? `, ${day(c.first)} to ${day(c.last)}` : "") + `. ${n0(c.fabrics - c.fabrics_grouped)} codes are not grouped` + (d.not_grouped.length ? ` (${d.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")})` : "") + ".",
-        " ", h("a", { href: "#purchase-files" }, "Purchase files")),
+        " ", may("page:purchase_files") ? h("a", { href: "#purchase-files" }, "Purchase files") : null),
       h("div", { class: "toolbar" }, search, h("button", { type: "button", class: "btn line", onclick: () => { list.q = search.value; list.shown = 100; render(); } }, "Search"), h("span", { class: "count" }, `${n0(rows.length)} groups`)),
       rows.length ? table(["Fab group", "Construction", "Codes", "Purchases", "Metres", "Median Rs/m", "Last bought"],
         rows.slice(0, list.shown).map(g => [groupLink(g.code), wide(g.name), n0(g.codes), n0(g.purchases), n0(g.metres), g.median === null ? "" : n2(g.median), day(g.last)]), [2, 3, 4, 5]) : h("div", { class: "empty" }, c.groups ? "No group matches." : "No Fab groups yet: load a purchase file first."),
       rows.length > list.shown ? h("p", {}, h("button", { type: "button", class: "btn line", onclick: () => { list.shown += 200; render(); } }, `Show more (${n0(rows.length - list.shown)} more)`)) : null,
-      h("section", { class: "sec noprint" }, h("h2", {}, "Admin: merge two Fab groups"),
-        h("p", { class: "muted" }, "When two groups are really one cloth (a finish or a count written two ways), merge one into the other. When they differ in more than width or finish you are asked twice. Admins only."),
-        h("div", { class: "mergerow" }, h("label", {}, "Merge ", a), h("label", {}, " into ", b), h("button", { type: "button", class: "btn fill", onclick: merge }, "Merge…")),
-        d.merged.length ? [h("h3", {}, "Merged so far"), table(["Fab group", "Construction", "Counts in", "When", "By", ""], d.merged.map(m => [m.code, wide(m.name), groupLink(m.into), day(m.merged_at), m.merged_by || "", h("button", { type: "button", class: "btn line", onclick: () => undo(m.code) }, "Undo")]), [])] : null));
+      may("do:merge_groups") ? h("section", { class: "sec noprint" }, h("h2", {}, "Admin: merge two Fab groups"),
+        h("p", { class: "muted" }, "When two groups are really one cloth (a finish or a count written two ways), merge one into the other. When they differ in more than width or finish you are asked twice."),
+        h("div", { class: "mergerow" }, h("label", {}, "Merge ", a), h("label", {}, " into ", b), h("button", { type: "button", class: "btn fill", onclick: merge }, "Merge…"))) : null,
+      d.merged.length ? h("section", { class: "sec" }, h("h3", {}, "Merged so far"), table(["Fab group", "Construction", "Counts in", "When", "By", ""], d.merged.map(m => [m.code, wide(m.name), groupLink(m.into), day(m.merged_at), m.merged_by || "",
+        may("do:merge_groups") ? h("button", { type: "button", class: "btn line", onclick: () => undo(m.code) }, "Undo") : ""]), [])) : null);
   }
   function confirmBox(title, body, yes) {
     return new Promise(done => {
@@ -273,6 +279,7 @@
   const files = { data: null, error: null, open: null, detail: null, timer: null, rows: 30 };
   async function enterFiles() {
     clearTimeout(files.timer);
+    await known(); if (!may("page:purchase_files")) return;
     try { files.data = await api("/api/purchases/uploads"); files.error = null; } catch (e) { files.error = e.message; }
     if (!(state.page && state.page.id === "purchase-files")) return;
     const busy = (files.data && files.data.uploads || []).some(u => u.status === "queued" || u.status === "working");
@@ -318,9 +325,10 @@
     };
     const det = files.open && files.detail && files.detail.id === files.open ? files.detail : null;
     fill(main, top, title,
-      h("p", { class: "muted" }, "Purchase-order files, as SAP exports them (Purchasing Document, Item, Document Date, Material, Short Text, Order Quantity, Net Price, Name of Supplier, Purchasing Doc. Type, Deletion Indicator ...). Each is read in the background: the page shows where it stands. The same order line uploaded twice is one line. Anyone signed in may upload for now; who may do what comes with the next stage."),
+      h("p", { class: "muted" }, "Purchase-order files, as SAP exports them (Purchasing Document, Item, Document Date, Material, Short Text, Order Quantity, Net Price, Name of Supplier, Purchasing Doc. Type, Deletion Indicator ...). Each is read in the background: the page shows where it stands. The same order line uploaded twice is one line. Uploading is an admin action (Admin and Rates editor; see Users and roles)."),
       h("div", { class: "stiles" }, tile("Purchase lines on record", n0(c.lines), c.first ? `${day(c.first)} to ${day(c.last)}` : "none yet"), tile("Fabric codes", n0(c.fabrics), `${n0(c.fabrics_grouped)} in Fab groups`),
         tile("Fab groups", n0(c.groups), c.groups_merged ? `${c.groups_merged} merged into others` : "", ""), tile("Mills", n0(c.mills), "every spelling kept")),
+      !may("do:upload_purchases") ? h("p", { class: "note" }, `Your role${typeof RPA !== "undefined" && RPA.me && RPA.me.role ? " (" + RPA.me.role + ")" : ""} may look at the uploads but not upload: that is an admin action.`) :
       h("section", { class: "sec" }, h("h2", {}, "Upload a purchase-order file"), h("div", { class: "uprow" }, input, h("button", { type: "button", class: "btn fill", onclick: send }, "Upload")),
         d.shipped.available ? [h("h3", {}, "Or load the file that came with the code"),
           h("p", { class: "muted" }, "inputs/Fabric _ 3Months_4746.xlsx: the purchase orders of 1 Aug to 23 Nov 2026 that the pilot was run on, as SAP exported them on 23 Nov 2026. Each order line is kept once, and it never undoes a newer file."),
@@ -337,7 +345,7 @@
       u.status === "done" ? h("p", {}, `Order lines dated ${day(s.first)} to ${day(s.last)}, from ${n0(s.mills)} ${s.mills === 1 ? "spelling of a mill" : "mill spellings"}, for ${n0(s.fabrics)} fabric codes: ${n0(s.grouped)} in Fab groups, ${n0(s.costed)} costed.` +
         (s.not_grouped && s.not_grouped.length ? ` Not grouped: ${s.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")}.` : "")) : null,
       u.skipped_count ? [h("p", {}, `Left out: ${n0(u.skipped_count)} rows. ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",
-        " ", h("a", { href: `/api/purchases/uploads/${u.id}/skipped`, download: "" }, "Download every row left out (Excel)")),
+        " ", h("a", { href: `/api/purchases/skipped/${u.id}`, download: "" }, "Download every row left out (Excel)")),
       table(["Row", "Order", "Item", "Material", "Why it was left out"], u.skipped.slice(0, files.rows).map(x => [String(x.row), x.po, x.item, x.material, wide(x.why)]), [0]),
       u.skipped.length > files.rows ? h("p", {}, h("button", { type: "button", class: "btn line", onclick: () => { files.rows = u.skipped.length; render(); } }, `Show the first ${u.skipped.length}`)) : null,
       u.skipped_count > Math.min(files.rows, u.skipped.length) ? h("p", { class: "muted" }, `The first ${Math.min(files.rows, u.skipped.length)} are shown; the download has ${u.skipped_listed < u.skipped_count ? "the first " + n0(u.skipped_listed) + " (the counts above cover all " + n0(u.skipped_count) + ")" : "all " + n0(u.skipped_count)}.`) : null] : (u.status === "done" ? h("p", { class: "muted" }, "No row was left out.") : null));
@@ -355,7 +363,7 @@
     cell(r) {
       if (r.source !== "Purchase orders" || (r.fab_group === undefined && r.fab_group_name === undefined) || (r.fab_group === null && !r.fab_group_name)) return "";
       const chart = tipOn(h("button", { type: "button", class: "ib pib", onclick: e => { e.stopPropagation(); openHistory(r.code); }, html: svg("chart") }), "Price over time for " + r.code);
-      return h("span", { class: "fgcell" }, r.fab_group ? tipOn(h("button", { type: "button", class: "code", onclick: () => { location.hash = "#group/" + encodeURIComponent(r.fab_group); } }, r.fab_group), r.fab_group_name || "")
+      return h("span", { class: "fgcell" }, r.fab_group ? tipOn(may("page:groups") ? h("button", { type: "button", class: "code", onclick: () => { location.hash = "#group/" + encodeURIComponent(r.fab_group); } }, r.fab_group) : h("span", {}, r.fab_group), r.fab_group_name || "")
         : tipOn(h("span", { class: "muted" }, "Not grouped"), r.fab_group_name || "Not grouped"), chart);
     },
   };

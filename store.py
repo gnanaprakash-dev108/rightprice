@@ -54,7 +54,9 @@ QUOTE_COLUMNS = {"Saved on": "saved_on", "Fabric code": "fabric_code", "Descript
                  "Should-cost Rs/m": "should_cost_per_m", "Should-cost Rs/kg": "should_cost_per_kg", "Quoted Rs/m": "quoted_per_m",
                  "Gap Rs/m": "gap_per_m", "Gap %": "gap_pct", "Id": "legacy_id", "Inputs": "choices", "Result": "costing",
                  "Mill": "sheet_row", "Problems": "problems", "Notes": "notes", "Upload": "upload"}
-KINDS = ("rates", "list", "negotiations", "seen", "sheets", "purchases")   # purchases: stage 2 (db/002), on a database only
+KINDS = ("rates", "list", "negotiations", "seen", "sheets")
+KINDS += ("users",)         # stage 3: the people let in and what each role may do (db/003_users_and_roles.sql, data_users.py)
+KINDS += ("purchases",)     # stage 2: the purchase history and Fab groups (db/002_purchases_and_fab_groups.sql), on a database only
 MOVED_NOTE = "moved_to_database.json"      # left beside the files once they are copied into a database (they stay as they were)
 FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations": "negotiations.json",
          "seen": "alerts_seen.json", "sheets": "cost_sheets.json"}

@@ -621,7 +621,7 @@ def uploads():
     with st.tx() as c:
         ups, counts = dp.uploads(c), dp.counts(c)
     return {"uploads": ups, "counts": counts, "shipped": {"name": SHIPPED_NAME, "available": os.path.exists(pilot.PO_FILE)},
-            "who_may": "Anyone signed in may upload and merge for now; stage 3 adds who may do what."}
+            "who_may": "Uploading and merging are admin actions (rules/access.py: do:upload_purchases, do:merge_groups)."}
 
 
 def upload_detail(uid):
