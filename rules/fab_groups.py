@@ -48,7 +48,7 @@ def tidy_count(text):
     """A count as the PLM writes it, tidied: '40', '40s', '40S', '40/1', 'Ne 40' -> '40s'; '2/80', '80/2', '2/80s' ->
     '2/80s'; '24 Ams', '24AMS' -> '24s Amsler'; '20s Slub' -> '20s Slub'. Anything else is kept as written, in small
     letters without spaces. None when missing (blank, or a single figure under 4, which the PLM uses as a filler)."""
-    t = re.sub(r"\s+", "", str(text or "")).lower().replace("'s", "s")
+    t = re.sub(r"\s+", "", str(text or "")).lower().replace("'s", "s").strip(",.;:")
     if t.startswith("(") and t.endswith(")"):
         t = t[1:-1]
     if not t:
@@ -100,7 +100,7 @@ def signature_of(spec):
          "width_in": round(width, 1) if 30 <= width <= 130 else None, "finish": tidy_finish(s.get("finish_name"))}
     missing = [FIELD_WORDS[k] for k in FIELDS if f[k] is None]
     if missing:
-        return None, None, "PLM specification incomplete: " + ", ".join(missing) + (" missing" if len(missing) > 1 else " missing")
+        return None, None, "PLM specification incomplete: " + ", ".join(missing) + " missing"
     sig = "|".join(str(f[k]).lower() if isinstance(f[k], str) else f"{f[k]:g}" for k in FIELDS)
     return f, sig, None
 

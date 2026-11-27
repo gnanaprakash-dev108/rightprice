@@ -177,7 +177,7 @@ def costs_download(payload: dict = None):
     for r in pick:
         e = extra.get(key(r)) or {}
         r["status"], r["remarks"] = e.get("status"), e.get("remarks")
-    cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("route", "Route"),
+    cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("fab_group", "Fab group"), ("route", "Route"),
             ("weave", "Weave"), ("finish", "Finish"), ("warp", "Warp yarn"), ("weft", "Weft yarn"), ("epi", "EPI"), ("ppi", "PPI"),
             ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid (purchase orders) or quoted (fabric list) Rs/m"),
             ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"),

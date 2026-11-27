@@ -36,7 +36,7 @@
 .pdialog .phead h2 { margin: 0; }
 .pdialog h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text2); }
 .pdialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.pdialog .stiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.pdialog .stiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .err { color: #C0362C; font-size: 13px; }
 :root[data-theme="dark"] .err { color: #F28B82; }
 .note { background: var(--selected); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 13px; max-width: 900px; }

@@ -293,12 +293,13 @@ def _load(st, uid):
     with st.tx(write=KIND) as c:
         held = dp.fabrics(c, codes=list(first))
         new_codes = [code for code in first if code not in held]
-        # a fabric held without a specification that the PLM list now has: grouped now
-        late = [code for code, f in held.items() if f["spec"] is None and code in specs]
+        # a fabric held (from this file or an earlier one) without a specification that the PLM list now has: grouped now
+        nospec = dp.codes_without_spec(c)
+        late = [code for code in nospec if code in specs]
         assigned, groups_new = fab_groups.assign(c, [(code, specs.get(code)) for code in new_codes + late], at, uid)
         dp.add_fabrics(c, [{"code": code, "description": latest_text.get(code, ""), "spec": specs.get(code),
                             "fab_group_id": assigned[code][0], "not_grouped": assigned[code][1]} for code in new_codes], at)
-        dp.set_fabrics(c, [{"id": held[code]["id"], "spec": specs[code], "fab_group_id": assigned[code][0], "not_grouped": assigned[code][1]}
+        dp.set_fabrics(c, [{"id": nospec[code], "spec": specs[code], "fab_group_id": assigned[code][0], "not_grouped": assigned[code][1]}
                            for code in late], at)
         dp.set_fabrics(c, [{"id": f["id"], "description": latest_text[code]} for code, f in held.items()
                            if latest_text.get(code) and latest_text[code] != f["description"]], at)
@@ -307,7 +308,7 @@ def _load(st, uid):
 
     # order lines, a chunk at a time
     n_new = n_changed = n_same = 0
-    touched = set()
+    touched = {nospec[code] for code in late}         # their costing choices are worked out now too
     for i in range(0, len(kept), CHUNK):
         part = kept[i:i + CHUNK]
         with st.tx(write=KIND) as c:

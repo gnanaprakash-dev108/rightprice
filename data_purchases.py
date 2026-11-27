@@ -76,6 +76,11 @@ def fabrics(c, codes=None, ids=None, group_ids=None):
     return out
 
 
+def codes_without_spec(c):
+    """{code: id} of the fabrics held with no PLM specification."""
+    return dict(c.all("SELECT code, id FROM fabric WHERE spec IS NULL"))
+
+
 def fabric_groups(c):
     """{fabric code: (Fab group id, why not grouped)}, for every fabric: what Right cost's column needs."""
     return {code: (g, why) for code, g, why in c.all("SELECT code, fab_group_id, not_grouped FROM fabric")}

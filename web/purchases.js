@@ -162,7 +162,7 @@
         tile("Mills", `${d.mills.length}`, d.mills.slice(0, 3).map(m => m.name).join(", ") + (d.mills.length > 3 ? ` and ${d.mills.length - 3} more` : "")),
         tile("Median price paid", r.median ? `Rs ${n2(r.median)}` : "None", r.median ? `paid Rs ${n2(r.low)} to ${n2(r.high)}` : ""),
         tile("Usual range", rangeWords(r), rangeSub(r, d.min_for_range), r.enough ? "" : "amber"),
-        tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size); ` : "") + `on today's rates` + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
+        tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + `on today's rates` + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
         tile("Priced well above the group", r.enough ? `${d.above.length} ${d.above.length === 1 ? "purchase" : "purchases"}` : "No range yet", r.enough ? (d.above.length ? `Rs ${n0(d.above_rs)} above the top of the usual range` : "none above the top of its usual range") : "too few purchases to say", d.above.length ? "red" : "")),
       h("section", { class: "sec" }, h("h2", {}, "Price over time, by mill"),
         d.lines.length ? priceChart({ points: pts, series, marks, band: r.enough ? { lower: r.lower, upper: r.upper, label: "Usual range" } : null, label: `Prices paid for ${d.code} by date and mill`, height: 300 }) : h("p", { class: "muted" }, "No purchase on record."),

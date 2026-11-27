@@ -804,6 +804,15 @@ def stage2_checks(c, check):
           u3["rows_changed"] == 1 and u3["rows_removed"] == 1 and u3["rows_same"] == 6 and c.get("/api/purchases/status").json()["counts"]["lines"] == 7
           and c.get("/api/purchases/status").json()["counts"]["lines_removed"] == 1 and h2["lines"][0]["price"] == 105
           and c.get("/api/purchases/history", params={"code": "ZZCHECK001"}).json()["lines"] == [], str(u3))
+    specs = purchases.plm_specs()                     # the PLM list read by this process: a specification arrives for ZZCHECK001
+    specs["ZZCHECK001"] = dict(specs[a3])
+    try:
+        u4 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected again.xlsx", io.BytesIO(_stage2_file(rows2)))}).json()["id"])
+    finally:
+        specs.pop("ZZCHECK001", None)
+    zz = c.get("/api/purchases/history", params={"code": "ZZCHECK001"}).json()
+    check(f"{k} a code held without a specification is grouped at the next upload once the PLM list has it (not only codes in that file)",
+          u4["status"] == "done" and u4["rows_new"] == 0 and zz["group"] and zz["group"]["code"] == gA and zz["not_grouped"] is None, str(zz.get("not_grouped")))
     bad2 = wait(c.post("/api/purchases/upload", files={"file": ("not orders.xlsx", io.BytesIO(b"PK, but not a workbook"))}).json()["id"])
     buf = io.BytesIO()
     pd.DataFrame([{"Fabric": "x", "Price": 1}]).to_excel(buf, index=False)
@@ -845,6 +854,7 @@ def stage2_checks(c, check):
         new_codes = sorted(code for (code,) in cur.all("SELECT code FROM fab_group WHERE upload_id = %s", (real["id"],)))
     keys = ["Route", "Weave", "Finish", "Warp yarn", "Weft yarn", "EPI", "PPI", "Finished width (in)", "Rate card quantity", "Order size"]
     mine = {a1, a2, a3, b1}                           # these carry made-up lines too, so their metres differ
+    got.pop("ZZCHECK001", None)                       # made up, with a3's specification
     same_value = lambda x, y: (float(x) == float(y)) if isinstance(y, (int, float)) and x is not None else str(x) == str(y)
     differ = [r["Fabric code"] for r in fab.to_dict("records") if r["Fabric code"] not in mine
               and not all(same_value(got.get(r["Fabric code"], {}).get(x), r[x]) for x in keys)]
