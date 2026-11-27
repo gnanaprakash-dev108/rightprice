@@ -17,6 +17,7 @@ older file never changes a line, never brings back one a newer file removed, and
 a line when it shows it deleted or blocked in SAP, no longer bulk, not in rupees, not per metre, or with no price or
 quantity, or when it has the rest of the line's order but not that line. Two uploads read at once (even in two server
 processes) come out the same as one after the other."""
+import contextlib
 import datetime as dt
 import hashlib
 import io
@@ -24,6 +25,7 @@ import os
 import re
 import socket
 import threading
+import time
 import warnings
 import zipfile
 from collections import namedtuple
@@ -314,9 +316,23 @@ def _worker():
         run(waiting[0])
 
 
+GIVE_WAY = 0.02             # seconds a job leaves the store free after each of its transactions
+
+
+@contextlib.contextmanager
+def _job_tx(st, write=None):
+    """A transaction of the background job, after which it gives way for a moment: the store serves one request at a
+    time in each process, and a job going straight from one transaction to the next could keep pages waiting."""
+    try:
+        with st.tx(write=write) as c:
+            yield c
+    finally:
+        time.sleep(GIVE_WAY)
+
+
 def _status(uid, **fields):
     """A job's progress, written without moving the purchase history's version (no page needs redoing for it)."""
-    with store.get().tx(write=STATUS) as c:
+    with _job_tx(store.get(), STATUS) as c:
         dp.set_upload(c, uid, **fields)
 
 
@@ -366,7 +382,7 @@ def run(uid):
 
 
 def _load(st, uid):
-    with st.tx() as c:
+    with _job_tx(st) as c:
         data, up = dp.upload_file(c, uid), dp.upload(c, uid)
     rd = read_po_file(data or b"", up["filename"])
     data = None
@@ -380,7 +396,7 @@ def _load(st, uid):
     at = _now()
 
     # mills: one each, every spelling kept
-    with st.tx(write=KIND) as c:
+    with _job_tx(st, KIND) as c:
         known, held = dp.aliases(c), dp.mills(c)
         spellings = sorted({l.supplier for l in rd.kept})
         new_sp = [s for s in spellings if s not in known]
@@ -418,14 +434,18 @@ def _load(st, uid):
         k = (l.date, l.po, l.item)
         if l.code not in first or k < first[l.code]:
             first[l.code] = k
-    with st.tx(write=KIND) as c:
+    specs = plm_specs()
+    with _job_tx(st) as c:                                  # the signatures are worked out before the store is held for writing
+        codes = set(dp.fabric_index(c)) | set(first)
+    ready = fab_groups.signatures(specs, codes)
+    with _job_tx(st, KIND) as c:
         held = dp.ids_of(c, list(first))
         new_codes = [code for code in sorted(first, key=lambda x: (first[x], x)) if code not in held]
         dp.add_fabrics(c, [{"code": code, "description": rd.texts.get(code, (None, ""))[1]} for code in new_codes], at)
         old_text = dict(c.all(f"SELECT code, description FROM fabric WHERE id IN {store._in(len(held))}", list(held.values()))) if held else {}
         dp.set_fabrics(c, [{"id": held[code], "description": rd.texts[code][1]} for code in held
                            if code in rd.texts and rd.texts[code][1] != old_text.get(code)], at)
-        groups_new, moves = fab_groups.regroup(c, plm_specs(), first, set(new_codes), at, uid)
+        groups_new, moves = fab_groups.regroup(c, specs, first, set(new_codes), at, uid, ready)
         fabric_id = dp.ids_of(c, list(first))
     _status(uid, step="Writing the order lines", fabrics_new=len(new_codes), groups_new=groups_new)
 
@@ -437,7 +457,7 @@ def _load(st, uid):
     figures = ("doc_date", "doc_type", "fabric_id", "mill_id", "supplier", "qty_m", "price")
     for i in range(0, len(rd.kept), CHUNK):
         part = rd.kept[i:i + CHUNK]
-        with st.tx(write=KIND) as c:
+        with _job_tx(st, KIND) as c:
             have = dp.lines_by_key(c, [(l.po, l.item) for l in part])
             add, change, touch = [], [], []
             for l in part:
@@ -467,7 +487,7 @@ def _load(st, uid):
     # lines this newer file shows as no longer bought (deleted, blocked, not bulk, not rupees ...)
     for i in range(0, len(rd.removing), CHUNK):
         part = rd.removing[i:i + CHUNK]
-        with st.tx(write=KIND) as c:
+        with _job_tx(st, KIND) as c:
             have = dp.lines_by_key(c, [(po, item) for po, item, _ in part])
             gone, touch = [], []
             for po, item, why in part:
@@ -485,7 +505,7 @@ def _load(st, uid):
     # lines held for an order this newer file has, that it does not have
     pos = sorted(rd.orders)
     for i in range(0, len(pos), CHUNK):
-        with st.tx(write=KIND) as c:
+        with _job_tx(st, KIND) as c:
             gone = []
             for (po, item), old in dp.lines_of_orders(c, pos[i:i + CHUNK]).items():
                 if item not in rd.orders[po] and old["removed_upload_id"] is None and newer(old):
@@ -500,7 +520,7 @@ def _load(st, uid):
     ctx, patterns = pilot.inputs_context(m), masters.lists(m)["Pattern"]
     touched = sorted(touched)
     for i in range(0, len(touched), 500):
-        with st.tx(write=KIND) as c:
+        with _job_tx(st, KIND) as c:
             ids = touched[i:i + 500]
             fabs, met = dp.fabrics(c, ids=ids), dp.metres(c, ids)
             rows = []
@@ -510,7 +530,7 @@ def _load(st, uid):
             dp.set_choices(c, rows, _now())
 
     # done
-    with st.tx(write=KIND) as c:
+    with _job_tx(st, KIND) as c:
         fabs = dp.fabric_index(c)
         not_grouped, grouped = {}, 0
         for code in first:

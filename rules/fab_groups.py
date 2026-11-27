@@ -168,16 +168,32 @@ def name_of(f):
             f"{f['width_in']:g} in · {f['finish']}")
 
 
-def regroup(c, specs, first_seen, new_codes, at, upload_id):
+def signatures(specs, codes):
+    """What regroup() needs of each code the PLM list has, worked out before its transaction (so the store is held only
+    for the writing): {code: {spec, sha, fields, sig, why}}."""
+    out = {}
+    for code in codes:
+        if code in specs:
+            spec = specs[code]
+            fields, sig, why = signature_of(spec)
+            out[code] = {"spec": spec, "sha": spec_sha(spec), "fields": fields, "sig": sig, "why": why}
+    return out
+
+
+def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
     """Every fabric's Fab group worked out again from its specification (the PLM list's, else the one kept): new codes
     are placed, and a code whose specification was corrected or completed, or whose fields are tidied another way now,
     moves; each move is recorded. A group whose signature is no longer anyone's keeps its code under the new signature of
     most of its codes. New groups get the next codes in order of first appearance (first_seen: code -> sort key).
-    Returns (new groups, moves)."""
+    `ready`: signatures() worked out beforehand. Returns (new groups, moves)."""
     index = dp.fabric_index(c)
     stored = dp.specs_of(c, [f["id"] for code, f in index.items() if code not in specs and f["spec_sha"]])
+    ready = ready or {}
     now = {}
     for code, f in index.items():
+        if code in specs and code in ready:
+            now[code] = ready[code]
+            continue
         spec = specs.get(code) if code in specs else stored.get(f["id"])
         fields, sig, why = signature_of(spec)
         now[code] = {"spec": spec, "sha": spec_sha(spec), "fields": fields, "sig": sig, "why": why}

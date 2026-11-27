@@ -119,19 +119,16 @@ def ids_of(c, codes):
 
 
 def set_fabrics(c, rows, at):
-    """rows: dicts with id and any of description, spec, spec_sha, fab_group_id, signature, not_grouped, choices, problems."""
+    """rows: dicts with id and any of description, spec, spec_sha, fab_group_id, signature, not_grouped, choices, problems.
+    Rows that change the same columns go in one statement (a first upload changes thousands)."""
+    plain, as_json = ("description", "fab_group_id", "signature", "not_grouped", "spec_sha"), ("spec", "choices", "problems")
+    same = {}
     for r in rows:
-        sets, vals = [], []
-        for k in ("description", "fab_group_id", "signature", "not_grouped", "spec_sha"):
-            if k in r:
-                sets.append(f"{k} = %s")
-                vals.append(r[k])
-        for k in ("spec", "choices", "problems"):
-            if k in r:
-                sets.append(f"{k} = %s")
-                vals.append(None if r[k] is None else json.dumps(r[k], default=str))
-        if sets:
-            c.run(f"UPDATE fabric SET {', '.join(sets)}, updated_at = %s WHERE id = %s", vals + [at, r["id"]])
+        cols = tuple(k for k in plain + as_json if k in r)
+        if cols:
+            same.setdefault(cols, []).append([r[k] if k in plain else (None if r[k] is None else json.dumps(r[k], default=str)) for k in cols] + [at, r["id"]])
+    for cols, vals in same.items():
+        _many(c, f"UPDATE fabric SET {', '.join(k + ' = %s' for k in cols)}, updated_at = %s WHERE id = %s", vals)
 
 
 def set_choices(c, rows, at):
