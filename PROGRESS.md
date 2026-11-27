@@ -150,9 +150,10 @@ Found while measuring on 27 Nov, and told to GP:
 - **Next: stages 2 to 5**, in parallel tracks on their own branches, merged one at a time with all checks re-run (GP
   agreed); then stage 6. Each track builds its tables as `db/00N_<stage>.sql` (the full draft is `db/schema.sql`; its
   `quote`, `negotiation_step`, `rate_version`, `alert_seen` and `cost_sheet_row` differ from the tables in use, so a
-  track that needs them changes them with `ALTER TABLE` in its own numbered file) and its rules in `rules/`. Decisions to
-  bring to GP as select-an-option questions when each stage starts: the threshold for "priced well above its group"
-  (stage 2); the roles and what each may do (stage 3); today's rates or order-date rates by default (stage 5). What GP
+  track that needs them changes them with `ALTER TABLE` in its own numbered file) and its rules in `rules/`. **GP's
+  decisions for them (27 Nov, docs/QUESTIONS_FOR_GP.md):** "priced well above its group" = above the group's usual range,
+  the brief's own rule (stage 2); roles Admin, Rates editor, Buyer, Viewer (stage 3); purchase orders costed on their
+  order month's rates, quotes and Cost a fabric on today's (stage 5). What GP
   sends: the 10,000 invoices and the PLM specifications for their codes (stage 2); the 10 names and roles (stage 3);
   yarn prices July to November and mill cost sheets as they come (stage 5).
 
