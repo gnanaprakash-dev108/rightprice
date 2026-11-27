@@ -9,11 +9,13 @@ resource group `rightprice-rg`, plan `ASP-rightpricerg-a720` (Basic B1, India So
 Azure for Students subscription. Every push to `main` redeploys it through
 `.github/workflows/main_rightprice.yml`.
 
-Since 24 Nov 2026 the start command runs `server.py` (the new front end), which starts the earlier
-Streamlit screens beside itself and serves them under `/classic`. Nothing in the portal changes: the
-Startup Command is still `bash startup.sh`, and web sockets must stay on (the classic screens need them).
-To go back to the Streamlit screens alone without a redeploy, add the app setting
-`RIGHTPRICE_UI` = `classic` and restart; remove it to return to the new front end.
+The start command runs `server.py`, which serves the whole app: one front end (the shell, with every
+page in it) and the API. The Startup Command is `bash startup.sh`.
+
+Since stage 4 (27 Nov 2026) the earlier Streamlit screens (`/classic`) are retired, and with them the app
+setting `RIGHTPRICE_UI`. If it is still set on the web app it does nothing; it can be deleted (Web app >
+**Settings** > **Environment variables**). Web sockets are no longer needed and can be turned off. To go back,
+revert the merge of stage 4 in GitHub: the deploy brings the earlier screens back.
 
 Lessons from the first setup:
 
@@ -65,7 +67,7 @@ Web app > **Settings** > **Configuration** > General settings:
 | Setting | Value |
 |---|---|
 | Startup Command | `bash startup.sh` |
-| Web sockets | On (Streamlit needs them) |
+| Web sockets | Either (nothing in the app needs them since 27 Nov 2026) |
 | Always on | On (not available on the Free plan) |
 
 Save, then restart the app. The first start takes a few minutes.
@@ -94,7 +96,7 @@ Set "Restrict access" to **Require authentication**. Without this, anyone with t
 
 The app keeps its shared data (the rate master, the fabric list, the negotiation tracker, the alerts marked seen and the
 mill cost sheets) in the files in `/home/rightprice-data` until the app setting `DATABASE_URL` is added. With it, the
-data is kept in the PostgreSQL database instead. The classic screens follow the same setting. Yarn price documents
+data is kept in the PostgreSQL database instead. Yarn price documents
 brought in through the price intake stay as files in `/home/rightprice-data/price_sources`.
 
 The database: Azure Database for PostgreSQL flexible server `rightprice-db`
@@ -163,7 +165,7 @@ The portal showed USD 22.08 a month for this server, with "Free up to 750 hours"
 services of the first 12 months). Check Cost analysis for `rightprice-db` after the first week. If it is charged, the
 agreed fallback is a database file on the web app's own storage: `DATABASE_URL=sqlite:////home/rightprice-data/rightprice.db`
 (four slashes). The build session should look at that again before it is used: `/home` on App Service is a network
-share, and SQLite needs care there with two processes (the app and the classic screens).
+share, and SQLite needs care there with more than one process writing.
 
 ## Letting an AI assistant in (MCP), and e-mail drafts
 
@@ -244,9 +246,8 @@ the same name, "AI assistant": there is one token, so the tool cannot tell which
 - Web app > **Log stream** shows the start-up messages.
 - "Application Error" straight after deploy usually means the packages are still installing, or the
   startup command is missing.
-- A page that loads and then stays on "Please wait" means web sockets are off.
-- The new pages load but "Edit rates" shows "The classic screens are still starting": wait a few
-  seconds and reload. If it persists, the Streamlit process did not start; see the Log stream.
+- A page that stays on "Loading..." or says "This page could not be loaded": open the browser's
+  console (F12) for the reason, and check the Log stream for errors from the server.
 
 ## Cost
 

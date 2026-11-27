@@ -80,7 +80,7 @@ const CONFIG = {
       ["Costing setup", ["Rating scale types", "Rating scales", "Cost sheet types", "Material cost configuration", "Seasonal exchange rates"].map(n => [n, "#lib/" + n])],
       ["Sourcing setup", ["Payment terms", "Delivery terms", "Sample type"].map(n => [n, "#lib/" + n])]] },
   },
-  // the earlier screens shown inside the shell: section, title, and the tabs of that section
+  // the pages of the shell under Home and Prices (their code is in web/pages/): section and title, and each section's tabs
   frames: {
     dashboard: ["Home", "Dashboard"], pilot: ["Home", "Pilot results"],
     yarn: ["Prices", "Yarn prices"], cotton: ["Prices", "Cotton prices"], intake: ["Prices", "Bring in prices"],
@@ -312,7 +312,6 @@ function openFly(name, anchor, hover, keep) {
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
       link("Calculation settings", "#settings"), link("Rate tables", "#rates"),
       h("div", { class: "g" }, "Account"),
-      h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/classic/"; } }, "Earlier screens (classic)"),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
   fill(fly, ...kids); fly.hidden = false;
@@ -347,39 +346,27 @@ function route() {
   if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
   document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
-const frameSrc = hsh => `/?embed=1&bare=1&in=page#${hsh}`;
-function renderFrame(main) {
-  const id = state.frame.split("/")[0], [section, title] = CONFIG.frames[id];
-  const tabs = h("div", { class: "tabs", role: "tablist" }, CONFIG.sections[section].map(k => h("button", { type: "button", role: "tab", class: "tab" + (k === id ? " on" : ""), "aria-selected": String(k === id), onclick: () => { location.hash = "#" + k; } }, CONFIG.frames[k][1])));
-  const src = frameSrc(state.frame);
-  const head = h("div", { class: "framehead" }, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", section, "\u00A0\u203A\u00A0", h("span", {}, title)),
-    h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, title)), tabs), newCostButton()));
-  if (RP.pages[id]) return renderPage(main, head);
-  const old = main.querySelector("iframe.frame");
-  if (old && old.dataset.src === src && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) {
-    main.firstElementChild.replaceWith(head);           // the frame stays where it is: moving an iframe reloads it
-  } else {
-    const frame = h("iframe", { class: "frame", src, title, "data-src": src }); frame.addEventListener("load", () => syncFrameTheme(frame));
-    fill(main, head, frame);
-  }
-  $("#selbar").hidden = true;
-  const on = main.querySelector(".tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
-}
-function syncFrameTheme(frame) { try { frame.contentDocument.documentElement.dataset.theme = document.documentElement.dataset.theme; } catch (e) { /* not loaded */ } }
 const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
 
 // ------------------------------------------------------------------ the pages of the shell (web/pages/*.js)
-/* A page registered with RP.page() (web/pages/common.js says how) is drawn under the heading above, in its own box,
-   which scrolls while the heading stays. Asked for again at the same address, it keeps what it shows. A page that
-   names a section and is not yet among that section's tabs is added at the end of them. */
+/* A page registered with RP.page() (web/pages/common.js says how) is drawn under its heading: the crumb, the title, its
+   section's tabs and New cost. The page itself is in its own box, which scrolls while the heading stays; asked for again
+   at the same address, it keeps what it shows. A page that names a section is added at the end of that section's tabs. */
 for (const p of Object.values(RP.pages)) if (!p.popup && !CONFIG.frames[p.id]) { CONFIG.frames[p.id] = [p.section, p.title]; if (CONFIG.sections[p.section]) CONFIG.sections[p.section].push(p.id); }
-function renderPage(main, head) {
-  const [id, ...rest] = state.frame.split("/"), old = main.querySelector(":scope > .pgbox");
+function renderPage(main) {
+  const [id, ...rest] = state.frame.split("/"), [section, title] = CONFIG.frames[id], inSection = CONFIG.sections[section] || [];
+  const tabs = inSection.length ? h("div", { class: "tabs", role: "tablist" }, inSection.map(k => h("button", { type: "button", role: "tab", class: "tab" + (k === id ? " on" : ""), "aria-selected": String(k === id), onclick: () => { location.hash = "#" + k; } }, CONFIG.frames[k][1]))) : null;
+  const head = h("div", { class: "framehead" }, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), section ? ["\u00A0\u203A\u00A0", section] : null, "\u00A0\u203A\u00A0", h("span", {}, title)),
+    h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, title)), tabs), newCostButton()));
+  const old = main.querySelector(":scope > .pgbox");
   $("#selbar").hidden = true;
-  if (old && old.dataset.address === state.frame && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) { main.firstElementChild.replaceWith(head); return; }
-  const box = h("div", { class: "pgbox", "data-address": state.frame });
-  fill(main, head, box);
-  RP.show(id, rest.join("/"), box);
+  if (old && old.dataset.address === state.frame && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) main.firstElementChild.replaceWith(head);
+  else {
+    const box = h("div", { class: "pgbox", "data-address": state.frame });
+    fill(main, head, box);
+    if (RP.pages[id]) RP.show(id, rest.join("/"), box);
+    else fill(box, h("div", { class: "empty" }, "This page could not be loaded: its file is missing from web/pages/."));
+  }
   const on = main.querySelector(".tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 // what a page may ask of the shell
@@ -387,7 +374,7 @@ RP.shell = { toast, go: hash => { location.hash = "#" + hash; }, showAlerts, ale
 
 function render() {
   const main = $("#main");
-  if (state.frame) return renderFrame(main);
+  if (state.frame) return renderPage(main);
   if (state.library) return renderLibrary(main);
   if (state.supplier) return renderSupplier(main);
   if (state.detail) return renderDetail(main);
@@ -890,9 +877,9 @@ async function loadNegos(always) {
 }
 
 // ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
-/* One window over the page with the four costing screens as tabs. A tab moved into the shell (web/pages/) is drawn
-   in the popup's own box; they share what is open (RP.state), so a fabric opened from the list in Bulk upload carries
-   on in Create cost. The tabs not moved yet are the earlier screens, in one frame. Each opening starts afresh. */
+/* One window over the page with the four costing screens as tabs (web/pages/cost.js, bulk.js, compare.js, pack.js),
+   drawn in the popup's own box. They share what is open (RP.state), so a fabric opened from the list in Bulk upload
+   carries on in Create cost. Each opening starts afresh. */
 function popupHash(tab) { return "#" + (decodeURIComponent(location.hash.slice(1)).split("?")[0] || "dashboard") + (tab ? "?new=" + tab : ""); }
 function openPopup(tab = "cost", r = null, fromAddress = false) {
   closeLayers();
@@ -902,25 +889,12 @@ function openPopup(tab = "cost", r = null, fromAddress = false) {
   RP.fresh();
   if (tab === "cost" && r !== undefined && RP.cost) RP.cost.open(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null);
   const box = h("div", { class: "pgbox" });
-  let frame = null;
   const close = () => { if (history.state && history.state.popup) history.back(); else { history.replaceState(null, "", popupHash(null)); s.remove(); load(); } };
   const tabs = h("div", { class: "ptabs", role: "tablist" });
   const mark = id => { s.dataset.tab = id; tabs.querySelectorAll(".ptab").forEach(b => { const on = b.dataset.tab === id; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }); };
   const switchTo = (id, fromAddr) => {
-    if (RP.pages[id]) { if (frame) { if (document.activeElement === frame) tabs.querySelector(`[data-tab="${id}"]`).focus(); frame.hidden = true; } box.hidden = false; RP.show(id, "", box, { inPopup: true, tab: t => switchTo(t) }); }
-    else if (!frame) {
-      box.hidden = true; box.replaceChildren();
-      frame = h("iframe", { src: `/?embed=1&bare=1#${id}`, title: "Costing" }); pop.append(frame);
-      frame.addEventListener("load", () => {
-        syncFrameTheme(frame);
-        const w = frame.contentWindow;
-        w.addEventListener("hashchange", () => { const id2 = (w.location.hash.slice(1) || "cost").split("/")[0]; if (CONFIG.popupTabs.some(t => t[0] === id2) && !RP.pages[id2] && !frame.hidden) { mark(id2); history.replaceState(history.state, "", popupHash(id2)); } });
-        if (id === "cost" && r !== undefined) { const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); }
-      }, { once: true });
-    } else {
-      box.hidden = true; box.replaceChildren(); frame.hidden = false;
-      try { frame.contentWindow.location.replace(`/?embed=1&bare=1#${id}`); } catch (e) { frame.src = `/?embed=1&bare=1#${id}`; }
-    }
+    if (RP.pages[id]) RP.show(id, "", box, { inPopup: true, tab: t => switchTo(t) });
+    else fill(box, h("div", { class: "empty" }, "This tab could not be loaded: its file is missing from web/pages/."));
     mark(id); if (!fromAddr) history.replaceState(history.state, "", popupHash(id));
   };
   for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
@@ -932,12 +906,6 @@ function openPopup(tab = "cost", r = null, fromAddress = false) {
   $("#layer").append(s);
   switchTo(tab, true);
 }
-// a tab still in the frame went to a tab the shell draws itself: carry on there, with the fabric it had open
-RP.shell.tabFromFrame = (id, data) => {
-  const pop = document.querySelector(".scrim[data-popup]"); if (!pop) return;
-  if (data) { const d = JSON.parse(data); Object.assign(RP.state, d, { visited: new Set(d.visited || []) }); }
-  pop.switchTo(id);
-};
 const openCostPopup = r => openPopup("cost", r || null);
 
 // ------------------------------------------------------------------ Library: setup lists (kept in this browser)
@@ -980,7 +948,6 @@ function renderLibrary(main) {
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = t; try { localStorage.setItem("rp-theme", t); } catch (e) { /* kept for this visit */ }
-  document.querySelectorAll("iframe").forEach(syncFrameTheme);
   toast(t === "dark" ? "Dark" : "Light");
 }
 async function whoAmI() {
@@ -1140,24 +1107,6 @@ addEventListener("keydown", e => {
 });
 // the address follows the page: #item/<source|code> is a fabric's detail page; Back returns to the list
 addEventListener("hashchange", route);
-addEventListener("message", e => {
-  if (e.origin !== location.origin || !e.data) return;
-  if (e.data.rp === "listChanged") { load(); loadAlerts(); }
-  if (e.data.rp === "alertsChanged") loadAlerts();
-  if (e.data.rp === "draft" && Array.isArray(e.data.ids) && e.data.ids.length) draftDialog({ type: "rows", keys: e.data.ids.map(i => "Fabric list|" + i) }, e.data.mill || "the mill");
-  if (e.data.rp === "showAlerts" && e.source === (($("#main iframe.frame") || {}).contentWindow)) showAlerts();
-  if (e.data.rp === "go" && /^(supplier|item)\/[^?]+$/.test(e.data.hash || "") && e.source === (($("#main iframe.frame") || {}).contentWindow)) location.hash = "#" + e.data.hash;
-  if (e.data.rp === "close") { const pop = document.querySelector(".scrim[data-popup]"); if (pop) pop.close(); }
-  if (e.data.rp === "nav" && e.data.hash) {
-    const hsh = e.data.hash, id = hsh.split("/")[0], frame = $("#main iframe.frame");
-    if (!CONFIG.frames[id] || !frame || e.source !== frame.contentWindow || hsh === state.frame) return;
-    frame.dataset.src = frameSrc(hsh);                 // the frame is already there: only the heading, tabs and address follow
-    route.page = hsh; history.pushState(null, "", "#" + hsh); route.page = null; route();
-  }
-  // a screen shown in the page asked for one of the costing screens: they live in the popup
-  if (e.data.rp === "popup" && e.data.move) { try { sessionStorage.setItem("rp-list-move", JSON.stringify(e.data.move)); } catch (err) { /* no handover */ } }
-  if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
-});
 const catchUp = () => { if (!document.hidden && !state.frame && !state.library && !state.supplier && state.rows.length && !document.querySelector(".scrim")) loadNegos(); };
 const alertsUp = () => { if (!document.hidden) loadAlerts(); };
 addEventListener("focus", alertsUp); setInterval(alertsUp, 30000);

@@ -10,20 +10,17 @@ Three layers since stage 1 of the rebuild (27 Nov 2026):
 - the web requests: this file. It reads the request, calls one rule, and turns the answer into the response: a refusal
   into its status and words, a download into a file, an unreachable database into 503. It decides nothing itself.
 
-The earlier Streamlit screens stay reachable under /classic. This server starts Streamlit beside itself and passes
-/classic through.
+The front end is one shell (web/rightcost.html, its pages in web/pages/) since stage 4 (27 Nov 2026); the earlier
+front end and the Streamlit screens (/classic) are retired.
 """
 import asyncio
 import datetime as dt
 import json
 import os
-import subprocess
 import sys
 from contextlib import asynccontextmanager
 
-import httpx
-import websockets
-from fastapi import Body, FastAPI, File, Request, UploadFile, WebSocket
+from fastapi import Body, FastAPI, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -37,35 +34,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
 
 
-CLASSIC_PORT = int(os.environ.get("RIGHTPRICE_CLASSIC_PORT", "8501"))
-
-
-CLASSIC = f"127.0.0.1:{CLASSIC_PORT}"
-
-
-_classic = None
-
-
 @asynccontextmanager
 async def lifespan(_app):
-    global _classic
     # more worker threads than the default 40, so that requests waiting on a slow database cannot hold up the pages and files
     import anyio.to_thread
     anyio.to_thread.current_default_thread_limiter().total_tokens = 120
     await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
-    if os.environ.get("RIGHTPRICE_NO_CLASSIC") != "1":
-        _classic = subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", os.path.join(HERE, "app.py"),
-             "--server.port", str(CLASSIC_PORT), "--server.address", "127.0.0.1", "--server.headless", "true",
-             "--server.baseUrlPath", "classic", "--server.enableCORS", "false",
-             "--server.enableXsrfProtection", "false", "--browser.gatherUsageStats", "false"], cwd=HERE)
     if _mcp_app is not None:
         async with mcp_server.mcp.session_manager.run():       # the MCP endpoint's own machinery, for as long as the app runs
             yield
     else:
         yield
-    if _classic:
-        _classic.terminate()
 
 
 app = FastAPI(title="RightPrice", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -403,62 +382,6 @@ def intake_add(payload: dict = Body(...), request: Request = None):
 
 
 
-# ------------------------------------------------------------------ classic screens, passed through
-HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "content-encoding", "content-length", "host"}
-
-
-@app.api_route("/classic", methods=["GET"])
-@app.api_route("/classic/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"])
-async def classic_http(request: Request, path: str = ""):
-    url = f"http://{CLASSIC}/classic/{path}"
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            r = await client.request(request.method, url, params=request.query_params, headers=headers,
-                                     content=await request.body())
-    except httpx.HTTPError:
-        return Response("The classic screens are still starting. Try again in a few seconds.", status_code=503,
-                        headers={"Retry-After": "5"})
-    return Response(r.content, status_code=r.status_code,
-                    headers={k: v for k, v in r.headers.items() if k.lower() not in HOP})
-
-
-@app.websocket("/classic/{path:path}")
-async def classic_ws(ws: WebSocket, path: str):
-    proto = ws.headers.get("sec-websocket-protocol")
-    subs = [p.strip() for p in proto.split(",")] if proto else None
-    query = f"?{ws.url.query}" if ws.url.query else ""
-    try:
-        upstream = await websockets.connect(f"ws://{CLASSIC}/classic/{path}{query}", subprotocols=subs,
-                                            max_size=None, additional_headers={"Cookie": ws.headers.get("cookie", "")})
-    except Exception:
-        await ws.close(code=1013)
-        return
-    await ws.accept(subprotocol=upstream.subprotocol)
-
-    async def up():
-        try:
-            while True:
-                msg = await ws.receive()
-                if msg["type"] == "websocket.disconnect":
-                    break
-                await upstream.send(msg["bytes"] if msg.get("bytes") is not None else msg["text"])
-        finally:
-            await upstream.close()
-
-    async def down():
-        try:
-            async for msg in upstream:
-                await (ws.send_bytes(msg) if isinstance(msg, bytes) else ws.send_text(msg))
-        finally:
-            try:
-                await ws.close()
-            except RuntimeError:
-                pass
-
-    await asyncio.gather(up(), down(), return_exceptions=True)
-
-
 # ------------------------------------------------------------------ the front end
 class FreshFiles(StaticFiles):
     """Static files the browser must check before reusing, so a new version shows without a hard refresh."""
@@ -477,12 +400,9 @@ def _page(file, assets):
 
 
 @app.get("/")
-def index(request: Request):
-    """The app's shell (left rail, Right cost, the "+" popup). Every other screen is the earlier front end
-    shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
-    if request.query_params.get("embed") == "1":
-        return _page("index.html", ("app.css", "app.js"))
-    pages = sorted("pages/" + f for f in os.listdir(os.path.join(WEB, "pages")) if f.endswith((".js", ".css")))   # the shell's pages
+def index():
+    """The app: one shell (left rail, Right cost, the "+" popup) with every page in it; each page is a file in web/pages/."""
+    pages = sorted("pages/" + f for f in os.listdir(os.path.join(WEB, "pages")) if f.endswith((".js", ".css")))
     return _page("rightcost.html", ("rightcost.css", "rightcost.js", *pages))
 
 

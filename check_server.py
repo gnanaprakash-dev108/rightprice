@@ -1,6 +1,6 @@
 """Checks the web server against the engine: same numbers, every page's data, bad input refused; and the data layer.
 
-Run: python check_server.py     It must print ALL OK. It does not start the classic screens.
+Run: python check_server.py     It must print ALL OK. The screens are checked in a browser by check_browser.py.
 
 What it runs:
 1. The checks below on the files (as before the data layer), on a SQLite database file, and on PostgreSQL.
@@ -31,7 +31,6 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 STORE = os.environ.get("RIGHTPRICE_CHECK_STORE")       # set for one run, by the run that starts it
 if STORE:
-    os.environ["RIGHTPRICE_NO_CLASSIC"] = "1"
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("DATABASE_URL", None)
     # everything runs on a copy of the rate master in a temporary folder, so the edits it tries never touch
@@ -71,7 +70,7 @@ def main():
         check("Blank choices fall back to defaults",
               abs(c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Top beam": "", "Print method": None})
                          ).json()["total_per_m"] - 181.40) < 0.01)
-        for path in ["/", "/app.js", "/app.css", "/api/dashboard", "/api/cotton", "/api/pilot", "/api/template"] + \
+        for path in ["/", "/rightcost.js", "/pages/common.js", "/pages/common.css", "/api/dashboard", "/api/cotton", "/api/pilot", "/api/template"] + \
                 ["/api/table/" + s for s in meta["tables"]]:
             check(f"GET {path}", c.get(path).status_code == 200)
         check("Unknown table refused", c.get("/api/table/Nope").status_code == 404)
@@ -80,10 +79,10 @@ def main():
               man.status_code == 200 and man.json()["display"] == "standalone"
               and all(c.get("/" + i["src"]).status_code == 200 for i in man.json()["icons"])
               and c.get("/icons/icon-180.png").status_code == 200)
-        home = c.get("/?embed=1")
+        home = c.get("/")
         check("Page asks the browser for the current script, not a stored copy",
-              "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"
-              and c.get("/app.js").headers["cache-control"] == "no-cache")
+              "rightcost.js?v=" in home.text and "pages/common.js?v=" in home.text and home.headers["cache-control"] == "no-cache"
+              and c.get("/rightcost.js").headers["cache-control"] == "no-cache" and c.get("/pages/cost.js").headers["cache-control"] == "no-cache")
         tpl = c.get("/api/template").content
         b = c.post("/api/bulk", files={"file": ("t.xlsx", io.BytesIO(tpl))}).json()
         cols = b["results"]["columns"]
@@ -275,12 +274,19 @@ def main():
         r0 = po[0]
         check("Right cost: a listed costing reopens at the same should-cost", abs(c.post("/api/cost", json=r0["choices"]).json()["total_per_m"] - r0["should"]) < 0.02)
         shell = c.get("/")
-        check("The shell is the home page; the earlier screens are served inside it", "rightcost.js?v=" in shell.text and "rightcost.css?v=" in shell.text
-              and c.get("/rightcost.js").status_code == 200 and "app.js?v=" in c.get("/?embed=1").text)
+        # stage 4: one front end. Every page is a file in web/pages/ that the shell loads; the frame and /classic are gone
+        pages_dir = os.path.join(HERE, "web", "pages")
+        page_files = sorted(f for f in os.listdir(pages_dir) if f.endswith((".js", ".css")))
+        check("The shell is the home page and loads every page file in web/pages/, each with its version",
+              "rightcost.js?v=" in shell.text and "rightcost.css?v=" in shell.text and c.get("/rightcost.js").status_code == 200
+              and len(page_files) >= 15 and all(f'"pages/{f}?v=' in shell.text and c.get("/pages/" + f).status_code == 200 for f in page_files),
+              str([f for f in page_files if f'"pages/{f}?v=' not in shell.text]))
+        check("The earlier front end and the Streamlit screens are retired", c.get("/app.js").status_code == 404 and c.get("/classic/").status_code == 404
+              and "app.js" not in c.get("/?embed=1").text and not os.path.exists(os.path.join(HERE, "app.py")))
         old = c.get("/rightcost", follow_redirects=False)
         check("The old Right cost address leads to its page in the shell", old.status_code == 307 and old.headers["location"] == "/#rightcost")
         check("Right cost: downloads", c.post("/api/costs/download", json={"source": "Purchase orders"}).content[:2] == b"PK")
-        for css in ("web/app.css", "web/rightcost.css"):
+        for css in ["web/rightcost.css"] + [f"web/pages/{f}" for f in page_files if f.endswith(".css")]:
             txt = open(css, encoding="utf8").read()
             check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
 
