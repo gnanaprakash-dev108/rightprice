@@ -85,6 +85,16 @@ NOT_MIRRORED = {
 }
 
 
+def _recorded(on_files=False):
+    """What the answer says about who made the change: "AI assistant" where the store records it (a database; on the files
+    only the tracker's steps and mill cost sheet rows keep who made them), else that nothing records it."""
+    import store
+    if on_files or store.get().kind != "files":
+        return ASSISTANT
+    return ("nobody: this server keeps its data in files, which do not record who made this change (on the database it is "
+            "recorded as \"AI assistant\")")
+
+
 def _plain(o):
     """An answer as plain JSON values: numbers from the rate master arrive as numpy types (an int64 would reach the
     assistant as text), a missing figure as NaN (not JSON)."""
@@ -193,7 +203,8 @@ def _row(r):
             "supplier": r.get("supplier"), "route": r.get("route"), "weave": r.get("weave"), "should_cost_per_m": _r2(r.get("should")),
             "price_per_m": _r2(r.get("price")), "price_is": "paid (purchase order)" if r["source"] == "Purchase orders" else "quoted on the mill's sheet (fabric list)",
             "above_should_cost_pct": _r2(r.get("gap_pct")), "metres": r.get("metres"), "verdict_on_that_price": r.get("band"),
-            "rupees_above_should_cost": r.get("excess"), "placeholder_rates_used": r.get("placeholders"), "repeats_order_of": r.get("duplicate_of"),
+            "rupees_above_should_cost": None if r.get("band") == "Check quote" else r.get("excess"),
+            "placeholder_rates_used": r.get("placeholders"), "repeats_order_of": r.get("duplicate_of"),
             "tracker": _track(key)}
 
 
@@ -477,12 +488,15 @@ def record_tracker_step(key: str, kind: str, price_per_m: float, date: str = "",
         return {"error": f"Agreed at Rs {p:,.2f} would be above the mill's latest price of Rs {quotes0[-1]['price']:,.2f}. Check the figure with the person; if the mill has "
                          "raised its price, record that as a revised quote first. Nothing was recorded."}
     if kind in ("Mill's revised quote", "Agreed") and not any(e["kind"] in ("Mill's quote", "Mill's revised quote") for e in ev0):
-        sheet = f" The price on this row is Rs {r['price']:,.2f}: if that was the mill's first quote, record it as \"Mill's quote\" with its date first." if r.get("price") else ""
+        sheet = (f" The price on this row is Rs {r['price']:,.2f}: ask the person whether that was the mill's first quote, and its date; only with "
+                 "their yes, record it as \"Mill's quote\" first." if r.get("price") else " Ask the person for the mill's first quote and its date.")
         return {"error": f"No mill quote is recorded on this fabric yet, and what is won is measured from the mill's first quote.{sheet} Nothing was recorded."}
     if kind == "Our counter" and before and before["status"] == "Agreed":
         return {"error": f"This fabric is agreed at Rs {before['agreed']:,.2f}. A counter would reopen it. If the mill has reopened the price, record its new quote first. Nothing was recorded."}
     try:
-        rec = s.tracker.negotiation_event({"key": key, "kind": kind, "price": p, "date": date or None,
+        # seen: the steps read above. Another step recorded meanwhile (by a person, or a second call at the same moment)
+        # and the store refuses this one, as it refuses a page that has not seen the latest step
+        rec = s.tracker.negotiation_event({"key": key, "kind": kind, "price": p, "date": date or None, "seen": len(rec0.get("events", [])),
                                    "note": (str(note or "").strip()[:440] + " (recorded through the AI assistant)").strip(), "code": r["code"],
                                    "supplier": r.get("supplier"), "description": r.get("description"), "source": r["source"],
                                    "metres": r.get("metres"), "should": r.get("should"), "row_price": r.get("price")}, who=ASSISTANT)
@@ -553,6 +567,14 @@ def _id_of(key):
     return k.split("|", 1)[1] if k.startswith("Fabric list|") else k
 
 
+def _stamp(records):
+    """A short fingerprint of a table as read: edit_rate_table's whole-table save needs it, so it never overwrites a table
+    that changed after the assistant read it."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(_plain({"columns": records["columns"], "rows": records["rows"]}), sort_keys=True).encode()).hexdigest()[:16]
+
+
 def _rows_as_dicts(records, first=1):
     return [dict({"row": first + n}, **dict(zip(records["columns"], r))) for n, r in enumerate(records["rows"])]
 
@@ -583,7 +605,7 @@ def rate_table(sheet: str = "", max_rows: int = 300) -> dict:
     n = max(1, min(int(max_rows or 300), 5000))
     rows = t["rows"][-n:]
     first = len(t["rows"]) - len(rows) + 1
-    return {"sheet": sheet, "holds": t["label"], "editable": sheet in s.rates.EDITABLE, "columns": t["columns"],
+    return {"sheet": sheet, "holds": t["label"], "editable": sheet in s.rates.EDITABLE, "columns": t["columns"], "stamp": _stamp(t),
             "rows_in_table": len(t["rows"]), "rows_shown": f"{first} to {len(t['rows'])}" if t["rows"] else "none",
             "rows": _rows_as_dicts({"columns": t["columns"], "rows": rows}, first)}
 
@@ -652,7 +674,8 @@ def fabric_list(search: str = "", limit: int = 50, yarn_move_pct: dict | None = 
     came in with, the price on the mill's sheet, should-cost, the gap, the verdict, why it could not be costed, the mill's
     own sums that are off, and placeholder rates used. search: words in the code, description, supplier or upload.
     yarn_move_pct: {"*": 5} (every yarn) or {"Cotton 40S": -3}: also costs each row with those yarn rates moved, to show
-    what a yarn price move would do (nothing is saved)."""
+    what a yarn price move would do (nothing is saved): then should-cost, gap, verdict and rupees are on the moved yarn rates,
+    as Bulk upload shows them, and on_todays_yarn_rates gives today's."""
     s = _s()
     v = s.fabric_list.list_view({"yarn_pct": yarn_move_pct} if yarn_move_pct else {})
     words = [w for w in str(search or "").lower().split() if w]
@@ -663,16 +686,19 @@ def fabric_list(search: str = "", limit: int = 50, yarn_move_pct: dict | None = 
         text = " ".join(str(x or "") for x in (code, i.get("description"), i.get("supplier"), i.get("upload"))).lower()
         if words and not all(w in text for w in words):
             continue
-        b = i.get("brief") or {}
+        moved = bool(yarn_move_pct) and i.get("simulated") is not None
+        b = (i.get("sim_brief") if moved else i.get("brief")) or {}
+        verdict = ("Check quote" if b.get("implausible") else {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask break-up"}.get(b.get("stance"))) if b else None
         row = {"key": f"Fabric list|{i['id']}", "code": code, "supplier": i.get("supplier"), "description": i.get("description"),
                "upload": i.get("upload") or "Added on screen", "added": i.get("added"), "sheet_price_per_m": s.common._num_or_none(mill.get("Ex mill price")),
-               "should_cost_per_m": _r2(i.get("should_cost")), "gap_per_m": _r2(i.get("gap")),
-               "gap_pct": None if i.get("gap_pct") is None else round(i["gap_pct"] * 100, 1), "quantity_m": i.get("quantity"),
-               "verdict": ("Check quote" if b.get("implausible") else {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask break-up"}.get(b.get("stance"))) if b else None,
-               "rupees_above_should_cost": i.get("at_stake"), "not_costed_because": i.get("problems") or [], "notes": i.get("notes") or [],
+               "should_cost_per_m": _r2(i.get("simulated") if moved else i.get("should_cost")), "gap_per_m": _r2(i.get("sim_gap") if moved else i.get("gap")),
+               "gap_pct": (lambda g: None if g is None else round(g * 100, 1))(i.get("sim_gap_pct") if moved else i.get("gap_pct")), "quantity_m": i.get("quantity"),
+               "verdict": verdict, "rupees_above_should_cost": None if verdict == "Check quote" or not b else b.get("at_stake"),
+               "not_costed_because": i.get("problems") or [], "notes": i.get("notes") or [],
                "mills_sums_off": i.get("sums") or [], "placeholder_rates_used": i.get("placeholders") or []}
         if yarn_move_pct:
-            row["should_cost_with_yarn_moved_per_m"] = _r2(i.get("simulated"))
+            row["on_todays_yarn_rates"] = {"should_cost_per_m": _r2(i.get("should_cost")), "gap_per_m": _r2(i.get("gap")),
+                                           "gap_pct": None if i.get("gap_pct") is None else round(i["gap_pct"] * 100, 1)}
         out.append(row)
     n = max(1, min(int(limit or 50), 1000))
     return {"rows_on_list": len(v["rows"]), "found": len(out), "shown": min(n, len(out)), "rows": out[:n],
@@ -741,30 +767,62 @@ def _same(a, b):
         return str(a).strip() == str(b).strip()
 
 
-def _table_changes(before, after):
-    """What a save changed, cell by cell (row numbers from 1); rows added or removed at the end."""
+TWO_KEYS = ("Weaving_Rates", "Weaving_Uplifts", "Sizing_Rates", "Piece_Dyeing", "Class_Defaults", "Dobby_Charges")   # as rates.save_table
+LARGE = 2.0         # a figure moved to more than twice, or under half, what it was needs large_change_confirmed
+
+
+def _table_changes(sheet, before, after):
+    """What a save changes: each cell, old and new (rows matched by their key, numbered as in the table after), and the
+    rows added and removed. A table whose key repeats (Market_Yarn) is compared row by row."""
+    cols, k = after["columns"], 2 if sheet in TWO_KEYS else 1
+    key = lambda r: tuple(str(x).strip() for x in r[:k])
+    bk, ak = [key(r) for r in before["rows"]], [key(r) for r in after["rows"]]
+    if sheet == "Market_Yarn" or len(set(bk)) != len(bk) or len(set(ak)) != len(ak):
+        n = min(len(bk), len(ak))
+        pairs, added, removed = [(i, i) for i in range(n)], after["rows"][n:], before["rows"][n:]
+    else:
+        bi, ai = {x: i for i, x in enumerate(bk)}, {x: i for i, x in enumerate(ak)}
+        pairs = [(bi[x], ai[x]) for x in ak if x in bi]
+        added, removed = [after["rows"][ai[x]] for x in ak if x not in bi], [before["rows"][bi[x]] for x in bk if x not in ai]
+    cells = [{"row": j + 1, "key": " / ".join(key(after["rows"][j])), "column": c, "old": x, "new": y}
+             for i, j in pairs for c, x, y in zip(cols, before["rows"][i], after["rows"][j]) if not _same(x, y)]
+    return {"cells": cells, "rows_added": [dict(zip(cols, r)) for r in added], "rows_removed": [dict(zip(cols, r)) for r in removed],
+            "rows_before": len(before["rows"]), "rows_after": len(after["rows"])}
+
+
+def _large(cells):
+    """The changed figures that move to more than twice, or under half, what they were (or away from zero)."""
     out = []
-    for n, (x, y) in enumerate(zip(before["rows"], after["rows"])):
-        for col, a, b in zip(after["columns"], x, y):
-            if not _same(a, b):
-                out.append({"row": n + 1, "column": col, "old": a, "new": b})
-    return {"cells": out, "rows_before": len(before["rows"]), "rows_after": len(after["rows"])}
+    for c in cells:
+        try:
+            x, y = float(c["old"]), float(c["new"])
+        except (TypeError, ValueError):
+            continue
+        if (x == 0 and y != 0) or (x != 0 and not (1 / LARGE <= y / x <= LARGE)):
+            out.append(f"row {c['row']} ({c['key']}), {c['column']}: {x:g} to {y:g}")
+    return out
 
 
 @tool(mirrors="PUT /api/table/{sheet}", writes=True)
-def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | None = None) -> dict:
+def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | None = None, based_on: str = "",
+                    large_change_confirmed: bool = False) -> dict:
     """Edit a table of the rate master and save it, as Prices > Rate tables does when a person edits a table and presses
     Save. THIS CHANGES THE RATES EVERY COSTING USES, FOR EVERYONE, from the moment it is saved; the person must confirm
     first. [RATE RULE]
     Give either `changes` or `rows`:
     - changes: the cells to change, each {"row": 12, "column": "Rate Rs/kg", "old": 345, "new": 352}, with the row number
-      and the old figure as rate_table shows them now. A change whose old figure is not what the table holds now is
-      refused (someone may have changed it since), and nothing is saved.
-    - rows: the whole table, every row in order, each a list in rate_table's column order (or an object by column name).
-      A row left out is removed; a new row is added. Use it to add or remove rows.
-    The save is checked as on the screen: numbers where numbers belong, no blank or repeated key, and the example fabric
-    must still cost; anything wrong and nothing is saved. The rate master as it was is kept (on a database every version
-    is kept; on files a dated copy). The answer lists every cell that changed, old and new. Recorded as "AI assistant"."""
+      and the old figure as rate_table shows them now, one change per cell. A change whose old figure is not what the
+      table holds now is refused (someone may have changed it since), and nothing is saved.
+    - rows: the whole table, every row in order, each a list in rate_table's column order or an object with every column;
+      a row left out is removed, a new row added. Use it to add or remove rows. based_on: the `stamp` rate_table gave
+      with the table you read; if the table has changed since, nothing is saved.
+    A figure moved to more than twice, or under half, what it was (or away from zero) is refused unless
+    large_change_confirmed is true: set it only after telling the person the old and the new figure of each such cell and
+    hearing them confirm that figure. The save is checked as on the screen: numbers where numbers belong, no rate below
+    zero (or zero, for a rate always paid), no blank or repeated key, and the example fabric must still cost; anything
+    wrong and nothing is saved. The rate master as it was is kept (on a database every version is kept; on files a dated
+    copy). The answer lists every cell that changed, old and new, and the rows added and removed. Recorded as
+    "AI assistant" on the database."""
     s = _s()
     from rules.common import Refused
     m = s.common.get_masters()
@@ -775,7 +833,7 @@ def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | 
     before = s.common.records(m[sheet])
     cols = before["columns"]
     if changes is not None:
-        new_rows, wrong = [list(r) for r in before["rows"]], []
+        new_rows, wrong, seen = [list(r) for r in before["rows"]], [], set()
         if not changes:
             raise Refused(400, "No change was given. Nothing was saved.")
         for ch in changes:
@@ -789,6 +847,10 @@ def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | 
                 raise Refused(400, f"Row {ch['row']} is not in {sheet} (rows 1 to {len(new_rows)}). Nothing was saved.")
             if ch["column"] not in cols:
                 raise Refused(400, f"'{ch['column']}' is not a column of {sheet}: {', '.join(cols)}. Nothing was saved.")
+            if (n, ch["column"]) in seen:
+                raise Refused(400, f"Row {n}, {ch['column']} is changed twice in one call: give one change per cell, from the figure the table "
+                                   "holds now to the new one. Nothing was saved.")
+            seen.add((n, ch["column"]))
             i = cols.index(ch["column"])
             if "old" not in ch:
                 raise Refused(400, f'Say the figure row {n}, {ch["column"]} holds now ("old"), as you told the person. Nothing was saved.')
@@ -799,16 +861,31 @@ def edit_rate_table(sheet: str, changes: list[dict] | None = None, rows: list | 
             raise Refused(409, "The table does not hold the old figures given (" + "; ".join(wrong) + "). Read it again with rate_table and "
                                "tell the person the figures as they are now. Nothing was saved.")
     else:
+        if not based_on:
+            raise Refused(400, "To save the whole table, give based_on: the stamp rate_table gave with the table you read and "
+                               "showed the person. Nothing was saved.")
+        if based_on != _stamp(before):
+            raise Refused(409, f"{sheet} has changed since the table you read (its stamp is not {based_on} any more). Read it again with "
+                               "rate_table, and tell the person what changed. Nothing was saved.")
         new_rows = []
-        for r in rows:
+        for n, r in enumerate(rows, start=1):
             if isinstance(r, dict):
-                new_rows.append([r.get(c) for c in cols])
+                gone = [c for c in cols if c not in r]
+                if gone:
+                    raise Refused(400, f"Row {n} has no {', '.join(repr(c) for c in gone)}: every row gives every column, as rate_table "
+                                       "gave it (a column left out would be emptied). Nothing was saved.")
+                new_rows.append([r[c] for c in cols])
             elif isinstance(r, list) and len(r) == len(cols):
                 new_rows.append(list(r))
             else:
-                raise Refused(400, f"Each row is a list of {len(cols)} values in this order: {', '.join(cols)} (or an object by column name). Nothing was saved.")
+                raise Refused(400, f"Each row is a list of {len(cols)} values in this order: {', '.join(cols)} (or an object with every "
+                                   "column). Nothing was saved.")
+    large = _large(_table_changes(sheet, before, {"columns": cols, "rows": new_rows})["cells"])
+    if large and not large_change_confirmed:
+        raise Refused(409, "These figures move to more than twice, or under half, what they are now: " + "; ".join(large) + ". Tell the "
+                           "person the old and the new figure; only if they confirm it, call again with large_change_confirmed true. Nothing was saved.")
     out = s.rates.save_table(sheet, {"columns": cols, "rows": new_rows}, who=ASSISTANT)
-    return dict(out, sheet=sheet, changed=_table_changes(before, s.common.records(s.common.get_masters()[sheet])), recorded_as=ASSISTANT,
+    return dict(out, sheet=sheet, changed=_table_changes(sheet, before, s.common.records(s.common.get_masters()[sheet])), recorded_as=_recorded(),
                 kept="The rate master as it was before this save is kept: put it back by saving the old figures again.")
 
 
@@ -817,13 +894,16 @@ def add_cotton_price(date: str, price_per_candy: float, source: str = "") -> dic
     """Add one cotton price to the rate master (Shankar-6, rupees per candy), as Prices > Cotton prices does. THIS CHANGES
     THE RATE MASTER FOR EVERYONE; the person must confirm first. [RATE RULE] Tell them the date, the price, and
     the latest price held now (cotton_prices). date: YYYY-MM-DD. source: where the price is from (for example
-    "CAI, 27 Nov 2026"); "Typed in the tool" when empty. Recorded as "AI assistant"."""
+    "CAI, 27 Nov 2026"); "Typed in the tool" when empty. Recorded as "AI assistant" on the database."""
+    import pandas as pd
     s = _s()
     cot = s.common.get_masters()["Cotton_Prices"]
-    was = s.common.records(cot.tail(1))
+    dates = pd.to_datetime(cot["Date"], errors="coerce")
+    newest = None if dates.isna().all() else int(dates.reset_index(drop=True).idxmax())
+    was = None if newest is None else _rows_as_dicts(s.common.records(cot.iloc[[newest]]), newest + 1)[0]
     out = s.rates.add_cotton({"date": date, "price": price_per_candy, "source": source}, who=ASSISTANT)
-    now = s.common.records(s.common.get_masters()["Cotton_Prices"].tail(1))
-    return dict(out, added=_rows_as_dicts(now)[0], latest_before=_rows_as_dicts(was)[0] if was["rows"] else None, recorded_as=ASSISTANT)
+    now = s.common.get_masters()["Cotton_Prices"]
+    return dict(out, added=_rows_as_dicts(s.common.records(now.tail(1)), len(now))[0], latest_before=was, recorded_as=_recorded())
 
 
 def _intake(out):
@@ -844,23 +924,28 @@ def intake_file(file_base64: str, file_name: str) -> dict:
     or a picture, sent as base64 with its name (the ending says how to read it). An Excel or CSV file comes back as its
     tables (first 15 rows of each) with a token for intake_map_columns; a PDF as the price lines read from it; a picture as
     an empty table (its rates are typed in). NOTHING IS ADDED TO THE RATES here: that is intake_add_rows. A PDF or picture
-    is kept on the server as the source, so a rate can be traced back to it; that is all this step keeps."""
+    is kept on the server as the source, so a rate can be traced back to it; that is all this step keeps (the copy is
+    named by its time, not by who brought it, on the screen too). Confirm the file with the person first."""
     return _intake(_s().rates.intake_file(file_name, _file_bytes(file_base64, file_name)))
 
 
-@tool(mirrors="POST /api/intake/link", outside=True)
+@tool(mirrors="POST /api/intake/link", writes=True, destructive=False, outside=True)
 def intake_page(url: str) -> dict:
     """Bring in prices, step 1, from a public web page (its address): its tables come back with a token for
-    intake_map_columns, or, with no tables, the price-like lines in its text. RightPrice fetches the page itself; a page
-    behind a login cannot be read. Nothing is added to the rates here."""
+    intake_map_columns, or, with no tables, the price-like lines in its text. RIGHTPRICE'S SERVER FETCHES THAT ADDRESS
+    ITSELF: confirm the address with the person first. Only public http or https addresses are read (never this machine,
+    a private network or the cloud's own link-local addresses); a page behind a login cannot be read. Nothing is added to
+    the rates here."""
     return _intake(_s().rates.intake_link({"url": url}))
 
 
-@tool(mirrors="POST /api/intake/api", outside=True)
+@tool(mirrors="POST /api/intake/api", writes=True, destructive=False, outside=True)
 def intake_api(url: str, header_name: str = "", header_value: str = "") -> dict:
     """Bring in prices, step 1, from a JSON endpoint: its reply comes back as a table with a token for intake_map_columns.
-    header_name and header_value: a key the endpoint asks for, used for this one call and not stored. A key given here
-    passes through this conversation: for a secret key, the person should use the screen instead. Nothing is added here."""
+    RIGHTPRICE'S SERVER CALLS THAT ADDRESS ITSELF, with the header given: confirm the address with the person first. Only
+    public http or https addresses (as intake_page); sign-in, cookie and host headers are never sent. header_name and
+    header_value: a key the endpoint asks for, used for this one call and not stored. A key given here passes through this
+    conversation: for a secret key, the person should use the screen instead. Nothing is added here."""
     return _intake(_s().rates.intake_api({"url": url, "header_name": header_name or None, "header_value": header_value or None}))
 
 
@@ -882,11 +967,11 @@ def intake_add_rows(rows: list, source: str = "") -> dict:
     confirm first. [RATE RULE] Show them the rows to be added and get their yes.
     rows: as intake_map_columns (or step 1, for a PDF) returned them, each a list in the order Date, Yarn, Count,
     Low Rs/kg, High Rs/kg, Source (or an object by those names); a row needs at least a count and a low rate. source: the
-    file or page they came from, for rows without one. Recorded as "AI assistant"."""
+    file or page they came from, for rows without one. Recorded as "AI assistant" on the database."""
     s = _s()
     cols = s.rates.pi.STAGE_COLS
     shaped = [[r.get(c) for c in cols] if isinstance(r, dict) else r for r in rows or []]
-    return dict(s.rates.intake_add({"rows": shaped, "source": source}, who=ASSISTANT), recorded_as=ASSISTANT)
+    return dict(s.rates.intake_add({"rows": shaped, "source": source}, who=ASSISTANT), recorded_as=_recorded())
 
 
 # ------------------------------------------------------------------ dated yarn rates (stage 5; a database only)
@@ -963,7 +1048,7 @@ def intake_add_dated_rates(rows: list, read_token: str = "", source: str = "", m
     those without GST before those with). Recorded as entered by "AI assistant"."""
     payload = {"rows": rows or [], "read_token": read_token, "source": source, "month": month or None, "month_undated": month_undated or None,
                "preview": bool(preview)}
-    return dict(_dated().intake_add(payload, who=ASSISTANT), recorded_as=ASSISTANT)
+    return dict(_dated().intake_add(payload, who=ASSISTANT), recorded_as=None if preview else ASSISTANT)
 
 
 @tool(mirrors="POST /api/list/upload", writes=True)
@@ -972,11 +1057,11 @@ def upload_to_fabric_list(file_base64: str, file_name: str) -> dict:
     file sent as base64 with its name. THIS ADDS ROWS EVERYONE SEES (Right cost, the negotiation pack, quote alerts); the
     person must confirm the file and the mill first. A row already on the list is not added twice. Each row is costed on
     today's rates; the answer gives the rows added, those already there, those that could not be costed (they are kept,
-    with the reason), and the quote alerts raised at once. Recorded as "AI assistant"."""
+    with the reason), and the quote alerts raised at once. Recorded as "AI assistant" on the database."""
     out = _s().fabric_list.list_upload(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT)
     return {"added": out["added"], "already_on_the_list": out["already"], "read_as": out["kind"], "not_costed": out["not_costed"],
             "alerts": [{"key": f"Fabric list|{a['id']}", "code": a["code"], "flags": [f["text"] for f in a["flags"]]} for a in out["alerts"]],
-            "recorded_as": ASSISTANT, "next": "find_fabrics (source 'Fabric list') or fabric_list gives the rows and their keys."}
+            "recorded_as": _recorded(), "next": "find_fabrics (source 'Fabric list') or fabric_list gives the rows and their keys."}
 
 
 def _check_choices(choices, values=True):
@@ -1011,7 +1096,7 @@ def add_fabric_to_list(choices: dict, replaces_key: str = "") -> dict:
     "Fabric code", "Supplier", "Quoted price (Rs/m)" and "Order quantity (m)" for a quote). THIS ADDS A ROW EVERYONE SEES;
     the person must confirm the fabric, the mill and the price first. replaces_key: a fabric-list row's key to put this
     in its place (its mill columns stay), as editing a row on the screen does. The fabric must cost, or nothing is added
-    (the costing's own refusal says why). Recorded as "AI assistant"."""
+    (the costing's own refusal says why). Recorded as "AI assistant" on the database."""
     s = _s()
     words = _check_choices(choices, values=False)        # a misspelt field would be kept on the row and never costed
     if words:
@@ -1024,7 +1109,7 @@ def add_fabric_to_list(choices: dict, replaces_key: str = "") -> dict:
         sel["_id"] = old
     out = s.fabric_list.list_add(sel, who=ASSISTANT)
     return {"added": True, "key": f"Fabric list|{out['id']}", "replaced": f"Fabric list|{old}" if had else None,
-            "note": None if had or not old else "No row with that key was on the list, so this was added as a new row.", "recorded_as": ASSISTANT}
+            "note": None if had or not old else "No row with that key was on the list, so this was added as a new row.", "recorded_as": _recorded()}
 
 
 @tool(mirrors="POST /api/list/remove", writes=True)
@@ -1038,7 +1123,7 @@ def remove_fabric_list_rows(keys: list[str]) -> dict:
     on = {i: (c, sp) for i, c, sp in zip(log["Id"].astype(str), log["Fabric code"], log["Supplier"])} if "Id" in log.columns else {}
     out = s.fabric_list.list_remove({"ids": ids}, who=ASSISTANT)
     return {"removed": out["removed"], "rows": [{"key": f"Fabric list|{i}", "code": s.common.clean(on[i][0]), "supplier": s.common.clean(on[i][1])} for i in ids if i in on],
-            "not_on_the_list": [f"Fabric list|{i}" for i in ids if i not in on], "recorded_as": ASSISTANT}
+            "not_on_the_list": [f"Fabric list|{i}" for i in ids if i not in on], "recorded_as": _recorded()}
 
 
 @tool(mirrors="POST /api/costsheet/upload", writes=True)
@@ -1046,27 +1131,34 @@ def upload_mill_cost_sheet(file_base64: str, file_name: str) -> dict:
     """Upload a mill cost sheet (Prices > Mill cost sheets): an .xlsx on RightPrice's cost sheet template, sent as base64
     with its name. THIS ADDS ROWS EVERYONE SEES on Mill cost sheets, and may make new drafts; it changes no rate. A mill's
     sheet sent again takes the place of that mill's earlier rows for the same fabric codes. The person must confirm the
-    file first. Recorded as "AI assistant"."""
+    file first. Recorded as "AI assistant" on the database."""
     out = _s().costsheets.costsheet_upload(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT)
-    return dict(out, recorded_as=ASSISTANT, next="mill_cost_sheets shows the rows and the drafts.")
+    return dict(out, recorded_as=_recorded(on_files=True), next="mill_cost_sheets shows the rows and the drafts.")
 
 
 @tool(mirrors="POST /api/costsheet/remove", writes=True)
 def remove_mill_cost_sheet_rows(ids: list[str] | None = None, upload: str = "") -> dict:
     """Remove rows from Mill cost sheets, as its screen does: by row id (mill_cost_sheets), or every row of one upload
-    (its `upload` name). THIS REMOVES THE ROWS FOR EVERYONE (they are not kept), and the drafts resting on them; it changes
-    no rate. The person must confirm which rows first."""
-    return _s().costsheets.costsheet_remove({"ids": ids or [], "upload": upload or None})
+    (its `upload` name). THIS REMOVES THE ROWS FOR EVERYONE (they are not kept, and who removed them is not recorded, on
+    the screen too), and the drafts resting on them; it changes no rate. The person must confirm which rows first."""
+    return dict(_s().costsheets.costsheet_remove({"ids": ids or [], "upload": upload or None}),
+                recorded_as="nobody: removed mill cost sheet rows are deleted, with no record of who removed them (on the screen too)")
 
 
 @tool(mirrors="POST /api/costsheet/apply", writes=True)
-def apply_cost_sheet_drafts(draft_ids: list[str]) -> dict:
+def apply_cost_sheet_drafts(drafts: list[dict]) -> dict:
     """Apply drafts from Mill cost sheets to the rate master, as its screen does when the person ticks drafts and applies
-    them. THIS CHANGES THE RATES EVERY COSTING USES, FOR EVERYONE; the person must confirm first. [RATE RULE] For
-    each draft tell them the rate, its figure now and the proposed figure (mill_cost_sheets), and which mills it comes
-    from. draft_ids: the drafts' ids. The rate master as it was is kept first. Recorded as "AI assistant"."""
-    out = _s().costsheets.costsheet_apply({"ids": draft_ids or []}, who=ASSISTANT)
-    return dict(out, recorded_as=ASSISTANT)
+    them. THIS CHANGES THE RATES EVERY COSTING USES, FOR EVERYONE; the person must confirm first. [RATE RULE] For each
+    draft tell them the rate, its figure now and the proposed figure (mill_cost_sheets), and which mills it comes from.
+    drafts: each {"id": ..., "now": ..., "proposed": ...}, with the two figures exactly as mill_cost_sheets gave them and
+    you told the person; a draft whose figures have changed since (more sheets came in, or a rate was changed) is refused
+    and nothing is applied. The rate master as it was is kept first. Recorded as "AI assistant" on the database."""
+    from rules.common import Refused
+    if not isinstance(drafts, list) or not all(isinstance(d, dict) and {"id", "now", "proposed"} <= set(d) for d in drafts):
+        raise Refused(400, 'Give each draft as {"id", "now", "proposed"}: the figures you told the person. Nothing was applied.')
+    out = _s().costsheets.costsheet_apply({"ids": [str(d["id"]) for d in drafts],
+                                           "expect": {str(d["id"]): {"now": d["now"], "proposed": d["proposed"]} for d in drafts}}, who=ASSISTANT)
+    return dict(out, recorded_as=_recorded())
 
 
 @tool(mirrors="POST /api/alerts/seen", writes=True)
@@ -1074,14 +1166,28 @@ def mark_alerts_seen(keys: list[str] | None = None, bring_back: bool = False, br
     """Mark quote alerts seen, or bring them back, as the Dashboard and Right cost do. THIS CHANGES WHAT EVERYONE SEES: an
     alert marked seen leaves the Dashboard, the Right cost count and Bulk upload for every user. The person must confirm
     which alerts first. keys: from quote_alerts ("Fabric list|<id>"). bring_back: true brings those back. bring_all_back:
-    true brings every seen alert back. Recorded as "AI assistant"."""
+    true brings every seen alert back. Recorded as "AI assistant" on the database."""
+    from rules.common import Refused
+    s = _s()
     ids = [_id_of(k) for k in keys or [] if _id_of(k)]
-    a = _s().alerts.alerts_seen({"ids": ids, "undo": bool(bring_back), "restore": bool(bring_all_back)}, who=ASSISTANT)
+    if not bring_all_back:
+        every = s.alerts.alerts()["all"]
+        if not ids:
+            raise Refused(400, "Say which alerts (their keys from quote_alerts). Nothing was changed.")
+        unknown = [i for i in ids if i not in every]
+        wrong = [i for i in ids if i in every and every[i]["state"] != ("seen" if bring_back else "live")]
+        if unknown:
+            raise Refused(400, "Not an alert now: " + ", ".join(f"Fabric list|{i}" for i in unknown) + " (no such row, or its flags have gone). "
+                               "Use quote_alerts for the keys. Nothing was changed.")
+        if wrong:
+            raise Refused(400, ("Not marked seen, so there is nothing to bring back: " if bring_back else "Already marked seen, or cleared by "
+                                "an agreed price: ") + ", ".join(f"Fabric list|{i}" for i in wrong) + ". Nothing was changed.")
+    a = s.alerts.alerts_seen({"ids": ids, "undo": bool(bring_back), "restore": bool(bring_all_back)}, who=ASSISTANT)
     return {"done": "all seen alerts brought back" if bring_all_back else ("brought back: " if bring_back else "marked seen: ") + (", ".join(ids) or "nothing (no keys given)"),
-            "alerts_to_look_at_now": a["count"], "marked_seen": a["seen"], "cleared_by_agreement": a["agreed"], "recorded_as": ASSISTANT}
+            "alerts_to_look_at_now": a["count"], "marked_seen": a["seen"], "cleared_by_agreement": a["agreed"], "recorded_as": _recorded()}
 
 
-@tool(mirrors="POST /api/draft", outside=True)
+@tool(mirrors="POST /api/draft", writes=True, destructive=False, outside=True)
 def draft_message_to_mill(mill: str = "", keys: list[str] | None = None, ask: str = "both", writer: str = "", contact: str = "") -> dict:
     """Draft an e-mail and a WhatsApp message to one mill, as "Draft a message to the mill" does: on the fabrics worth
     raising with it, following the tracker (a counter already made is the price named; an agreed fabric is left out).
@@ -1089,7 +1195,8 @@ def draft_message_to_mill(mill: str = "", keys: list[str] | None = None, ask: st
     name, for every fabric worth raising with it; or keys: fabrics of one mill (from find_fabrics). ask: "breakup" (the
     cost break-up), "price" (a revised price) or "both". writer: the buyer's name; contact: the mill's contact. With the
     Claude key set on the server the wording is written by Claude (the figures go to Anthropic's API, as on the screen);
-    otherwise a fixed template is filled, and the answer says so."""
+    otherwise a fixed template is filled, and the answer says so. WITH THE KEY SET, THE FIGURES OF THOSE FABRICS LEAVE
+    RIGHTPRICE for Anthropic's API: confirm with the person first."""
     scope = {"type": "rows", "keys": list(keys)} if keys else ({"type": "supplier", "mill": mill} if mill else {})
     return _s().drafts.draft_message({"scope": scope, "ask": ask, "writer": writer, "contact": contact})
 
@@ -1106,7 +1213,7 @@ def remove_tracker_step(key: str, step_id: str) -> dict:
     s.tracker.negotiation_remove({"key": key, "id": step_id}, who=ASSISTANT)
     rec = s.tracker._negos().get(key) or {}
     return {"removed": True, "removed_step": None if step is None else {"kind": step["kind"], "price_per_m": step["price"], "date": step["date"], "recorded_by": step.get("by") or ""},
-            "now": _nego(rec, s.tracker.nego_summary(rec)) if rec.get("events") else {"status": "Not tracked", "steps": []}, "recorded_as": ASSISTANT}
+            "now": _nego(rec, s.tracker.nego_summary(rec)) if rec.get("events") else {"status": "Not tracked", "steps": []}, "recorded_as": _recorded(on_files=True)}
 
 
 @tool(mirrors="POST /api/users/add", writes=True)
@@ -1123,8 +1230,8 @@ def add_person(email: str, role: str, name: str = "") -> dict:
 def change_person(email: str, role: str | None = None, name: str | None = None, active: bool | None = None) -> dict:
     """Change a person on Users and roles: their role (Admin, Rates editor, Buyer, Viewer), their name, or switch their
     access off (active false) or on again. Only what is given changes. THIS CHANGES WHAT THAT PERSON MAY DO, AT ONCE; the
-    person asking must confirm first. The last admin in the list stays an admin. Recorded in the change record as made by
-    "AI assistant"."""
+    person asking must confirm first. The last admin in the list stays an admin, and this tool does not switch off an admin
+    or take Admin away (a person does that on Users and roles). Recorded in the change record as made by "AI assistant"."""
     from rules import access
     payload = {"email": email}
     payload.update({k: v for k, v in (("role", role), ("name", name), ("active", active)) if v is not None})

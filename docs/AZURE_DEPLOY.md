@@ -306,8 +306,12 @@ Restart the app after adding either.
 
 **The token is an admin key (GP's decision, 27 Nov 2026).** Whoever holds it can do, through an assistant, everything an
 Admin can do in the app: change rates, upload and remove fabrics, apply mill cost sheet drafts, mark alerts seen, record
-and remove negotiation steps, and add people, change their roles and switch them off. Keep it as you keep the Azure
-password: only in the app setting and in your own Claude Desktop settings, never in an e-mail, a chat or a file you share.
+and remove negotiation steps, and add people and change their roles. Keep it as you keep the Azure password: only in the
+app setting and in your own Claude Desktop settings, never in an e-mail, a chat or a file you share.
+
+**Stay named in `RIGHTPRICE_ADMINS`.** The assistant does not switch off an admin or take Admin away from one (a person
+does that on Users and roles), so it cannot lock the admins out; but keep your own address in the app setting all the
+same: an admin named there is always let in as Admin, whatever happens to the list of people.
 
 ### The MCP endpoint and Microsoft sign-in
 
@@ -352,10 +356,13 @@ through the sign-in, and is then protected by the token alone: every request mus
   variables) and restart the app. `/mcp` then answers 404 to everything; nothing else on the site changes.
 - **If the token may have been seen by someone else:** make a new one (step 1), put it in the app setting in place
   of the old one, and restart. The old token stops working at once; put the new one in your Claude Desktop settings.
-- **To see what the assistant changed:** every change it makes is recorded as "AI assistant": on Users and roles
-  (Record of changes) for people and roles; in a fabric's Log for tracker steps; in the rate master's versions
-  (`/api/store` shows who saved the one in use) for rates; on the fabric list and Mill cost sheets for uploads.
-  There is one token, so the record cannot say which person was behind the assistant.
+- **To see what the assistant changed:** on the database (the live site), every change it makes is recorded as "AI
+  assistant": on Users and roles (Record of changes) for people and roles; in a fabric's Log for tracker steps; in
+  the rate master's versions (`/api/store` shows who saved the one in use) for rates; on the fabric list, Mill cost
+  sheets and the dated yarn rates for what was added or removed. There is one token, so the record cannot say which
+  person was behind the assistant. Not recorded by name, on the screens either: who removed mill cost sheet rows (they
+  are deleted), and who brought in a PDF or picture kept as a price source (it is named by its time). On the files
+  (no `DATABASE_URL`) only tracker steps and mill cost sheet rows keep who made them; the assistant's answers say so.
 - The assistant is not on the admin page's list of people and its column there cannot be unticked: it is a fixed
   role in the code, and the token is the switch. `RIGHTPRICE_ADMINS` does not affect it (it needs its token, and
   only its token).
@@ -382,9 +389,10 @@ runs on your computer and adds the token to every request. It needs Node.js (nod
    in it (`Bearer THE-TOKEN`) when it starts `npx`, and `mcp-remote` puts `${AUTH_HEADER}` back together.
 3. Quit Claude Desktop fully (also from the tray icon) and open it again. RightPrice's tools show under the tools
    icon in a new chat. Ask "What is the store status of RightPrice?" to try it.
-4. Claude Desktop asks before each tool that changes something (they are marked as such); read what it says it will
-   change before you allow it. The assistant is told to change a rate only when you ask for that change, and to say
-   the old and the new figure first.
+4. Claude Desktop asks before each tool that changes something (they are marked as such), and before each tool that
+   makes RightPrice's server fetch a web address (Bring in prices from a page or an endpoint) or sends fabric figures
+   to Anthropic (a draft to a mill, when the Claude key is set); read what it says before you allow it. The assistant
+   is told to change a rate only when you ask for that change, and to say the old and the new figure first.
 
 Tried by the build session on 27 Nov 2026 against the app on its own machine (not the live site): `mcp-remote` 0.1.37
 and 0.17.1 with exactly these arguments, listing the tools (40 then; 46 since stage 5's dated rates), reading a rate table and adding a cotton price (saved as
@@ -405,14 +413,20 @@ Each tool does what one address of the screens does, through the same rule, with
   the yarn master, cotton prices; the dated yarn rates and what loading the market history would give; the Dashboard's
   panels and what negotiation has won; the pilot results; mill cost sheets and their drafts; Users and roles with the
   record of changes; where the data is kept (`store_status`); cost a filled template (nothing kept).
-- **Change (Claude Desktop asks first):** edit a rate table (cell by cell, giving the old and new figure, or the whole
-  table; the version before is kept); add a cotton price; Bring in prices (read a file, a page or a JSON endpoint, map
-  its columns, add the checked rows to the market reference or as dated yarn rates); enter or remove a dated yarn
-  rate, load the market history's dated rates; upload a mill's sheet or a template to the fabric list, add one fabric,
-  remove rows; upload and remove mill cost sheets and apply their drafts; mark alerts seen or bring them back; record
-  a tracker step, undo its own, or remove any step; add a person, change a role or name, switch someone off or on,
-  change what a role may do (the last admin in the list stays an admin).
-- **Draft a message to a mill** (nothing is sent or kept).
+- **Change (Claude Desktop asks first):** edit a rate table (cell by cell, giving the figure the table holds now and
+  the new one; or the whole table, only with the stamp of the table it read, every column given; a figure moved to
+  more than twice or under half what it was needs your explicit yes; no rate below zero, or of zero where a rate is
+  always paid, on the screen too; the version before is kept); add a cotton price; Bring in prices (read a file, a
+  public page or a public JSON endpoint, never this machine, a private network or the cloud's own addresses, and never
+  with a sign-in header; map its columns; add the checked rows to the market reference or as dated yarn rates); enter
+  or remove a dated yarn rate, load the market history's dated rates; upload a mill's sheet or a template to the
+  fabric list, add one fabric, remove rows; upload and remove mill cost sheets, and apply their drafts on the figures
+  you were told (a draft that moved since is refused, on the screen too); mark alerts seen or bring them back; record a
+  tracker step (two at the same moment: one is kept), undo its own, or remove any step; add a person, change a role or
+  name, switch someone on, change what a role may do. The last admin in the list stays an admin, and the assistant
+  does not switch off an admin or take Admin away.
+- **Draft a message to a mill** (nothing is sent to the mill or kept; with the Claude key set, the figures go to
+  Anthropic's API to write it, so Claude Desktop asks first).
 
 A file (a mill's sheet, a price list) is given to a tool as base64 with its name. **Not tried:** whether Claude
 Desktop can hand a file you attach to a tool that way (it may see only the file's text). If it cannot, upload the file

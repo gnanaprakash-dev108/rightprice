@@ -202,7 +202,8 @@ PAGE_USES = {
 ASSISTANT_ALLOWED = set(DEFAULTS[ADMIN])
 ASSISTANT_NOTE = ("The MCP token: one fixed role with the Admin role's permissions (GP's decision, 27 Nov 2026). Through it an "
                   "assistant can do what an Admin can: change rates, upload and remove rows, apply drafts, mark alerts seen, "
-                  "record and remove negotiation steps, draft messages, and add people and change roles. Each tool goes through "
+                  "record and remove negotiation steps, draft messages, and add people and change roles (switching off an admin, or "
+                  "taking Admin away, stays with a person, so the admins cannot be locked out). Each tool goes through "
                   "the permission of the screen's address it mirrors, and every change is recorded as \"AI assistant\". It is "
                   "not changed here: it is switched on and off by the app setting RIGHTPRICE_MCP_TOKEN.")
 MARKS_NOTE = ("Each person's own marks (Status and Remarks in Right cost, saved searches, Library lists) are still kept in "
@@ -584,6 +585,10 @@ def change_person(payload, headers=None, assistant=False):
         stays_admin = new.get("role", old["role"]) == ADMIN and new.get("active", old["active"])
         if old["role"] == ADMIN and old["active"] and not stays_admin and data_users.active_admins(c) == [email]:
             raise Refused(400, f"{email} is the last admin in the list, so they stay an admin. Make someone else Admin first.")
+        if assistant and old["role"] == ADMIN and old["active"] and not stays_admin:
+            # two calls (add someone as Admin, switch the other off) would otherwise lock the admins out
+            raise Refused(403, f"The AI assistant does not switch off an admin or take Admin away from them: a person does that on "
+                               f"Users and roles. {email} stays an admin. Nothing was changed.")
         data_users.update(c, email, at, who, **new)
         if "role" in new:
             data_users.log(c, at, who, "role changed", email, {"from": old["role"], "to": new["role"]})

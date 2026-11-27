@@ -85,6 +85,25 @@ def costsheet_apply(payload: dict, who: str = ""):
     picked = [d for d in drafts if d["id"] in chosen]
     if not picked:
         raise common.Refused(400, "Those drafts are no longer there; reload the page")
+    # the figures the person was shown (expect: {draft id: {now, proposed}}): a draft that moved since (more sheets came
+    # in, or a rate was changed) is not applied on the strength of figures nobody saw
+    expect = payload.get("expect") if isinstance(payload.get("expect"), dict) else {}
+    show = lambda d, v: f"{float(v) * 100:.1f}%" if d["pct"] else f"Rs {float(v):g}"
+    moved = []
+    for d in picked:
+        e = expect.get(d["id"])
+        if e is None:
+            continue
+        try:
+            same = abs(float(e["now"]) - d["now"]) <= 1e-6 and abs(float(e["proposed"]) - d["proposed"]) <= 1e-6
+        except (KeyError, TypeError, ValueError):
+            same = False
+        if not same:
+            moved.append(f"{d['label']} is now {show(d, d['now'])} to {show(d, d['proposed'])}" + (
+                f", not {show(d, e['now'])} to {show(d, e['proposed'])}" if isinstance(e, dict) and "now" in e and "proposed" in e else ""))
+    if moved:
+        raise common.Refused(409, "A draft has changed since it was shown (more sheets came in, or a rate was changed): " + "; ".join(moved)
+                                  + ". Look at the drafts again; nothing was applied.")
     m2 = {k: v.copy() for k, v in m.items()}
     try:
         log = costsheet.apply(m2, picked, chosen)

@@ -162,14 +162,63 @@ def read_table_file(name, data):
     return pd.read_excel(io.BytesIO(data), sheet_name=None)
 
 
+def not_public(url):
+    """Why RightPrice will not fetch this address, or None. RULE: Bring in prices reads public web addresses only, over
+    http or https: never this machine (localhost, 127.x), a private network (10.x, 172.16-31.x, 192.168.x), a link-local
+    address (169.254.x, where the cloud's metadata and identity endpoints answer), or this site's own address. Every
+    address the host name stands for is checked, and every address a page sends RightPrice on to (fetch_link, fetch_api)."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlsplit
+    try:
+        p = urlsplit(str(url or "").strip())
+        host, port = (p.hostname or "").lower().rstrip("."), p.port
+    except ValueError:
+        return "That is not a web address."
+    if p.scheme.lower() not in ("http", "https") or not host:
+        return "Only web addresses starting http:// or https:// are read."
+    own = (os.environ.get("WEBSITE_HOSTNAME") or "").lower()
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")) or (own and host == own):
+        return f"{host} is not a public address: Bring in prices reads public pages only."
+    try:
+        found = {i[4][0] for i in socket.getaddrinfo(host, port or (443 if p.scheme.lower() == "https" else 80), type=socket.SOCK_STREAM)}
+    except (OSError, UnicodeError, ValueError):
+        return f"{host} could not be found."
+    for a in found:
+        ip = ipaddress.ip_address(a.split("%", 1)[0])
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        if not ip.is_global or ip.is_multicast or ip.is_reserved:
+            return (f"{host} is not a public address (this machine, a private network, or the cloud's own link-local network): "
+                    "Bring in prices reads public pages only.")
+    return None
+
+
+def _get(url, headers=None, timeout=20):
+    """GET a public address, following where it sends RightPrice on (at most five times), each address checked by
+    not_public. A header given by the person goes to the first host only."""
+    import requests
+    from urllib.parse import urljoin, urlsplit
+    first = urlsplit(url).hostname
+    for _ in range(6):
+        why = not_public(url)
+        if why:
+            raise ValueError(why)
+        mine = (headers or {}) if urlsplit(url).hostname == first else {}
+        r = requests.get(url, timeout=timeout, allow_redirects=False, headers=dict({"User-Agent": "Mozilla/5.0 (price reader)"}, **mine))
+        if r.is_redirect and r.headers.get("location"):
+            url = urljoin(url, r.headers["location"])
+            continue
+        r.raise_for_status()
+        return r, url
+    raise ValueError("the page sends RightPrice on too many times")
+
+
 def fetch_link(url, timeout=20):
     """Public web page -> (list of tables, plain text). Pages behind a login will not work."""
-    import requests
     from bs4 import BeautifulSoup
     if not re.match(r"^https?://", url):
         url = "https://" + url
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (price reader)"})
-    r.raise_for_status()
+    r, url = _get(url, timeout=timeout)
     ctype = r.headers.get("content-type", "").lower()
     if "pdf" in ctype or url.lower().endswith(".pdf"):
         return "pdf", r.content
@@ -183,10 +232,8 @@ def fetch_link(url, timeout=20):
 
 def fetch_api(url, header_name=None, header_value=None, timeout=20):
     """JSON endpoint -> flat table. The key is used for this call only and is not stored."""
-    import requests
     headers = {header_name: header_value} if header_name and header_value else {}
-    r = requests.get(url, headers=headers, timeout=timeout)
-    r.raise_for_status()
+    r, _ = _get(url, headers=headers, timeout=timeout)
     payload = r.json()
     if isinstance(payload, dict):  # use the first list found inside the reply
         lists = [v for v in payload.values() if isinstance(v, list)]
