@@ -1,6 +1,7 @@
 # Runs on every pull request, so nothing is merged unless the engine still matches the V1 workbook, the server still
 # gives the engine's numbers on the files, on SQLite and on PostgreSQL, and the move from files to a database gives
-# exactly the same answers. It deploys nothing, and never touches the live database.
+# exactly the same answers, and every page of the front end opens in a browser. It deploys nothing, and never touches
+# the live database.
 name: Checks
 
 on:
@@ -42,3 +43,7 @@ jobs:
         run: python check_server.py
       - name: Front end script parses
         run: for f in web/rightcost.js web/pages/*.js; do node --check "$f" || exit 1; done
+      - name: A browser for the screen checks (not needed by the app itself)
+        run: pip install playwright && python -m playwright install --with-deps chromium
+      - name: Every page opens in a browser, light and dark and at phone width, and the main paths work
+        run: python check_browser.py
