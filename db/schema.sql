@@ -13,6 +13,8 @@
 --   3. Every costing is stored with the rate version (and, from stage 5, the rate date) that produced it, so a figure can be reproduced.
 
 -- ---------------------------------------------------------------- people and what they may do (stage 3)
+-- In use since stage 3: db/003_users_and_roles.sql, which differs from this draft: app_user keyed by e-mail, the roles
+-- and their default permissions in rules/access.py, role_permission holding only what admins changed, and audit_log.
 CREATE TABLE role (
     id          serial PRIMARY KEY,
     name        text NOT NULL UNIQUE                      -- Admin, Buyer, Viewer, Assistant (the MCP token)
