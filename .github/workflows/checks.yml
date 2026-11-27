@@ -1,5 +1,6 @@
-# Runs on every pull request, so nothing is merged unless the engine still matches the V1 workbook
-# and the server still gives the engine's numbers. It deploys nothing.
+# Runs on every pull request, so nothing is merged unless the engine still matches the V1 workbook, the server still
+# gives the engine's numbers on the files, on SQLite and on PostgreSQL, and the move from files to a database gives
+# exactly the same answers. It deploys nothing, and never touches the live database.
 name: Checks
 
 on:
@@ -12,6 +13,21 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:                         # a throwaway PostgreSQL 16, the version of the Azure database
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: checks
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RIGHTPRICE_TEST_DATABASE_URL: postgresql://postgres:checks@localhost:5432/postgres
+      RIGHTPRICE_CHECK_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,7 +38,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Engine matches the V1 workbook
         run: python check_engine.py
-      - name: Server gives the engine's numbers
+      - name: Server gives the engine's numbers on files, SQLite and PostgreSQL; the move to a database changes nothing
         run: python check_server.py
       - name: Front end script parses
         run: node --check web/app.js && node --check web/rightcost.js
