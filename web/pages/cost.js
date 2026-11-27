@@ -5,7 +5,7 @@
    What the other tabs of the popup need from it (the steps, the stance words, opening a fabric) is RP.cost. */
 (function () {
   "use strict";
-  const { $, h, svg, fmt, rs, day, pct, pctSigned, blank, postJSON, download, toast, withTip, dataTable, GROUP_COLOR } = RP.kit;
+  const { $, h, svg, fmt, rs, day, pct, pctSigned, blank, postJSON, download, toast, withTip, dataTable, GROUP_COLOR, can } = RP.kit;
   const state = RP.state;
   let costBox = null;                      // the popup's box the page is drawn in: its size is what the window's was in the frame
   const boxWidth = () => costBox && costBox.isConnected ? costBox.clientWidth : innerWidth;
@@ -308,7 +308,7 @@
       h("div", { class: "hero-row" },
         h("div", {}, h("div", { class: "lbl" }, title ? title + " · " : "", "ex-mill should-cost"), h("div", { class: "big num" }, `${rs(res.total_per_m)} / m`)),
         h("div", { class: "row-actions", style: "margin:0" },
-          h("button", { class: "btn primary", onclick: async e => { const b = e.currentTarget; b.disabled = true; try { const r = await (await postJSON("/api/list/add", Object.assign({}, payload(sel), state.listId ? { _id: state.listId } : {}))).json(); toast(state.listId ? "Row updated in the list" : "Added to the list under Bulk upload"); state.listId = r.id; RP.shell.listChanged(); state.list = null; b.textContent = "Update in list"; } catch (err) { toast("Not added: " + err.message, false); } b.disabled = false; } }, state.listId ? "Update in list" : "Add to list"),
+          !can("do:upload") ? null : h("button", { class: "btn primary", onclick: async e => { const b = e.currentTarget; b.disabled = true; try { const r = await (await postJSON("/api/list/add", Object.assign({}, payload(sel), state.listId ? { _id: state.listId } : {}))).json(); toast(state.listId ? "Row updated in the list" : "Added to the list under Bulk upload"); state.listId = r.id; RP.shell.listChanged(); state.list = null; b.textContent = "Update in list"; } catch (err) { toast("Not added: " + err.message, false); } b.disabled = false; } }, state.listId ? "Update in list" : "Add to list"),
           h("button", { class: "btn", onclick: async () => { try { await download(await postJSON("/api/cost-sheet", payload(sel)), `Should cost ${sel["Fabric code"] || "fabric"}.xlsx`); } catch (err) { toast(err.message, false); } } }, "Download cost sheet"),
           h("button", { class: "btn", onclick: printSheet }, "Print"))),
       h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} × ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
@@ -358,17 +358,21 @@
     return [hero, odd, res.brief ? briefCard(res.brief, sel) : null, yarnSim(res, sel), moved, warn, chart, tableView, choices, ratesView].filter(Boolean);
   }
 
+  // the margin the cost prints with: set only while the cost is what is printed, so no other page's print changes
+  const pageMargin = () => { const st = h("style", {}, "@page { margin: 14mm; }"); document.head.append(st); return st; };
+  const costOpen = () => { const pop = document.querySelector(".scrim[data-popup]"); return !!pop && pop.dataset.tab === "cost" && !!document.querySelector(".cost-out"); };
   // printed from the browser's own menu: open the tables too, so nothing prints as an empty heading
-  addEventListener("beforeprint", () => { if (document.body.classList.contains("printing")) return; const closed = [...document.querySelectorAll(".cost-out details:not([open])")]; closed.forEach(d => { d.open = true; }); addEventListener("afterprint", () => closed.forEach(d => { d.open = false; }), { once: true }); });
+  addEventListener("beforeprint", () => { if (document.body.classList.contains("printing") || !costOpen()) return; const closed = [...document.querySelectorAll(".cost-out details:not([open])")]; closed.forEach(d => { d.open = true; }); const st = pageMargin(); addEventListener("afterprint", () => { closed.forEach(d => { d.open = false; }); st.remove(); }, { once: true }); });
   /* Print the cost on paper or to PDF: the result pane only, in light colours, with every table opened. */
   function printSheet() {
     const root = document.documentElement, theme = root.dataset.theme;
     const closed = [...document.querySelectorAll(".cost-out details:not([open])")];
     closed.forEach(d => { d.open = true; });
     root.dataset.theme = "light"; document.body.classList.add("printing");
+    const margin = pageMargin();
     const stamp = h("p", { class: "print-stamp" }, `RightPrice ex-mill should-cost · printed ${day(new Date())} · on the rates in the rate master that day`);
     $(".cost-out").prepend(stamp);
-    const done = () => { root.dataset.theme = theme; document.body.classList.remove("printing"); closed.forEach(d => { d.open = false; }); stamp.remove(); removeEventListener("afterprint", done); };
+    const done = () => { root.dataset.theme = theme; document.body.classList.remove("printing"); closed.forEach(d => { d.open = false; }); stamp.remove(); margin.remove(); removeEventListener("afterprint", done); };
     addEventListener("afterprint", done);
     setTimeout(() => print(), 60);
   }

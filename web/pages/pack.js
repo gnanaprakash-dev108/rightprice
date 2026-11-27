@@ -3,7 +3,7 @@
    questions to ask. Printable on one A4 landscape page for a sheet of up to about twenty rows. */
 (function () {
   "use strict";
-  const { h, fmt, rs, day, pctSigned, plural, postJSON } = RP.kit;
+  const { h, fmt, rs, day, pctSigned, plural, postJSON, can } = RP.kit;
   const state = RP.state;
   const STANCE_ORDER = { push: 0, ask: 1, check: 2, below: 3, fair: 4 };
 
@@ -32,7 +32,7 @@
     pick.addEventListener("change", () => { ui.scope = pick.value; draw(); });
     await draw();
     return [h("div", { class: "pack-tools" }, h("label", { for: "pack-scope", class: "sub", style: "margin:0" }, "Rows:"), pick,
-      h("button", { class: "btn primary", type: "button", onclick: printPack }, "Print"), h("a", { class: "btn small", href: "#bulk", onclick: e => { e.preventDefault(); ctx.tab("bulk"); } }, "Back to the list")), body];
+      h("button", { class: "btn primary", type: "button", onclick: printPack }, "Print"), can("page:list") ? h("a", { class: "btn small", href: "#bulk", onclick: e => { e.preventDefault(); ctx.tab("bulk"); } }, "Back to the list") : null), body];
   });
 
   function packView(p, move, scopeNote) {

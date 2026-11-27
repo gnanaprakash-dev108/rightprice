@@ -3,12 +3,12 @@
    benchmark except panel 5, which says so. */
 (function () {
   "use strict";
-  const { h, fmt, rs, day, pct, pctSigned, plural, getJSON, postJSON, toast, withTip, dataTable, pageHead, GROUP_COLOR } = RP.kit;
+  const { h, fmt, rs, day, pct, pctSigned, plural, getJSON, postJSON, toast, withTip, dataTable, pageHead, GROUP_COLOR, can } = RP.kit;
   const state = RP.state;
 
   // a mill's name, opening its supplier page
   function millLink(name, key) {
-    if (!key) return name;
+    if (!key || !can("page:rightcost")) return name;
     return h("button", { type: "button", class: "linkish", title: "Open this mill's page: fabrics, money above the range, questions for the meeting", onclick: () => RP.shell.go("supplier/" + encodeURIComponent(key)) }, name);
   }
   // a gap is coloured only where the tool can be leaned on; elsewhere it is shown plainly with a caution
@@ -40,7 +40,7 @@
           const hit = d.filter(x => Math.abs(x) >= 0.005).length;
           // the list is a tab of the New cost popup: the move goes with it
           const toList = () => { try { if (p) sessionStorage.setItem("rp-list-move", JSON.stringify({ yarn: key, pct: String(p) })); else sessionStorage.removeItem("rp-list-move"); } catch (e) { /* no handover */ } };
-          parts[1] = h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Your ${moved.length} listed fabrics, average`), h("b", { class: "num" }, `${rs(base)} → ${rs(base + avg)}`), h("span", { class: "tag " + (avg > 0.005 ? "down" : avg < -0.005 ? "up" : "flat") }, `${avg >= 0 ? "+" : "−"}${fmt(Math.abs(avg))} /m (${pctSigned(base ? avg / base * 100 : 0)})`), h("a", { href: "#bulk", class: "sub", style: "margin:0", onclick: toList }, p === 0 ? "see each in the list" : `${hit} of ${moved.length} use this yarn and move · see each in the list`));
+          parts[1] = h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, `Your ${moved.length} listed fabrics, average`), h("b", { class: "num" }, `${rs(base)} → ${rs(base + avg)}`), h("span", { class: "tag " + (avg > 0.005 ? "down" : avg < -0.005 ? "up" : "flat") }, `${avg >= 0 ? "+" : "−"}${fmt(Math.abs(avg))} /m (${pctSigned(base ? avg / base * 100 : 0)})`), can("page:list") ? h("a", { href: "#bulk", class: "sub", style: "margin:0", onclick: toList }, p === 0 ? "see each in the list" : `${hit} of ${moved.length} use this yarn and move · see each in the list`) : p === 0 ? null : h("span", { class: "sub", style: "margin:0" }, `${hit} of ${moved.length} use this yarn and move`));
         } catch (e) { parts[1] = h("div", { class: "whatif-fig" }, h("span", { class: "lbl" }, "Your listed fabrics"), h("span", { class: "sub", style: "margin:0" }, e.message)); }
       }
       out.replaceChildren(...parts);
@@ -63,27 +63,28 @@
       const box = h("div", { class: "card alerts", hidden: true });
       const seen = async body => { try { const a = await (await postJSON("/api/alerts/seen", body)).json(); last = JSON.stringify(a); paint(a); RP.shell.alertsChanged(); } catch (e) { toast(e.message, false); } };
       const open = { all: false, groups: new Set() };            // what the buyer has unfolded
+      const marks = can("do:mark_seen"), toRightCost = can("page:rightcost");      // what this role may do (stage 3)
       const paint = a => {
         box.hidden = !a.count && !a.seen; box.classList.toggle("quiet", !a.count);
-        if (!a.count) { box.replaceChildren(h("p", { class: "sub", style: "margin:0" }, `No quote alerts to look at. ${plural(a.seen, "alert")} marked seen. `, h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them back"))); return; }
+        if (!a.count) { box.replaceChildren(h("p", { class: "sub", style: "margin:0" }, `No quote alerts to look at. ${plural(a.seen, "alert")} marked seen. `, marks ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them back") : null)); return; }
         const kinds = Object.entries(a.by_kind).filter(([, n]) => n).map(([k, n]) => `${n} ${a.kinds[k].toLowerCase()}`).join("; ");
         const money = [a.above_rows ? `Rs ${fmt(a.above_money, 0)} is quoted above the usual ranges on ${plural(a.above_rows, "row")}.` : null,
           a.sums_rows ? `On ${plural(a.sums_rows, "row")} the mills' own sums come to Rs ${fmt(a.sums_money, 0)} less than they ask` + (a.above_rows ? " (largely the same rupees seen another way: do not add the two)." : ".") : null,
           a.no_quantity ? `${plural(a.no_quantity, "flagged row")} with no quantity ${a.no_quantity === 1 ? "is" : "are"} in neither figure.` : null,
           a.repeat_rows ? `${plural(a.repeat_rows, "row")} repeating another order ${a.repeat_rows === 1 ? "is" : "are"} in neither figure either: if one is a real second order, its rupees are on its own line below.` : null].filter(Boolean).join(" ");
         const groups = open.all ? a.groups : a.groups.slice(0, 3);
-        const row = r => h("li", {}, h("button", { type: "button", class: "linkish", title: "Open this fabric", onclick: () => RP.shell.go("item/" + encodeURIComponent(r.key)) }, r.code),
+        const row = r => h("li", {}, toRightCost ? h("button", { type: "button", class: "linkish", title: "Open this fabric", onclick: () => RP.shell.go("item/" + encodeURIComponent(r.key)) }, r.code) : h("b", {}, r.code),
           ...r.flags.map(f => h("div", { class: "alert-flag" }, h("span", { class: "tag " + (f.kind === "low" || f.kind === "repeat" ? "warn" : "down") }, a.kinds[f.kind]), " " + f.text)));
         box.replaceChildren(...[h("div", { class: "card-head" }, h("div", {}, h("h2", {}, `${plural(a.count, "new quote")} to look at`),
             h("div", { class: "sub", style: "margin:2px 0 0" }, `Rows of the fabric list that need a look before their price is accepted: ${kinds}. ${money}`)),
-            h("button", { type: "button", class: "btn", onclick: () => RP.shell.showAlerts() }, "Show them in Right cost")),
+            toRightCost ? h("button", { type: "button", class: "btn", onclick: () => RP.shell.showAlerts() }, "Show them in Right cost") : null),
           ...groups.map(g => { const gk = g.mill + "|" + g.upload, rows = open.groups.has(gk) ? g.rows : g.rows.slice(0, 3);
             return h("div", { class: "alert-group" }, h("div", { class: "alert-head" }, h("b", {}, millLink(g.supplier, g.mill)), h("span", { class: "sub", style: "margin:0" }, ` · ${g.upload} · ${plural(g.rows.length, "fabric")}`),
-              h("button", { type: "button", class: "btn small", onclick: () => seen({ ids: g.rows.map(r => r.id) }) }, g.rows.length === 1 ? "Mark seen" : `Mark all ${g.rows.length} seen`)),
+              marks ? h("button", { type: "button", class: "btn small", onclick: () => seen({ ids: g.rows.map(r => r.id) }) }, g.rows.length === 1 ? "Mark seen" : `Mark all ${g.rows.length} seen`) : null),
               h("ul", { class: "alert-list" }, ...rows.map(row)),
               g.rows.length > rows.length ? h("button", { type: "button", class: "linkish", onclick: () => { open.groups.add(gk); paint(a); } }, `Show the other ${g.rows.length - rows.length} from this upload (the largest sums are shown)`) : null); }),
           a.groups.length > groups.length ? h("p", { style: "margin:12px 0 0" }, h("button", { type: "button", class: "linkish", onclick: () => { open.all = true; paint(a); } }, `Show ${plural(a.groups.length - groups.length, "more upload")} (${plural(a.groups.slice(3).reduce((n, g) => n + g.rows.length, 0), "fabric")})`)) : null,
-          h("p", { class: "sub", style: "margin:10px 0 0" }, "The newest upload is first. Worked out from the list as it stands, on today's rates. An alert goes when it is marked seen (for everyone), when its row is removed, or when its price is agreed in the tracker." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them all back") : null)].filter(Boolean));
+          h("p", { class: "sub", style: "margin:10px 0 0" }, "The newest upload is first. Worked out from the list as it stands, on today's rates. An alert goes when it is marked seen (for everyone), when its row is removed, or when its price is agreed in the tracker." + (a.seen ? ` ${plural(a.seen, "alert")} marked seen. ` : ""), a.seen && marks ? h("button", { type: "button", class: "linkish", onclick: () => seen({ restore: true }) }, "Bring them all back") : null)].filter(Boolean));
       };
       let last = JSON.stringify(await getJSON("/api/alerts")); paint(JSON.parse(last));
       nodes.push(box);
@@ -116,7 +117,7 @@
     const yrs = ins.cotton_years.filter(y => y.year >= 2022), ytop = Math.max(...yrs.map(y => y.average), 1), last = yrs[yrs.length - 1];
     nodes.push(h("div", { class: "card" }, h("div", { class: "card-head" }, h("div", {}, h("h2", {}, "3. Cost trend, 2022 to 2026: cotton"), h("div", { class: "sub", style: "margin:2px 0 0" }, "Shankar-6 cotton, average of the year, rupees per candy. Cotton is the trend the tool has data for; the yarn rates are of one date (Nov 2026), so a fabric cost per metre for earlier years cannot be drawn yet."))),
       h("div", { class: "bars" }, yrs.map((y, i) => { const prev = yrs[i - 1]; const chg = prev ? y.average / prev.average - 1 : null; const el = h("div", { class: "bar-row grp", tabindex: "0" }, h("span", { class: "year num" }, String(y.year)), h("div", { class: "bar", style: `width:${y.average / ytop * 56}%;background:var(--g1)` }), h("span", { class: "bar-text" }, h("span", { class: "bar-amt num" }, `Rs ${fmt(y.average, 0)}`), chg === null ? null : h("span", { class: "bar-pct num" }, `${pctSigned(chg * 100)} on ${prev.year}`), y === last ? h("span", { class: "bar-pct" }, `to ${day(y.to)}`) : null)); withTip(el, () => `<b>${y.year}</b>average Rs ${fmt(y.average, 0)} per candy<br>low Rs ${fmt(y.low, 0)}, high Rs ${fmt(y.high, 0)}`); return el; })),
-      h("p", { class: "sub", style: "margin:10px 0 0" }, "To see what a yarn move does to a fabric, use “If yarn prices move” above, or on Create cost. ", h("a", { href: "#cotton" }, "Cotton prices in full"))));
+      h("p", { class: "sub", style: "margin:10px 0 0" }, "To see what a yarn move does to a fabric, use “If yarn prices move” above, or on Create cost. ", can("page:prices") ? h("a", { href: "#cotton" }, "Cotton prices in full") : null)));
 
     nodes.push(askCard(ins));
 

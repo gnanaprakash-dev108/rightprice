@@ -3,7 +3,7 @@
    ticked to open, compare or remove them; the list stays until rows are removed. */
 (function () {
   "use strict";
-  const { $, h, fmt, day, pctSigned, plural, blank, api, postJSON, download, toast, pageHead } = RP.kit;
+  const { $, h, fmt, day, pctSigned, plural, blank, api, postJSON, download, toast, pageHead, can } = RP.kit;
   const state = RP.state;
 
   RP.page("bulk", { title: "Bulk upload", popup: true }, async (arg, ctx) => {
@@ -20,6 +20,8 @@
     const stakeOf = r => { const g = gapOf(r); return g.rs === null || g.rs === undefined || !r.quantity ? null : Math.round(Math.round(g.rs * 100) / 100 * r.quantity); };
     const rowStance = r => r.brief ? (r.brief.implausible ? "check" : stanceFor(r.brief, gapOf(r).pct)) : null;
     const box = h("div"), status = h("div", { "aria-live": "polite" });
+    // what this role may do (stage 3): open a row in Create cost, compare, make a pack, upload and remove rows
+    const may = { cost: can("page:cost"), pack: can("page:pack"), change: can("do:upload") };
     let data = null;
     const load = async () => {
       const moves = ui.pct !== "" && Number(ui.pct) ? { [ui.yarn]: Number(ui.pct) } : null;
@@ -59,7 +61,7 @@
         const simCells = sim ? [h("td", { class: "n rp" }, r.simulated === null ? "" : fmt(r.simulated)), h("td", { class: "n rp" }, r.simulated === null || r.should_cost === null ? "" : Math.abs(r.simulated - r.should_cost) < 0.005 ? "no change" : `${r.simulated - r.should_cost >= 0 ? "+" : "−"}${fmt(Math.abs(r.simulated - r.should_cost))}`)] : [];
         return h("tr", { class: ui.picked.has(r.id) ? "picked" : null },
           h("td", { class: "stick s0" }, tick),
-          h("td", { class: "stick s1" }, h("button", { type: "button", class: "linkish", title: "Open in Create cost", onclick: () => openRow(r) }, r.mill["Fab Code"] || "(no code)")),
+          h("td", { class: "stick s1" }, may.cost ? h("button", { type: "button", class: "linkish", title: "Open in Create cost", onclick: () => openRow(r) }, r.mill["Fab Code"] || "(no code)") : h("b", {}, r.mill["Fab Code"] || "(no code)")),
           h("td", { class: "n rp stick s2" }, sc), ...simCells, h("td", { class: "n rp" }, blank(price) ? "" : fmt(price)), h("td", { class: "n rp" }, gap), h("td", { class: "n rp" }, stake === null ? "" : (stake < 0 ? "−" : "") + "Rs " + fmt(Math.abs(stake), 0)), h("td", { class: "rp" }, stanceCell(r)), h("td", { class: "rp" }, sums),
           h("td", { class: "rp remarks" }, rem.length ? rem.map(x => h("div", {}, x)) : ""),
           cols.map(c => h("td", { class: "millcol" + (typeof r.mill[c] === "number" ? " n" : "") }, cell(c, r.mill[c]))));
@@ -90,7 +92,7 @@
           `in line ${part("fair").length}, ${money(sumOf(part("fair")))} net; `,
           `below ${part("below").length}, Rs ${fmt(Math.abs(sumOf(part("below"))), 0)} under should-cost; `,
           `ask for the break-up ${part("ask").length}${part("check").length ? ` and check the quote ${part("check").length}` : ""}, not counted because the tool is unsure of them or the quote needs checking.`] : null,
-        " Red: above the usual range for that fabric type (Push); grey: inside it. ", h("a", { href: "#pack", onclick: toPack }, "The negotiation pack"), " puts this on one printable page.") : null;
+        " Red: above the usual range for that fabric type (Push); grey: inside it.", may.pack ? [" ", h("a", { href: "#pack", onclick: toPack }, "The negotiation pack"), " puts this on one printable page."] : null) : null;
       box.replaceChildren(...[
         h("div", { class: "list-tools" },
           h("div", { class: "chips", role: "group", "aria-label": "Rows to show" }, chip("all", "All"), chip("above", "Push"), chip("notcosted", "Not costed"), chip("sums", "Mill's sums off")),
@@ -100,13 +102,13 @@
         h("div", { class: "list-tools" },
           h("div", { class: "simbar" }, h("span", { class: "sub", style: "margin:0" }, "If yarn moves:"), yarnPick, pctBox, h("span", {}, "%"), ui.pct !== "" && Number(ui.pct) ? h("button", { class: "btn small", type: "button", onclick: () => { ui.pct = ""; load(); } }, "Clear") : null),
           h("div", { class: "actionbar" + (n ? " on" : "") }, h("b", {}, n ? `${n} selected` : "Tick rows to act on them"),
-            h("button", { class: "btn small", type: "button", disabled: n !== 1 || null, onclick: () => openRow(picked[0]) }, "Open"),
-            h("button", { class: "btn small", type: "button", disabled: n !== 2 || null, title: "Tick exactly two rows", onclick: () => { state.cmp = { a: picked[0].id, b: picked[1].id }; try { sessionStorage.setItem("rp-compare-ids", JSON.stringify([picked[0].id, picked[1].id])); } catch (e) { /* no handover */ } ctx.tab("compare"); } }, "Compare"),
-            h("button", { class: "btn small danger", type: "button", disabled: !n || null, onclick: async e => {
+            may.cost ? h("button", { class: "btn small", type: "button", disabled: n !== 1 || null, onclick: () => openRow(picked[0]) }, "Open") : null,
+            !may.cost ? null : h("button", { class: "btn small", type: "button", disabled: n !== 2 || null, title: "Tick exactly two rows", onclick: () => { state.cmp = { a: picked[0].id, b: picked[1].id }; try { sessionStorage.setItem("rp-compare-ids", JSON.stringify([picked[0].id, picked[1].id])); } catch (e) { /* no handover */ } ctx.tab("compare"); } }, "Compare"),
+            !may.change ? null : h("button", { class: "btn small danger", type: "button", disabled: !n || null, onclick: async e => {
               if (e.currentTarget.dataset.sure !== "1") { const b = e.currentTarget; b.dataset.sure = "1"; b.textContent = `Remove ${n}: sure?`; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
               try { const r = await (await postJSON("/api/list/remove", { ids: [...ui.picked] })).json(); ui.picked.clear(); toast(`${r.removed} removed from the list`); load(); } catch (err) { toast(err.message, false); }
             } }, "Remove"),
-            h("a", { class: "btn small", href: "#pack", title: "One printable page for the sheet: ticked rows, or the whole list", onclick: toPack }, "Negotiation pack"),
+            may.pack ? h("a", { class: "btn small", href: "#pack", title: "One printable page for the sheet: ticked rows, or the whole list", onclick: toPack }, "Negotiation pack") : null,
             h("button", { class: "btn small", type: "button", onclick: async () => download(await postJSON("/api/list/download", ui.pct !== "" && Number(ui.pct) ? { yarn_pct: { [ui.yarn]: Number(ui.pct) } } : {}), "RightPrice_fabric_list.xlsx") }, "Download list"))),
         data.rows.length ? h("p", { class: "list-hint" }, "Fabric code and should-cost stay in place; swipe the table sideways for the mill price, the gap, money at stake and what to do.") : null,
         data.rows.length ? h("div", { class: "table-wrap list-wrap", tabindex: "0", role: "region", "aria-label": "Fabric list" }, h("table", { class: "list" },
@@ -130,7 +132,7 @@
     await load();
     return [...pageHead("Bulk upload", "Upload a mill's price sheet as it comes, or the RightPrice template. Every row joins the list below, costed beside the mill's price."),
       h("div", { class: "card upload" }, h("div", { class: "upload-row" },
-        h("div", {}, h("label", { for: "bulk-file", class: "lbl-strong" }, "Excel file"), file),
+        may.change ? h("div", {}, h("label", { for: "bulk-file", class: "lbl-strong" }, "Excel file"), file) : null,
         h("p", { class: "sub", style: "margin:0;flex:1;min-width:240px" }, "A mill sheet is recognised by its headings (Fab Code, Base Price, EPI, PPI and the rest). NYD rows are listed but not costed until you open them and choose piece dyed, printed or bleached."),
         h("a", { class: "btn small", href: "/api/template" }, "RightPrice template")), status),
       h("div", { class: "card" }, h("div", { class: "card-head", style: "margin-bottom:8px" }, h("h2", {}, "Fabric list"), h("span", { class: "sub", style: "margin:0" }, "Re-costed on today's rates each time it opens. It stays until rows are removed.")), box)];

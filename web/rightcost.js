@@ -310,8 +310,8 @@ function openFly(name, anchor, hover, keep) {
     kids.push(h("div", { class: "ttl" }, h("span", {}, state.me.name)), state.me.email ? h("div", { class: "note" }, state.me.email) : null,
       h("div", { class: "g" }, "Settings"),
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
-      link("Calculation settings", "#settings"), link("Rate tables", "#rates"),
-      h("div", { class: "g" }, "Account"),
+      can("page:prices") ? [link("Calculation settings", "#settings"), link("Rate tables", "#rates")] : null,
+      h("div", { class: "g" }, "Account"), profileExtras(),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
   fill(fly, ...kids); fly.hidden = false;
@@ -337,14 +337,16 @@ function route() {
   state.frame = null; state.library = null; state.supplier = id === "supplier" && rest.join("/") ? { key: rest.join("/"), data: state.supplier && state.supplier.key === rest.join("/") ? state.supplier.data : null } : null;
   if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || tabMemo(rest.join("/")) || "item", editing: false }; }
   else state.detail = null;
+  state.users = id === "users";            // Users and roles (web/access.js)
   if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
   else if (CONFIG.frames[id]) state.frame = hsh;
-  else if (id !== "rightcost" && id !== "item" && !state.supplier) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
-  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier ? " fixed listpage" : "");
+  else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.users) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
+  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier && !state.users ? " fixed listpage" : "");
   railActive(); render();
   if (state.supplier) loadSupplier();
+  if (state.users) loadUsers();
   if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
-  document.title = (state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
+  document.title = (state.users ? "Users and roles" : state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
 const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
 
@@ -364,7 +366,7 @@ function renderPage(main) {
   else {
     const box = h("div", { class: "pgbox", "data-address": state.frame });
     fill(main, head, box);
-    if (RP.pages[id]) RP.show(id, rest.join("/"), box);
+    if (RP.pages[id]) RP.show(id, rest.join("/"), box, { freshMeta: true });
     else fill(box, h("div", { class: "empty" }, "This page could not be loaded: its file is missing from web/pages/."));
   }
   const on = main.querySelector(".tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -374,6 +376,8 @@ RP.shell = { toast, go: hash => { location.hash = "#" + hash; }, showAlerts, ale
 
 function render() {
   const main = $("#main");
+  if (!pageOk()) return noPage(main);          // a page this person's role may not see (the server refuses its data too)
+  if (state.users) return renderUsers(main);
   if (state.frame) return renderPage(main);
   if (state.library) return renderLibrary(main);
   if (state.supplier) return renderSupplier(main);
@@ -519,6 +523,7 @@ function suppliersTab(rows) {
 
 // ------------------------------------------------------------------ supplier page: one mill, for the meeting with it
 async function loadSupplier() {
+  await RPA.ready; if (!can("page:rightcost")) return;            // who may see it is known first (web/access.js)
   const sp = state.supplier; if (!sp) return;
   try {
     const res = await fetch("/api/supplier?mill=" + encodeURIComponent(sp.key));
@@ -562,7 +567,7 @@ function renderSupplier(main) {
     : (t.reopened !== null ? "Open again: " : "Open: ") + (t.latest !== null ? `mill at Rs ${n2(t.latest)}` : "no mill quote yet") + (t.counter !== null ? `, our counter Rs ${n2(t.counter)}` : ""));
   fill(main, crumbs,
     h("div", { class: "dhead" }, h("div", {}, h("div", { class: "small" }, "Supplier" + (d.names.length > 1 ? " \u00B7 also written " + d.names.slice(1).join(", ") : "")), h("h1", {}, d.name), h("div", { class: "muted" }, `As of ${d.today}, on that day's rates.`)),
-      h("div", { class: "dicons noprint" }, h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "supplier", mill: d.key }, d.name, d.key) }, "Draft a message to the mill"), ib("pdf", "Print this page", () => print()), ib("pin", "Show this mill's fabrics in the list", () => { state.filters.mill = [d.key]; state.cls = "*"; store.set("cls", "*"); state.tab = "items"; location.hash = "#rightcost"; }))),
+      h("div", { class: "dicons noprint" }, can("do:draft") ? h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "supplier", mill: d.key }, d.name, d.key) }, "Draft a message to the mill") : null, ib("pdf", "Print this page", () => print()), ib("pin", "Show this mill's fabrics in the list", () => { state.filters.mill = [d.key]; state.cls = "*"; store.set("cls", "*"); state.tab = "items"; location.hash = "#rightcost"; }))),
     !d.ready ? h("p", { class: "muted" }, "The verdicts on the purchase orders are still being worked out; this page fills in when they are ready (about 20 seconds).") : null,
     h("div", { class: "stiles" },
       tile("Bought (purchase orders)", `${n0(B.fabrics)} ${B.fabrics === 1 ? "fabric" : "fabrics"}`, B.fabrics ? `${n0(B.metres)} m · Rs ${n0(B.value)} paid` : "none on record"),
@@ -603,10 +608,10 @@ function renderSelbar() {
         { label: "Download selected", run: () => download("/api/costs/download", { keys: picked.map(keyOf), extra: extras(picked) }, "RightCost selected.xlsx").then(() => toast("Downloaded")).catch(err => toast(err.message, false)) },
         { label: picked.length === 1 ? "Open in Create cost" : "Open in Create cost (tick one)", run: () => picked.length === 1 ? openCostPopup(picked[0]) : toast("Tick one row to open it", false) },
         { label: "Negotiation pack for the ticked rows", run: () => moreAction("Negotiation pack", picked) },
-        { label: "Draft a message to the mill on the ticked rows", run: () => draftDialog({ type: "rows", keys: picked.map(keyOf) }, [...new Set(picked.map(r => r.supplier).filter(Boolean))][0] || "the mill", (picked.find(r => r.mill) || {}).mill) },
-        { label: "Mark quote alerts seen (for everyone)", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Yes").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has a quote alert to look at", false); markSeen(ids); } },
-        { label: "Bring back quote alerts marked seen", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Seen").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has an alert marked seen", false); markSeen(ids, true); } },
-      ], { right: true }))] : null);
+        !can("do:draft") ? null : { label: "Draft a message to the mill on the ticked rows", run: () => draftDialog({ type: "rows", keys: picked.map(keyOf) }, [...new Set(picked.map(r => r.supplier).filter(Boolean))][0] || "the mill", (picked.find(r => r.mill) || {}).mill) },
+        !can("do:mark_seen") ? null : { label: "Mark quote alerts seen (for everyone)", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Yes").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has a quote alert to look at", false); markSeen(ids); } },
+        !can("do:mark_seen") ? null : { label: "Bring back quote alerts marked seen", run: () => { const ids = picked.filter(r => val(r, "has_alert") === "Seen").map(r => r.id); if (!ids.length) return toast("None of the ticked rows has an alert marked seen", false); markSeen(ids, true); } },
+      ].filter(Boolean), { right: true }))] : null);
 }
 
 // ------------------------------------------------------------------ detail page and quick view
@@ -664,7 +669,7 @@ function renderDetail(main) {
     const al = r.source === "Fabric list" ? (state.alerts.all || {})[r.id] : null;
     const flagged = al ? h("div", { class: "brief flagged" }, h("h3", { style: "margin:0 0 6px;font-size:15px" }, "Flagged on this quote" + (al.state === "seen" ? " (marked seen)" : al.state === "agreed" ? " (agreed since)" : "")),
       h("ul", {}, al.flags.map(f => h("li", {}, h("b", {}, ((state.alerts.kinds || {})[f.kind] || f.kind) + ": "), f.text))),
-      al.state === "live" ? h("button", { type: "button", class: "btn line", onclick: () => markSeen([r.id]) }, "Mark seen (for everyone)") : al.state === "seen" ? h("button", { type: "button", class: "btn line", onclick: () => markSeen([r.id], true) }, "Bring the alert back") : null) : null;
+      !can("do:mark_seen") ? null : al.state === "live" ? h("button", { type: "button", class: "btn line", onclick: () => markSeen([r.id]) }, "Mark seen (for everyone)") : al.state === "seen" ? h("button", { type: "button", class: "btn line", onclick: () => markSeen([r.id], true) }, "Bring the alert back") : null) : null;
     const was = briefShould[k]; negotiationTab(r, brief).then(() => { if (briefShould[k] !== was && slot.isConnected) fill(slot, trackerCard(r)); });        // the tracker measures against the brief's should-cost
     content = [flagged, brief, slot];
   } else {
@@ -713,7 +718,7 @@ async function negotiationTab(r, box) {
         b.weak.length ? h("li", {}, "Why no target: " + b.weak.join("; ") + ".") : null, (b.caveats || []).map(c => h("li", {}, c)),
         b.at_stake !== null && b.quantity ? h("li", {}, `On ${n0(b.quantity)} m that is Rs ${n0(Math.abs(b.at_stake))} ${b.gap >= 0 ? "above" : "below"} should-cost.`) : null),
       h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, tracked !== null && r.price && Math.abs(tracked - r.price) >= 0.005 ? "Open in Create cost (on the row's own price)" : "Full brief in Create cost"),
-        r.supplier && !done ? h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "fabric", key: keyOf(r) }, r.supplier, r.mill) }, "Draft a message to the mill") : null));
+        r.supplier && !done && can("do:draft") ? h("button", { type: "button", class: "btn line", onclick: () => draftDialog({ type: "fabric", key: keyOf(r) }, r.supplier, r.mill) }, "Draft a message to the mill") : null));
   } catch (e) { box.textContent = "Could not work it out: " + e.message; }
 }
 
@@ -783,11 +788,12 @@ function trackerCard(r) {
     rec && s_.warnings.length ? h("ul", { class: "warns" }, s_.warnings.map(w => h("li", {}, w))) : null,
     steps.length ? h("table", { class: "steps" }, h("tbody", {}, steps.map(e => h("tr", {}, h("td", { class: "d" }, dayOf(e.date)), h("td", { class: "k" }, e.kind), h("td", { class: "n" }, "Rs " + n2(e.price)),
       h("td", { class: "note" }, e.note || ""),
-      h("td", { class: "x" }, h("button", { type: "button", class: "btn rm", "aria-label": `Remove this step: ${e.kind} Rs ${n2(e.price)}`, title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
+      !can("do:record_steps") ? null : h("td", { class: "x" }, h("button", { type: "button", class: "btn rm", "aria-label": `Remove this step: ${e.kind} Rs ${n2(e.price)}`, title: "Remove this step", onclick: async ev => { const b = ev.currentTarget; if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Sure?"; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = "Remove"; } }, 4000); return; }
         try { const res = await fetch("/api/negotiations/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: k, id: e.id }) }); if (!res.ok) throw new Error((await res.json()).detail || res.statusText); toast("Removed (the Log tab keeps a record)"); } catch (err) { toast(err.message, false); }
         await loadNegos(true); loadAlerts(); } }, "Remove")))))) : null,
     r.duplicate_of && !rec ? h("p", { style: "margin:4px 0 0" }, `This row repeats the order of ${r.duplicate_of}, so its negotiation is kept there and the order is counted once. `,
         otherN ? h("b", {}, `On ${r.duplicate_of}: ${val(other, "nego")}. `) : `Nothing is recorded on ${r.duplicate_of} yet. `, other ? h("button", { type: "button", class: "code", onclick: () => { openDetail(other); state.detail.tab = "negotiation"; tabMemo(keyOf(other), "negotiation"); } }, `Open ${r.duplicate_of}`) : null)
+      : !can("do:record_steps") ? h("p", { style: "margin:4px 0 0;color:var(--text2)" }, `Your role (${RPA.me.role}) may look at the steps but not record them.`)
       : s_ && s_.status === "Agreed" && !(state.detail && state.detail.further) && !drafts[k] ? h("div", {}, h("button", { type: "button", class: "btn line", onclick: () => { state.detail.further = true; render(); } }, "The price was reopened: record a further step"))
       : [h("div", { class: "stepform" }, kind, price, date, note, btn), msg],
     r.duplicate_of && rec ? h("p", { style: "margin:8px 0 0;font-size:12px" }, `This row repeats the order of ${r.duplicate_of}: it is not counted in what was won. Keep the steps on ${r.duplicate_of}.`) : null,
@@ -855,6 +861,7 @@ function paintBadge() {
   if (n) b.append(h("span", { class: "badge", title: `${n} newly quoted ${n === 1 ? "fabric needs" : "fabrics need"} a look: above the usual range, sums off, a repeated order, or far below should-cost` }, n > 99 ? "99+" : String(n)));
 }
 async function loadAlerts() {
+  await RPA.ready; if (!canAny("page:rightcost", "page:dashboard")) return;
   try {
     const a = await (await fetch("/api/alerts")).json(), wasAll = JSON.stringify(state.alerts.all);
     state.alerts = a; paintBadge();
@@ -869,6 +876,7 @@ async function markSeen(ids, undo) {
   } catch (e) { toast(e.message, false); }
 }
 async function loadNegos(always) {
+  await RPA.ready; if (!can("page:rightcost")) return;
   try {
     const ng = await (await fetch("/api/negotiations")).json(), was = JSON.stringify(state.negos);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || state.negoKinds;
@@ -884,11 +892,9 @@ function popupHash(tab) { return "#" + (decodeURIComponent(location.hash.slice(1
 function openPopup(tab = "cost", r = null, fromAddress = false) {
   closeLayers();
   document.querySelectorAll(".scrim[data-popup]").forEach(e => e.remove());
-  if (!CONFIG.popupTabs.some(t => t[0] === tab)) tab = "cost";
   if (!fromAddress) history.pushState({ popup: tab }, "", popupHash(tab));          // Back closes the popup
   RP.fresh();
-  if (tab === "cost" && r !== undefined && RP.cost) RP.cost.open(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null);
-  const box = h("div", { class: "pgbox" });
+  const box = h("div", { class: "pgbox" }, h("div", { class: "pg" }, h("p", { class: "empty" }, "Loading...")));
   const close = () => { if (history.state && history.state.popup) history.back(); else { history.replaceState(null, "", popupHash(null)); s.remove(); load(); } };
   const tabs = h("div", { class: "ptabs", role: "tablist" });
   const mark = id => { s.dataset.tab = id; tabs.querySelectorAll(".ptab").forEach(b => { const on = b.dataset.tab === id; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }); };
@@ -897,16 +903,25 @@ function openPopup(tab = "cost", r = null, fromAddress = false) {
     else fill(box, h("div", { class: "empty" }, "This tab could not be loaded: its file is missing from web/pages/."));
     mark(id); if (!fromAddr) history.replaceState(history.state, "", popupHash(id));
   };
-  for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
   const note = r ? h("span", { class: "pnote" }, `${r.code}${r.source === "Purchase orders" ? ": a purchase order (its price was paid); Add to list copies it into the fabric list" : ""}`) : null;
   const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "New cost" },
     h("div", { class: "ph" }, h("h2", {}, "New cost"), h("div", { class: "ptabwrap" }, tabs), note, ib("x", "Close", close)), box);
   const s = h("div", { class: "scrim", onmousedown: e => { if (e.target === s) close(); } }, pop);
-  s.dataset.popup = "1"; s.switchTo = switchTo; s.close = close;
+  s.dataset.popup = "1"; s.dataset.tab = tab; s.switchTo = switchTo; s.close = close;
   $("#layer").append(s);
-  switchTo(tab, true);
+  // first what this person may use (web/access.js) and the rate master's lists, read afresh: a fabric opened from Right
+  // cost needs the lists to find its yarns, and a yarn added by someone else since shows without a reload
+  (async () => {
+    try { if (RP.known()) await RP.known(); await RP.loadMeta(); } catch (e) { /* the tab says the rate master could not be read */ }
+    if (!s.isConnected) return;
+    let now = s.dataset.tab;                       // the address may have moved to another tab meanwhile
+    if (!CONFIG.popupTabs.some(t => t[0] === now)) now = (CONFIG.popupTabs[0] || ["cost"])[0];
+    for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
+    if (tab === "cost" && r !== undefined && RP.cost && RP.state.meta) RP.cost.open(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null);
+    switchTo(now, fromAddress && s.dataset.tab === now);
+  })();
 }
-const openCostPopup = r => openPopup("cost", r || null);
+const openCostPopup = r => can("page:cost") ? openPopup("cost", r || null) : toast(`Your role (${RPA.me.role}) may not use Create cost`, false);
 
 // ------------------------------------------------------------------ Library: setup lists (kept in this browser)
 function libSeed(name) {
@@ -1103,7 +1118,9 @@ function openDrawer() {
 
 addEventListener("keydown", e => {
   if (e.key === "Escape") { const pop = document.querySelector(".scrim"); if (pop) { if (pop.dataset.popup) pop.close(); else pop.remove(); return; } closeLayers(); }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail) { e.preventDefault(); const s = $("#search"); if (s) s.focus(); }
+  // Ctrl+F finds in the list when the list is what is in view; everywhere else it is the browser's own find
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail && !state.frame && !state.library && !state.supplier && !state.users && !document.querySelector(".scrim")) {
+    const s = $("#search"); if (s && s.offsetParent) { e.preventDefault(); s.focus(); } }
 });
 // the address follows the page: #item/<source|code> is a fabric's detail page; Back returns to the list
 addEventListener("hashchange", route);
@@ -1114,6 +1131,7 @@ addEventListener("focus", catchUp); document.addEventListener("visibilitychange"
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
+  await RPA.ready; if (!can("page:rightcost")) return;           // a role without Right cost has no costings to load
   try {
     const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];
@@ -1122,6 +1140,6 @@ async function load() {
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
     if (!state.frame) render();
     if (state.supplier && !d.ready) loadSupplier();
-  } catch (err) { fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
+  } catch (err) { if (shutOut()) return render(); fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
 renderRail(); route(); load(); loadAlerts(); whoAmI();

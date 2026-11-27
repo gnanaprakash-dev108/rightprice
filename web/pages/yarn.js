@@ -2,12 +2,12 @@
    only, never used in a costing), and the master set against the market. #yarn/<yarn key> opens it filtered. */
 (function () {
   "use strict";
-  const { h, getJSON, dataTable, tableCard, pageHead } = RP.kit;
+  const { h, getJSON, dataTable, tableCard, pageHead, can } = RP.kit;
 
   RP.page("yarn", { title: "Yarn prices", section: "Prices" }, async (query) => {
     const [yrCard, mkCard, d] = await Promise.all([
       tableCard("Yarn_Rates", "Yarn master", { query }),
-      tableCard("Market_Yarn", "Market reference", { extra: h("a", { class: "btn", href: "#intake" }, "Bring in prices") }),
+      tableCard("Market_Yarn", "Market reference", { extra: can("do:edit_rates") ? h("a", { class: "btn", href: "#intake" }, "Bring in prices") : null }),
       getJSON("/api/dashboard")]);
     RP.state.dash = d;
     const cmp = { columns: ["Yarn key", "Master Rs/kg", "Market low", "Market high", "Position"],

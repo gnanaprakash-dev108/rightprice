@@ -115,9 +115,8 @@
   .pg .simrow label { grid-column: 1 / -1; }
 }
 
-/* ---------- on paper: the cost alone, its tables open (see printSheet in cost.js) */
+/* ---------- on paper: the cost alone, its tables open (see printSheet in cost.js, which also sets the page's margin) */
 @media print {
-  @page { margin: 14mm; }
   .pg .pane-in, .pg .cost-intro { display: none !important; }
   .pg .cost-split { display: block; height: auto !important; }
   .pg .pane { overflow: visible !important; padding: 0; }

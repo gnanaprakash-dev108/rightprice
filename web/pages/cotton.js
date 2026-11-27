@@ -1,7 +1,7 @@
 /* Prices > Cotton prices: the Shankar-6 history (rupees per candy), its chart, and a form to add a price. */
 (function () {
   "use strict";
-  const { $, h, fmt, day, pct, getJSON, postJSON, toast, showTip, hideTip, dataTable, pageHead } = RP.kit;
+  const { $, h, fmt, day, pct, getJSON, postJSON, toast, showTip, hideTip, dataTable, pageHead, can } = RP.kit;
 
   RP.page("cotton", { title: "Cotton prices", section: "Prices" }, async (arg, ctx) => {
     const c = await getJSON("/api/cotton");
@@ -23,7 +23,7 @@
       h("div", { class: "grid g4" }, stat("Latest Shankar-6", "Rs " + fmt(last[1], 0), "per candy"), stat("As of", day(last[0]), age > 30 ? `${age} days old` : null), stat("Over 30 days", tag(chg(m1))), stat("Over 12 months", tag(chg(y1)))),
       age > 30 ? h("div", { class: "notice" }, `The latest cotton price is ${age} days old. Add a newer one below.`) : null,
       h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Shankar-6, Rs per candy"), chips), box, h("p", { class: "sub", style: "margin:12px 0 0" }, "Source: " + c.source)),
-      cottonForm(ctx),
+      can("do:edit_rates") ? cottonForm(ctx) : null,
       h("details", { class: "card" }, h("summary", {}, "Table of the last 60 prices"), dataTable({ columns: ["Date", "Rs per candy"], rows: pts.slice(-60).reverse().map(p => [p[0].toISOString().slice(0, 10), p[1]]) }, { label: "Cotton prices" }))];
   });
 

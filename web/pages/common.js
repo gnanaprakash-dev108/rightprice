@@ -14,6 +14,9 @@
               of the earlier screens (web/pages/common.css), scoped to it
    ctx, given to the page: ctx.root (the page's own box), ctx.reload() (draw the page again), ctx.inPopup, and in the
    popup ctx.tab(id) (go to another tab of the popup).
+   Who may open the page is web/access.js's PAGE_NEEDS (a page) or TAB_NEEDS (a popup tab): name the page there too.
+   Inside the page, RP.kit.can("do:...") says whether this person's role may do something; offer only what it may
+   (the server refuses the rest whatever the page shows).
 
    This file is what the pages share: the page list, the state they share (the fabric open in Create cost, the
    list's ticks), small helpers, tables, and the requests to the server. Every number comes from the server; nothing
@@ -80,6 +83,12 @@ window.RP = (function () {
   }
   // the shell's own message at the foot of the page (ok: false for something that went wrong)
   function toast(msg, ok = true) { if (RP.shell) RP.shell.toast(msg, ok); }
+  // what this person's role may do (stage 3, web/access.js); everything while permissions are off or not yet known
+  const allowed = perm => { try { return typeof can !== "function" || can(perm); } catch (e) { return true; } };
+  const known = () => { try { return typeof RPA === "object" && RPA.ready ? RPA.ready : null; } catch (e) { return null; } };
+  // the rate master's drop-down lists, read afresh: each page opened and each New cost popup reads them again, so a yarn
+  // added by someone else shows without reloading the browser
+  async function loadMeta() { state.meta = await getJSON("/api/meta"); return state.meta; }
 
   // tooltip: one element, beside the pointer or the focused row; it may hold a little HTML (a name in bold, a line break)
   let tipEl = null;
@@ -91,6 +100,8 @@ window.RP = (function () {
     tipEl.style.top = Math.max(8, Math.min(y + 14, innerHeight - r.height - 8)) + "px";
   }
   const hideTip = () => { if (tipEl) tipEl.hidden = true; };
+  // Escape closes a chart's tooltip first (and nothing else); a second Escape is the shell's (it closes the popup)
+  addEventListener("keydown", e => { if (e.key === "Escape" && tipEl && !tipEl.hidden) { hideTip(); e.stopImmediatePropagation(); } }, true);
   function withTip(el, html) {
     el.addEventListener("mousemove", e => showTip(html(), e.clientX, e.clientY));
     el.addEventListener("mouseleave", hideTip);
@@ -170,7 +181,7 @@ window.RP = (function () {
   }
   function tableCard(sheet, title, opts = {}) {
     const box = h("div"), editBtn = h("button", { class: "btn", type: "button" }, "Edit");
-    const view = async () => { editBtn.hidden = !state.meta.editable.includes(sheet); const t = await getJSON("/api/table/" + sheet); fill(box, dataTable(t, { filter: t.rows.length > 12, label: t.label, query: opts.query })); };
+    const view = async () => { editBtn.hidden = !state.meta.editable.includes(sheet) || !allowed("do:edit_rates"); const t = await getJSON("/api/table/" + sheet); fill(box, dataTable(t, { filter: t.rows.length > 12, label: t.label, query: opts.query })); };
     editBtn.addEventListener("click", async () => { editBtn.hidden = true; fill(box, editTable(await getJSON("/api/table/" + sheet), sheet, view)); });
     const card = h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, title), h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, opts.extra, editBtn)), box);
     return view().then(() => card);
@@ -183,7 +194,7 @@ window.RP = (function () {
       const open = async sheet => {
         [...chips.children].forEach(c => c.setAttribute("aria-selected", String(c.dataset.sheet === sheet)));
         fill(box, h("p", { class: "empty" }, "Loading..."));
-        current = sheet; editBtn.hidden = !state.meta.editable.includes(sheet);
+        current = sheet; editBtn.hidden = !state.meta.editable.includes(sheet) || !allowed("do:edit_rates");
         try { const t = await getJSON("/api/table/" + sheet); fill(box, dataTable(t, { filter: t.rows.length > 12, label: t.label })); }
         catch (e) { fill(box, h("div", { class: "notice err" }, e.message)); }
       };
@@ -202,14 +213,15 @@ window.RP = (function () {
   /* Draws page id into box, the shell's scrolling box for it: "Loading..." first, then the page. A page drawn again
      over itself (ctx.reload) or replaced by another before it finished is never painted twice. */
   async function show(id, arg, box, ctx = {}) {
-    const p = pages[id], token = box.rpToken = Symbol();
+    const p = pages[id], token = box.rpToken = Symbol(), fresh = !!ctx.freshMeta;
     const root = h("div", { class: p.look === "shell" ? "pgshell" : "pg" });
     box.dataset.page = id;
-    ctx = Object.assign({ inPopup: false }, ctx, { root: box, reload: () => show(id, arg, box, ctx) });
+    ctx = Object.assign({ inPopup: false }, ctx, { root: box, freshMeta: false, reload: () => show(id, arg, box, ctx) });
     hideTip();
     fill(box, fill(root, h("p", { class: "empty" }, "Loading...")));
     try {
-      if (!state.meta) state.meta = await getJSON("/api/meta");
+      if (known()) await known();               // what this person may do is known before the page offers anything
+      if (!state.meta || fresh) await loadMeta();
     } catch (e) { if (box.rpToken === token) fill(root, h("div", { class: "notice err" }, "The rate master could not be read: " + e.message)); return; }
     try {
       const nodes = await p.render(arg || "", ctx);
@@ -219,7 +231,7 @@ window.RP = (function () {
     } catch (e) { if (box.rpToken === token) fill(root, h("div", { class: "notice err" }, "This page could not be loaded: " + e.message)); }
   }
 
-  return { pages, page, show, state, fresh, shell: null,
-    kit: { $, h, fill, svg, fmt, rs, day, pct, pctSigned, plural, blank, api, getJSON, postJSON, download, toast, showTip, hideTip, withTip, pageHead,
+  return { pages, page, show, state, fresh, loadMeta, known, shell: null,
+    kit: { $, h, fill, svg, fmt, rs, day, pct, pctSigned, plural, blank, api, getJSON, postJSON, download, toast, can: allowed, showTip, hideTip, withTip, pageHead,
       cellText, basisTag, dataTable, editTable, tableCard, tabbed, GROUP_COLOR } };
 })();
