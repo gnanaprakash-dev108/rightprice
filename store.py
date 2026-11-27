@@ -54,7 +54,8 @@ QUOTE_COLUMNS = {"Saved on": "saved_on", "Fabric code": "fabric_code", "Descript
                  "Should-cost Rs/m": "should_cost_per_m", "Should-cost Rs/kg": "should_cost_per_kg", "Quoted Rs/m": "quoted_per_m",
                  "Gap Rs/m": "gap_per_m", "Gap %": "gap_pct", "Id": "legacy_id", "Inputs": "choices", "Result": "costing",
                  "Mill": "sheet_row", "Problems": "problems", "Notes": "notes", "Upload": "upload"}
-KINDS = ("rates", "list", "negotiations", "seen", "sheets")
+KINDS = ("rates", "list", "negotiations", "seen", "sheets",
+         "dated")       # stage 5: dated yarn rates (db/005_dated_rates.sql); kept in a database only, never in a file
 MOVED_NOTE = "moved_to_database.json"      # left beside the files once they are copied into a database (they stay as they were)
 FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations": "negotiations.json",
          "seen": "alerts_seen.json", "sheets": "cost_sheets.json"}
@@ -527,7 +528,8 @@ class SqlStore:
                       "fabrics in the tracker": c.one("SELECT count(*) FROM negotiation")[0],
                       "tracker steps": c.one("SELECT count(*) FROM negotiation_step WHERE removed_at IS NULL")[0],
                       "alerts seen": c.one("SELECT count(*) FROM alert_seen")[0],
-                      "mill cost sheet rows": c.one("SELECT count(*) FROM cost_sheet_row")[0]}
+                      "mill cost sheet rows": c.one("SELECT count(*) FROM cost_sheet_row")[0],
+                      "dated yarn rates": c.one("SELECT count(*) FROM yarn_rate_dated WHERE removed_at IS NULL")[0]}
             run = c.one("SELECT started_at, finished_at, folder, files, checked FROM import_run ORDER BY id DESC LIMIT 1")
             rate = c.one("SELECT id, created_at, created_by, reason FROM rate_version ORDER BY id DESC LIMIT 1")
             migs = [r[0] for r in c.all("SELECT name FROM schema_migration ORDER BY name")]

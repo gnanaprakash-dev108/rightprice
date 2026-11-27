@@ -63,7 +63,9 @@ def evaluate(m, inp):
                      "Weaving rate": i["weaving_rate"], "Implied weaving rate": i["weaving_rate"] + delta / i["ppi"],
                      "Implied yarn dyeing": i["warp_dye"] + delta / res["greige_kg"],
                      "Implied piece dye or print": i["piece_dye_rate"] + delta / res["greige_kg"],
-                     "Train": not pilot.held_back(sel["Fabric code"])})
+                     # the training set: a "Train" column when the caller gives one (calibrate_splits.py), else the
+                     # fixed rule on the fabric code
+                     "Train": bool(sel["Train"]) if "Train" in sel else not pilot.held_back(sel["Fabric code"])})
     return pd.DataFrame(rows)
 
 
@@ -74,8 +76,9 @@ def fit(d):
             "Within 20%": round((g.abs() <= 0.20).mean(), 3)}
 
 
-def main():
-    m0, inp, _, _ = pilot.build_inputs()
+def draft(m0, inp):
+    """The draft worked out on the training fabrics and tested on the held-back ones: the steps below, nothing applied.
+    inp may carry a "Train" column (True: used to work the proposals out); without it, the fixed rule on the fabric code."""
     inp = inp.copy()
     inp["Order size"] = inp["PO metres"].map(slab_of)
     current = evaluate(m0, inp)             # the tool as it stands: a quantity band replaces the slab
@@ -209,6 +212,15 @@ def main():
     sup["Median gap % proposed rates"] = d3.groupby("Supplier")["Gap"].median().mul(100).round(1)
     sup = sup[sup["Fabrics"] >= 10].sort_values("Fabrics", ascending=False).reset_index()
 
+    return {"base": base, "current": current, "d3": d3, "m3": m3, "slab_rows": slab_rows, "props": props,
+            "print_row": print_row, "test_rows": test_rows, "by_cell": by_cell, "yarn": yarn, "sup": sup}
+
+
+def main():
+    m0, inp, _, _ = pilot.build_inputs()
+    r = draft(m0, inp)
+    base, slab_rows, props, print_row = r["base"], r["slab_rows"], r["props"], r["print_row"]
+    test_rows, by_cell, yarn, sup = r["test_rows"], r["by_cell"], r["yarn"], r["sup"]
     readme = pd.DataFrame({"Read me": [
         "DRAFT for review. Nothing in the rate master has been changed.",
         f"Fabrics: {len(base)} 100% cotton wovens with a rupee-per-metre purchase order price and PLM specs.",

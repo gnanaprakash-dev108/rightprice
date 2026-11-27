@@ -120,6 +120,9 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `refresh_groups.py` | Adds content groups and PLM weave types to the rate master |
 | `pilot.py` | Costs purchase-order fabrics and compares with the price paid |
 | `calibrate.py` | Drafts rate changes from the pilot with a held-back test; applies nothing |
+| `calibrate_splits.py` | The draft's held-back test again, split by construction and by order month (stage 5); writes `pilot/Held_Back_Splits.xlsx`, applies nothing |
+| `construction.py` | A fabric's construction as one text (the nine fields of a Fab group); stands in for stage 2's Fab groups |
+| `rules/dated.py`, `data_dated.py` | Dated yarn rates (stage 5): the rate of a month, the purchase orders' months, the market history in hand; the table `yarn_rate_dated` (`db/005_dated_rates.sql`) |
 | `apply_proposals.py` | Applies the draft to the rate master, after saving a dated backup |
 | `data/Rate_Master.xlsx` | **The source of truth for every rate.** Edited through the app or in Excel. |
 | `data/plm_specs_for_po.csv` | PLM specs for the 19,669 purchase-order codes (output of `plm_extract.py`) |
@@ -134,6 +137,7 @@ python plm_extract.py     # needs the two large workbooks; about 90 seconds
 python refresh_groups.py  # needs the master data workbook
 python pilot.py           # needs inputs/Fabric _ 3Months_4746.xlsx and data/plm_specs_for_po.csv
 python calibrate.py       # same inputs as pilot.py; writes a draft only
+python calibrate_splits.py  # the draft's held-back test by construction and by time; writes pilot/Held_Back_Splits.xlsx
 ```
 
 See [docs/INPUT_FILES.md](docs/INPUT_FILES.md) for what each source file is and which script reads it.
@@ -143,3 +147,19 @@ See [docs/INPUT_FILES.md](docs/INPUT_FILES.md) for what each source file is and 
 Every rate carries a Basis: `V1 workbook`, `Pilot calibration <date>`, `Pilot-checked`,
 `Market circular`, `Mill rate card <date>`, `Placeholder` (a starting guess with no data behind it) or `Not set`.
 The app warns whenever a costing uses a placeholder.
+
+## Dated yarn rates (stage 5)
+
+GP's decision (27 Nov 2026): a purchase order is costed on the yarn rates of its order month; quotes and Cost a fabric
+on today's rates (the yarn master); every costing says which rates it used. A dated rate is a yarn's rate for one month,
+kept in the database only (`yarn_rate_dated`); the rate master's Yarn_Rates are never changed by it. It comes in three
+ways, each kept with its source: typed on Yarn prices, brought in through Bring in prices ("Add as dated yarn rates"),
+or loaded from the market history in hand (`inputs/Yarn_Inteliigence_Master.xlsx`), only where the yarn surely is one
+of the yarn master (today: Linen 40 and 60 lea, June 2026; the rest is listed with why it is left out).
+
+The rule for the rate of a month (also on the Yarn prices page, `rules/dated.py` RULE): one rate per yarn per month,
+not carried into the next month; a month without one uses today's rate and says so for that yarn; a range counts as its
+midpoint; several prices in a month as their average, never mixing prices with and without GST; a person's rate takes
+the place of an earlier one for that yarn and month (kept, marked replaced), and the market history never replaces a
+person's rate; a fabric code ordered in several months is costed on the month holding most of its metres. Only yarn
+rates are dated. `masters.cost(sel, m, on=<date>)` costs on a date; without `on` nothing changes.

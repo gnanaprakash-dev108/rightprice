@@ -1300,6 +1300,7 @@ PAGES.yarn = async (query) => {
     rows: d.yarns.filter(y => y.position).map(y => [y.key, y.rate, y.market_low, y.market_high, { inside: "Inside range", above: "Above market", below: "Below market" }[y.position]]) };
   return [...pageHead("Yarn prices", "The yarn master is used in every costing; edit a rate and its date, then save. The market reference is for comparison only and is never used in a costing."),
     yrCard,
+    window.RPDated ? RPDated.card() : null,          // stage 5: dated yarn rates (web/dated.js)
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Master against market, combed compact cotton")), dataTable(cmp, { label: "Master against market", empty: "No yarn in the master has a market reference yet." })),
     mkCard];
 };
@@ -1386,9 +1387,13 @@ PAGES.intake = async () => {
           try { const r = await (await postJSON("/api/intake/add", { rows, source: data.source })).json(); state.dash = null; toast(`${r.added} rows added to the market reference`); location.hash = "#yarn"; }
           catch (e) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
         } }, "Add to market reference"),
+        window.RPDated ? h("button", { class: "btn", type: "button", onclick: () => {          // stage 5: the same rows as dated yarn rates
+          const rows = [...body.rows].map(tr => [...tr.querySelectorAll("input")].map(i => i.value.trim() === "" ? null : i.value.trim()));
+          const box = h("div"); msg.replaceChildren(box); RPDated.fromIntake(rows, data.source, box);
+        } }, "Add as dated yarn rates…") : null,
         h("button", { class: "btn", type: "button", onclick: () => addRow(null).querySelector("input").focus() }, "Add a row"),
         h("button", { class: "btn", type: "button", onclick: () => work.replaceChildren() }, "Discard")),
-      h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here.")));
+      h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here." + (window.RPDated ? " Add as dated yarn rates keeps the rows instead as the rates of their month, for the purchase orders of that month (each row is given a yarn of the yarn master first)." : ""))));
   };
   const mapper = (data) => {            // a table was read: say which column is which
     const names = Object.keys(data.sheets);

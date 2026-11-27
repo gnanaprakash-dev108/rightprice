@@ -640,8 +640,145 @@ def main():
               added.get("added") == 2 and len(c.get("/api/table/Market_Yarn").json()["rows"]) == m0 + 2)
         check("Empty review refused", c.post("/api/intake/add", json={"rows": [[None] * 6]}).status_code == 400)
         check("Unknown file type refused", c.post("/api/intake/file", files={"file": ("x.exe", io.BytesIO(b"x"))}).status_code == 400)
+        stage5 = dated_checks(c, check)         # (called first: `ok &= f()` would read ok before f could clear it)
+        ok &= stage5
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
+
+
+# ===================================================================== stage 5: dated yarn rates
+def _ready_costs(c, until=lambda d: True):
+    for _ in range(600):            # Right cost works its verdicts out in the background
+        d = c.get("/api/costs").json()
+        if d.get("ready") and not any(r.get("band") == "Working it out" for r in d["rows"]) and until(d):
+            return d
+        time.sleep(0.5)
+    raise SystemExit("Right cost's verdicts were not ready after five minutes")
+
+
+def dated_checks(c, check):
+    """A yarn's rate for a month (GP's decision, 27 Nov 2026: purchase orders on the rates of their order month; quotes and
+    Create cost on today's). In the database only; on the files every endpoint says so and every costing falls back.
+    The rates typed here are made up for the checks; the market history and the purchase orders are the real files."""
+    import data_dated
+    from rules import dated as dated_rules
+    ex = masters.EXAMPLE_ROW
+    today = c.post("/api/cost", json=ex).json()
+    oct_ = c.post("/api/cost", json=dict(ex, _rates_on="2026-10-05")).json()
+    check("Dated rates: Create cost says it is on today's rates; asked for a month with no dated rate it gives today's figure and says so",
+          today["rates_of"]["label"] == "today" and oct_["total_per_m"] == today["total_per_m"]          # (earlier checks applied a cost sheet draft: not 181.40 here)
+          and oct_["rates_of"]["notes"] == ["No dated rate for Cotton 40S in Oct 2026: today's rate used (Rs 345)"]
+          and c.post("/api/cost", json=dict(ex, _rates_on="Sept 2026")).status_code == 400)
+    # purchase orders: each on its order month; with no dated rate for Aug to Nov 2026, every figure as before, said per row
+    d = _ready_costs(c)
+    po = [r for r in d["rows"] if r["source"] == "Purchase orders"]
+    by = {}
+    for r in po:
+        by[(r["rates"] or {}).get("month")] = by.get((r["rates"] or {}).get("month"), 0) + 1
+    check("Dated rates: every purchase-order costing names its order month, and with no dated rate for it says today's rates are used",
+          len(po) == 1696 and all(r["rates"] and r["rates"]["month"] and not r["rates"]["dated"] and "No dated rate for" in r["rates"]["note"] for r in po)
+          and all(r["rates"]["dated"] is False and r["rates"]["note"].startswith("On today's rates") for r in d["rows"] if r["source"] == "Fabric list"),
+          str(sorted((k or "none", v) for k, v in by.items())))
+    if STORE == "files":
+        # the proof that nothing moved: every purchase-order costing on its order month equal to the costing without a date
+        m = rules_common.get_masters()
+        t0, same = time.time(), 0
+        for r in po:
+            a = masters.cost(r["choices"], m)
+            b = masters.cost(r["choices"], m, on=r["rates"]["month"])
+            same += {k: v for k, v in b.items() if k != "rates_of"} == a and round(a["total_per_m"], 2) == r["should"]
+        check(f"Dated rates: all {len(po)} purchase-order costings on their order month equal, line by line, the costing without a date and the "
+              f"should-cost shown before ({time.time() - t0:.0f} s)", same == len(po), f"{same} of {len(po)}")
+        for path, body in (("/api/dated-rates", None), ("/api/dated-rates/market", None), ("/api/dated-rates", {"yarn_key": "Cotton 40S", "month": "2026-09", "rate": 360}),
+                           ("/api/dated-rates/remove", {"id": 1}), ("/api/dated-rates/market", {}), ("/api/intake/add-dated", {"rows": []})):
+            rr = c.get(path) if body is None else c.post(path, json=body)
+            if rr.status_code != 503 or "database" not in rr.json()["detail"]:
+                check(f"Dated rates on the files: {path} says it needs a database", False, f"{rr.status_code} {rr.text[:200]}")
+                return False
+        check("Dated rates on the files: every page and endpoint says plainly it needs a database (503), and the Yarn prices page still opens",
+              c.get("/?embed=1").status_code == 200 and c.get("/dated.js").status_code == 200 and c.get("/api/table/Yarn_Rates").status_code == 200)
+        return True
+    good = True
+
+    def chk(name, g, detail=""):
+        nonlocal good
+        good &= bool(g)
+        check(name, g, detail)
+    pg0 = c.get("/api/dated-rates").json()
+    chk("Dated rates: the page holds the rule, the yarn master and the purchase orders by month, and no rate yet",
+        len(pg0["rule"]) == 6 and pg0["entries"] == [] and pg0["series"] == [] and any(y["key"] == "Cotton 40S" for y in pg0["yarns"])
+        and [o["fabrics"] for o in pg0["orders"]] == [200, 1047, 336, 113] and all(o["none"] == o["fabrics"] for o in pg0["orders"]), str(pg0["orders"]))
+    add = lambda **b: c.post("/api/dated-rates", json=b)
+    bad = [add(yarn_key="Cotton 40S", month="2099-01", rate=360), add(yarn_key="Not a yarn", month="2026-09", rate=360),
+           add(yarn_key="Cotton 40S", month="2026-09", rate=3), add(yarn_key="Cotton 40S", month="Sept", rate=360),
+           add(yarn_key="Cotton 40S", month="2026-09", low=380, high=360), add(yarn_key="Cotton 40S", month="2018-05", rate=300)]
+    chk("Dated rates: a month to come, a yarn not in the master, a rate that is a slip, a month not readable, a high below the low, a year too early: all refused",
+        all(b.status_code == 400 for b in bad), str([b.status_code for b in bad]))
+    first = add(yarn_key="Cotton 40S", month="2026-09", rate=358, note="check")
+    again = add(yarn_key="Cotton 40S", month="2026-09", low=355, high=369)
+    p1 = c.get("/api/dated-rates").json()
+    chk("Dated rates: a second rate for the same yarn and month takes the place of the first, which is kept marked replaced; a range counts as its midpoint",
+        first.status_code == 200 and again.json()["rate"] == 362 and [(e["yarn_key"], e["month"], e["rate"]) for e in p1["entries"]] == [("Cotton 40S", "2026-09", 362)]
+        and p1["history"][0]["rate"] == 358 and p1["history"][0]["removed_why"] == "replaced")
+    sep = c.post("/api/cost", json=dict(ex, _rates_on="2026-09-18")).json()
+    typed = c.post("/api/cost", json=dict(ex, **{"Warp yarn price override": 362, "Weft yarn price override": 362})).json()
+    nov = c.post("/api/cost", json=dict(ex, _rates_on="2026-11-02")).json()
+    chk("Dated rates: costed on Sep 2026 the yarn is on its dated rate; Nov 2026 has none and is on today's; Create cost stays on today's",
+        abs(sep["total_per_m"] - typed["total_per_m"]) < 1e-9 and sep["rates_of"]["dated"] and "dated rate for Sep 2026" in sep["rates_of"]["notes"][0]
+        and nov["total_per_m"] == today["total_per_m"] and c.post("/api/cost", json=ex).json()["total_per_m"] == today["total_per_m"])
+    # Right cost follows: the Sep 2026 purchase orders on Cotton 40S are costed on it, and say so; the others do not move
+    hit = {r["code"] for r in po if r["rates"]["month"] == "2026-09" and "Cotton 40S" in (r["choices"]["Warp yarn"], r["choices"]["Weft yarn"])}
+    d2 = _ready_costs(c, until=lambda x: any((r.get("rates") or {}).get("dated") for r in x["rows"]))
+    po2 = {r["code"]: r for r in d2["rows"] if r["source"] == "Purchase orders"}
+    moved = {k for k, r in po2.items() if r["rates"]["dated"]}
+    one = po2[sorted(hit)[0]] if hit else None
+    m = rules_common.get_masters()
+    want = None if one is None else masters.cost(one["choices"], m, on="2026-09")
+    chk(f"Dated rates: Right cost costs the {len(hit)} Sep 2026 purchase orders on Cotton 40S on its dated rate, and no other, their figures following it",
+        moved == hit and len(hit) > 0 and one["should"] == round(want["total_per_m"], 2) and one["gap"] == round(one["price"] - one["should"], 2)
+        and "Cotton 40S: the dated rate for Sep 2026 is used" in one["rates"]["note"]
+        and all(po2[k]["should"] == r["should"] for k, r in ((r["code"], r) for r in po) if k not in hit), f"{len(moved)} moved, {len(hit)} expected")
+    sp = c.get("/api/supplier", params={"mill": one["supplier"]}).json() if one else {}
+    chk("Dated rates: the supplier page counts its purchases on a dated rate and says so",
+        sp.get("bought", {}).get("rates", {}).get("dated", 0) >= 1 and "dated" in sp["bought"]["rates"]["text"], str(sp.get("bought", {}).get("rates"))[:300])
+    rid = p1["entries"][0]["id"]
+    gone = c.post("/api/dated-rates/remove", json={"id": rid})
+    chk("Dated rates: a rate removed is kept marked removed, removing it twice is refused, and the month falls back to today's rate",
+        gone.status_code == 200 and c.post("/api/dated-rates/remove", json={"id": rid}).status_code == 404
+        and c.post("/api/cost", json=dict(ex, _rates_on="2026-09-18")).json()["total_per_m"] == today["total_per_m"]
+        and c.get("/api/dated-rates").json()["history"][0]["removed_why"] == "removed")
+    # the market history in hand: only the yarns surely in the yarn master; a person's rate is never replaced by it
+    mk = c.get("/api/dated-rates/market").json()
+    chk("Dated rates: the market history gives only the linen it surely matches (Raymond 40 and 60 lea, Jun 2026, range midpoints) and says why every other row is left out",
+        mk["rows"] == 5275 and mk["used_rows"] == 2 and [(r["yarn_key"], r["month"], r["rate"]) for r in mk["rates"]] == [("Linen 40 Lea", "2026-06", 1625), ("Linen 60 Lea", "2026-06", 2225)]
+        and sum(x["rows"] for x in mk["left_out"]) == 5273 and any("Semi-combed cotton" in x["why"] and x["rows"] == 613 for x in mk["left_out"]), str(mk["left_out"])[:300])
+    add(yarn_key="Linen 40 Lea", month="2026-06", rate=1500, note="a person's rate")
+    l1 = c.post("/api/dated-rates/market", json={}).json()
+    l2 = c.post("/api/dated-rates/market", json={}).json()
+    es = {(e["yarn_key"], e["month"]): e for e in c.get("/api/dated-rates").json()["entries"]}
+    chk("Dated rates: loading the market history keeps a person's rate, and loading it twice changes nothing",
+        l1 == l2 == {"added": 1, "kept": 1, "kept_rates": [{"yarn_key": "Linen 40 Lea", "month": "2026-06"}]}
+        and es[("Linen 40 Lea", "2026-06")]["rate"] == 1500 and es[("Linen 60 Lea", "2026-06")]["source"] == "market history"
+        and sum(1 for e in c.get("/api/dated-rates").json()["entries"] if e["yarn_key"] == "Linen 60 Lea") == 1)
+    # from Bring in prices: rows given a yarn of the master; one rate per yarn and month by the rule
+    rows = [["2026-08-04", "Combed compact", "40s", 350, 360, "circular", "Cotton 40S"], ["2026-08-21", "Combed compact", "40s", 364, None, "circular", "Cotton 40S"],
+            ["2026-08-21", "Combed compact", "50s", 400, 410, "circular", ""]]
+    got = c.post("/api/intake/add-dated", json={"rows": rows, "source": "circular.pdf"}).json()
+    chk("Dated rates from Bring in prices: two prices of one yarn in a month are averaged (a range as its midpoint), a row given no yarn is left out",
+        got.get("added") == 1 and got["left_out"] == 1 and got["rates"] == [{"yarn_key": "Cotton 40S", "month": "2026-08", "rate": 359.5, "entries": 2}], str(got))
+    chk("Dated rates from Bring in prices: a yarn not in the master, or a row with no date, is refused with its row number",
+        "Row 1" in c.post("/api/intake/add-dated", json={"rows": [["2026-08-04", "x", "40s", 350, 360, "", "Cotton 41S"]]}).json()["detail"]
+        and c.post("/api/intake/add-dated", json={"rows": [[None, "x", "40s", 350, 360, "", "Cotton 40S"]]}).status_code == 400
+        and c.post("/api/intake/add-dated", json={"rows": [rows[2]]}).status_code == 400)
+    pg = c.get("/api/dated-rates").json()
+    s40 = next(s for s in pg["series"] if s["key"] == "Cotton 40S")
+    chk("Dated rates: the page's chart holds each yarn by month from the first dated month to this one, a month without a rate left empty",
+        pg["months"][0] == "2026-06" and pg["months"][-1] == pg["this_month"] and len(s40["points"]) == len(pg["months"])
+        and [p and p["rate"] for p in s40["points"]][:4] == [None, None, 359.5, None] and data_dated.version() is not None)
+    chk("Dated rates: the store counts them", c.get("/api/store").json()["counts"]["dated yarn rates"] == len(pg["entries"]))
+    for e in pg["entries"]:         # leave the store as the rest of the suite found it
+        c.post("/api/dated-rates/remove", json={"id": e["id"]})
+    return good
 
 
 # ===================================================================== the move from files to a database, proved

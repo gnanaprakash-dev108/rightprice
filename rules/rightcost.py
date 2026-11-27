@@ -5,7 +5,8 @@ import json
 import os
 import re
 import pandas as pd
-from rules import common, costing, dashboard, fabric_list, mills
+from rules import common, costing, dashboard, dated, fabric_list, mills
+import data_dated
 import masters
 import mill_sheet
 import store
@@ -35,19 +36,28 @@ _briefs = {"key": None, "data": None, "running": False}
 
 
 def _pilot_briefs(rows, key):
-    """The negotiation brief's verdict for every purchase-order costing, on today's rates. About 12 ms a
-    fabric, so it runs once in the background and is kept until the rate master changes."""
+    """The negotiation brief's verdict for every purchase-order costing, on the yarn rates of its order month (stage 5,
+    GP's decision of 27 Nov 2026: a dated rate where there is one, today's rate otherwise, said per yarn) and today's
+    other rates. About 12 ms a fabric, so it runs once in the background and is kept until the rate master or the dated
+    rates change."""
     import threading
 
     def work():
         try:
             m, out = common.get_masters(), {}
+            months, table = dated.order_months(), data_dated.table()
             for r in rows:
+                om = months.get(str(r["code"]))
                 try:
-                    res = masters.cost(r["choices"], m)
+                    res = masters.cost(r["choices"], m, on=om["month"] if om else None, dated=table)
                     b = costing.brief(res, m, r["metres"], (), r["choices"])
                     out[r["code"]] = None if b is None else {"stance": b["stance"], "implausible": b["implausible"],
                                                             "lo": b["band"]["lo"] * 100, "hi": b["band"]["hi"] * 100, "weak": b["weak"]}
+                    if out[r["code"]] is not None:
+                        out[r["code"]]["rates"] = dated.po_rates(r["code"], months, res)
+                        if (res.get("rates_of") or {}).get("dated"):        # a dated yarn rate moved the should-cost itself
+                            out[r["code"]]["dated_should"] = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1),
+                                                              "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]}}
                 except Exception as e:      # a costing that no longer works on today's rates
                     out[r["code"]] = {"stance": "error", "weak": [str(e)]}
             _briefs.update(key=key, data=out)
@@ -74,7 +84,8 @@ def costs():
     dashboard._warm_pilot()
     ins = common._cache.get(common.PILOT + "#insights")
     cats = {(c["route"], c["weave"]): c for c in (ins[1]["categories"] if ins and ins[1] else [])}
-    memo = (common._state_key(), _briefs["key"], _briefs["running"])
+    dv = data_dated.version()           # stage 5: the purchase orders' verdicts follow the dated yarn rates too
+    memo = (common._state_key(), dv, _briefs["key"], _briefs["running"])
     if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
         return _costs_memo["val"]
     out = []
@@ -101,14 +112,23 @@ def costs():
                 "range": [lo, hi], "buckets": {b: r.get(f"{b} Rs/m") for b in dashboard.BUCKETS},
                 "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS))})
     version = store.get().version("rates")
-    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, len(out), bool(cats))) if out else {}
+    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, dv, len(out), bool(cats))) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
+        r["rates"] = None           # the rates the costing is on: the order month's (worked out with the verdict)
         if v:
             r["band"] = "Check quote" if v.get("implausible") else STANCE_BAND[v["stance"]]
             r["why_unsure"] = v["weak"]
+            r["rates"] = v.get("rates")
             if "lo" in v:
                 r["range"] = [v["lo"], v["hi"]]
+            if v.get("dated_should"):       # a dated yarn rate was used: the figures follow that costing, not the pilot's
+                ds = v["dated_should"]
+                r.update(should=ds["should"], per_kg=ds["per_kg"], buckets={b: ds["buckets"].get(b) for b in dashboard.BUCKETS})
+                if r["price"] is not None and r["should"]:
+                    r["gap"] = round(r["price"] - r["should"], 2)
+                    r["gap_pct"] = round((r["price"] / r["should"] - 1) * 100, 1)
+                    r["excess"] = None if r["metres"] is None else r["gap"] * r["metres"]
         elif verdicts is None:
             r["band"] = "Working it out"
     listed = fabric_list.list_view({})["rows"]
@@ -127,7 +147,8 @@ def costs():
             "excess": i["at_stake"], "order_size": inp.get("Order size"), "qty_band": inp.get("Rate card quantity"),
             "placeholders": ", ".join(i["placeholders"]) or None, "held_back": None, "band": st or ("Not costed" if i["problems"] else "No price"),
             "range": None if b is None else [b["band"]["lo"] * 100, b["band"]["hi"] * 100], "buckets": None,
-            "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"]})
+            "problems": i["problems"], "added": i["added"], "choices": inp, "why_unsure": None if b is None else b["weak"],
+            "rates": dated.today_rates()})
     # an unsure verdict on a price above the top of its usual range is still money above should-cost:
     # it is marked "Ask break-up, above range" so it is not lost among the unsure rows
     for r in out:
@@ -152,7 +173,7 @@ def costs():
         r["mill"] = mills.mill_key(r["supplier"])
     val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=(common._state_key(), _briefs["key"], _briefs["running"]), val=val)
+    _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"]), val=val)
     return val
 
 

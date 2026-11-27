@@ -250,8 +250,10 @@ def fabric_brief(key: str) -> dict:
     elif price and r.get("choices"):
         try:
             m = s.common.get_masters()
-            res = s.masters.cost(dict(r["choices"], **{"Quoted price (Rs/m)": price}), m)
+            # a purchase order on the yarn rates of its order month, a quote on today's (stage 5, GP's decision)
+            res = s.masters.cost(dict(r["choices"], **{"Quoted price (Rs/m)": price}), m, on=(r.get("rates") or {}).get("month"))
             b = s.costing.brief(res, m, r.get("metres"), (), r["choices"])
+            out["rates_are"] = (r.get("rates") or {}).get("note") or "today's rates"
             if b:
                 out["brief"] = _brief(b, summ)
                 out["brief_is_on"] = "the agreed price in the tracker" if summ and summ["status"] == "Agreed" else "the mill's latest price in the tracker" if summ and summ["latest"] else "the price on the row"
