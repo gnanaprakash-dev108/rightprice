@@ -566,15 +566,18 @@ def main():
               c.get("/mcp/health").status_code == 401 and c.post("/mcp", json={}, headers={"Authorization": "Bearer " + "x" * 40}).status_code == 401
               and c.get("/mcp/health?token=" + tok).status_code == 401 and c.get("/mcp/anything", headers={"Authorization": tok}).status_code == 401)
         hl = c.get("/mcp/health", headers=hd).json()
-        check("MCP: the health check answers a caller holding the token", hl["ok"] is True and hl["tools"] == 10)
+        check("MCP: the health check answers a caller holding the token", hl["ok"] is True and hl["tools"] == len(server.mcp_server.MIRRORS) >= 10)
         rpc = lambda method, params, i=1: c.post("/mcp", headers=hd, json={"jsonrpc": "2.0", "id": i, "method": method, "params": params}).json()
         call = lambda name, **args: json.loads(rpc("tools/call", {"name": name, "arguments": args})["result"]["content"][0]["text"])
         listed_t = rpc("tools/list", {})["result"]["tools"]
         names = [t["name"] for t in listed_t]
         writers = {t["name"] for t in listed_t if not (t.get("annotations") or {}).get("readOnlyHint")}
-        check("MCP: the ten tools are offered, and only the two that write are marked as writing",
-              set(names) == {"list_choices", "cost_fabric", "find_fabrics", "fabric_brief", "supplier_summary", "negotiation_pack", "tracker_steps",
-                             "record_tracker_step", "remove_my_tracker_step", "quote_alerts"} and writers == {"record_tracker_step", "remove_my_tracker_step"}, str(writers))
+        # since GP's decision of 27 Nov 2026 the token is an admin key with more tools: assistant_checks() checks those
+        check("MCP: the ten first tools are offered among the others; the two of them that write are marked as writing, the eight others are not",
+              {"list_choices", "cost_fabric", "find_fabrics", "fabric_brief", "supplier_summary", "negotiation_pack", "tracker_steps",
+               "record_tracker_step", "remove_my_tracker_step", "quote_alerts"} <= set(names) == set(server.mcp_server.MIRRORS)
+              and writers & {"list_choices", "cost_fabric", "find_fabrics", "fabric_brief", "supplier_summary", "negotiation_pack", "tracker_steps",
+                             "record_tracker_step", "remove_my_tracker_step", "quote_alerts"} == {"record_tracker_step", "remove_my_tracker_step"}, str(writers))
         ex = call("list_choices")["example"]
         check("MCP: a fabric costed through the assistant gives the engine's figure", call("cost_fabric", choices=ex)["should_cost_per_m"] == round(c.post("/api/cost", json=ex).json()["total_per_m"], 2))
         check("MCP: a field the costing does not know, or a value not among the choices, is refused, not ignored",
@@ -613,7 +616,7 @@ def main():
         check("MCP: the brief and the tracker read back what the screens hold",
               call("fabric_brief", key=qk)["negotiation"]["mill_latest"] == 185 and call("tracker_steps", key=qk)["status"] == "Open" and "error" in call("fabric_brief", key="nope") and "error" in call("tracker_steps", key="nope"))
         ev({"key": qk, "code": "Q-4", "kind": "Our counter", "price": 170, "date": "2026-11-22", "metres": 3700})
-        check("MCP: with a counter recorded the brief says not to open above it; a person's step cannot be removed by the assistant",
+        check("MCP: with a counter recorded the brief says not to open above it; a person's step is not removed by remove_my_tracker_step (remove_tracker_step does that, as an admin can)",
               (lambda b_: b_ is None or (b_.get("open_at_per_m") is None or b_["verdict"] != "Push"))(call("fabric_brief", key=qk).get("brief"))
               and "error" in call("remove_my_tracker_step", key=qk, kind="Our counter", price_per_m=170))
         web_by = c.post("/api/negotiations/event", json={"key": qk, "kind": "Our counter", "price": 180, "date": "2026-11-23", "by": "the owner"}).json()
@@ -810,10 +813,10 @@ def access_checks():
             tools = {t.name: t for t in asyncio.run(server.mcp_server.mcp.list_tools())}
             mirrors = server.mcp_server.MIRRORS
             writers = {n for n, t in tools.items() if not (t.annotations and t.annotations.read_only_hint)}
-            check(tag + "The AI assistant: every tool names an address of the app it mirrors, its fixed role opens each, and only the "
-                        "tools mirroring tracker steps write",
+            check(tag + "The AI assistant: every tool names an address of the app it mirrors, its fixed role opens each, and no tool "
+                        "mirroring a page's address (to look at) writes",
                   set(tools) == set(mirrors) and all(m in keys for m in mirrors.values()) and all(access.assistant_refusal(m) is None for m in mirrors.values())
-                  and writers == {n for n, m in mirrors.items() if access.ROUTES[m] == "do:record_steps"} == {"record_tracker_step", "remove_my_tracker_step"},
+                  and not {n for n in writers if not str(access.ROUTES[mirrors[n]]).startswith("do:")} and {"record_tracker_step", "remove_my_tracker_step"} <= writers,
                   str(set(tools) ^ set(mirrors)))
 
         # the setting off: everything as before
@@ -1152,6 +1155,449 @@ def access_checks():
     return 0 if ok else 1
 
 
+# ===================================================================== GP's decision of 27 Nov 2026: the AI assistant does what an Admin can
+def assistant_checks():
+    """The MCP token is an admin key: every change an Admin can make in the app has a tool (mcp_server.py), called here
+    through /mcp with the token, as an assistant calls it. Each is set beside its web route on the same store, made by a
+    signed-in admin: the same stored result, the same refusal in the same words, and the change recorded as "AI
+    assistant" where the route records the admin. Without the token nothing is reachable. Runs on SQLite and PostgreSQL."""
+    import base64
+    import pandas as pd
+    import mill_sheet
+    import store
+    from rules import access
+    ok = True
+
+    def check(name, good, detail=""):
+        nonlocal ok
+        ok &= bool(good)
+        print(f"{name}: {'OK' if good else 'MISMATCH'} {detail}")
+
+    tag, tok, AI = f"[{STORE}, AI assistant] ", "m" * 40, "AI assistant"
+    gp = {"X-MS-CLIENT-PRINCIPAL-NAME": "gp@example.com"}
+    accept = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    hd = dict(accept, Authorization="Bearer " + tok)
+    for k in ("WEBSITE_SITE_NAME", "WEBSITE_AUTH_ENABLED"):
+        os.environ.pop(k, None)
+    os.environ["RIGHTPRICE_MCP_TOKEN"] = tok
+    os.environ["RIGHTPRICE_ADMINS"] = "gp@example.com"         # permissions on: the web routes record the admin by name
+    ms = server.mcp_server
+    if ms is None:
+        check(tag + "The MCP package loads", False)
+        return 1
+    b64 = lambda data: base64.b64encode(data).decode()
+    sql = lambda text, params=(): store.get()._read(lambda cur: cur.all(text, params))
+    versions = lambda: [tuple(r) for r in sql("SELECT id, created_by, reason FROM rate_version ORDER BY id")]
+    today = _dt.date.today().isoformat()
+
+    def xlsx(df, sheet="Sheet1"):
+        buf = io.BytesIO()
+        df.to_excel(buf, index=False, sheet_name=sheet)
+        return buf.getvalue()
+
+    with TestClient(server.app) as c:
+        def rpc(method, params, headers=hd):
+            return c.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+
+        def call(tool_, **args):
+            text = rpc("tools/call", {"name": tool_, "arguments": args}).json()["result"]["content"][0]["text"]
+            try:
+                return json.loads(text)
+            except ValueError:
+                return {"error": text}
+        web = lambda method, path, **kw: c.request(method, path, headers=gp, **kw)
+        upload = lambda path, name, data: c.post(path, headers=gp, files={"file": (name, io.BytesIO(data))})
+        detail = lambda r: r.json().get("detail") if r.status_code != 200 else None
+        same_refusal = lambda m, w: bool(m.get("error")) and m.get("error") == detail(w)
+        tools = {t["name"]: t for t in rpc("tools/list", {}).json()["result"]["tools"]}
+        names, mirrors = sorted(tools), ms.MIRRORS
+
+        # without the token, nothing
+        shut = [f"{n} {h}: {code}" for n in names for h, code in
+                ((h, rpc("tools/call", {"name": n, "arguments": {}}, headers=dict(accept, **hh)).status_code)
+                 for h, hh in (("no token", {}), ("wrong token", {"Authorization": "Bearer " + "x" * 40}), ("no Bearer", {"Authorization": tok}), ("admin's sign-in", gp)))
+                if code != 401]
+        os.environ.pop("RIGHTPRICE_MCP_TOKEN")
+        off = rpc("tools/call", {"name": "users_and_roles", "arguments": {}}).status_code
+        os.environ["RIGHTPRICE_MCP_TOKEN"] = tok
+        check(tag + f"Without the token nothing is reachable: each of the {len(names)} tools called with no token, a wrong one, the token without "
+                    "'Bearer', or an admin's Microsoft sign-in is refused (401), the list of tools too; with the token setting gone, /mcp is off (404)",
+              not shut and rpc("tools/list", {}, headers=accept).status_code == 401 and off == 404, "; ".join(shut[:4]))
+
+        # the tools as they are declared
+        keys = server.route_keys()
+        ann = {n: t.get("annotations") or {} for n, t in tools.items()}
+        writes = {n for n in names if not ann[n].get("readOnlyHint")}
+        exempt = lambda k: k in ms.NOT_MIRRORED or f"* {k.split(' ', 1)[1]}" in ms.NOT_MIRRORED
+        missing = sorted(k for k, need in keys.items() if str(need).startswith("do:") and k not in set(mirrors.values()) and not exempt(k))
+        reads_on_actions = {"intake_page", "intake_api", "intake_map_columns", "draft_message_to_mill"}     # an action's step that keeps nothing
+        on_actions = {n for n in names if str(access.ROUTES[mirrors[n]]).startswith("do:")}
+        rate_tools = {n for n in writes if access.ROUTES[mirrors[n]] in ("do:edit_rates", "do:apply_drafts") and ann[n].get("destructiveHint")}
+        check(tag + "GP's decision: every action an Admin can take in the app (each address needing a do: permission) has a tool mirroring it, or "
+                    "mcp_server.NOT_MIRRORED says why not, so a later stage's new action fails here until it has one (mcp_server.py, \"Adding a tool\")",
+              not missing and set(names) == set(mirrors) and all(m in keys for m in mirrors.values()), str(missing))
+        check(tag + "Every tool that changes shared data is marked writing and destructive (a client asks the person first) and says what it changes "
+                    "and that the person must confirm; the tools on pages, and the steps that keep nothing, are read only; only Bring in prices' "
+                    "first step is writing but not destructive (it keeps a PDF or picture as the source)",
+              writes == on_actions - reads_on_actions and all(ann[n].get("destructiveHint") for n in writes - {"intake_file"})
+              and not ann["intake_file"].get("destructiveHint") and all("confirm" in tools[n]["description"].lower()
+                                                                       and re.search(r"THIS\s+(CHANGES|ADDS|REMOVES)", tools[n]["description"])
+                                                                       or n == "intake_file" for n in writes)
+              and {n for n in names if ann[n].get("openWorldHint")} == {"intake_page", "intake_api", "draft_message_to_mill"},
+              str(sorted(writes ^ (on_actions - reads_on_actions))))
+        check(tag + "Rule 2 holds for the assistant: each tool that changes the rate master says to change a rate only when the person explicitly "
+                    "asks for that change, stating the old and the new figure first; so do the server's instructions",
+              rate_tools == {"edit_rate_table", "add_cotton_price", "intake_add_rows", "apply_cost_sheet_drafts"}
+              and all("explicitly asked" in tools[n]["description"] and "the old figure and the new one" in tools[n]["description"] for n in rate_tools)
+              and "NEVER CHANGE A RATE" in (ms.mcp.instructions or ""), str(rate_tools))
+        fixed = call("change_role_permissions", changes=[{"role": AI, "permission": "do:draft", "allowed": False}])
+        check(tag + "The AI assistant is a fixed role with the Admin role's permissions, kept in code: not one of the roles, and the admin page "
+                    "cannot change it (refused in the same words as on the screen)",
+              access.ASSISTANT_ALLOWED == access.DEFAULTS[access.ADMIN] == set(access.ALL) and AI not in access.ROLES
+              and same_refusal(fixed, web("POST", "/api/users/permissions", json={"changes": [{"role": AI, "permission": "do:draft", "allowed": False}]})), str(fixed))
+
+        # every tool refused, in words, when its address's permission is taken from the role; nothing done
+        fill = {"string": "x", "integer": 1, "number": 1, "boolean": False, "array": [], "object": {}}
+        minimal = lambda schema: {p: fill.get(schema["properties"][p].get("type"), "x") for p in schema.get("required", [])}
+        fingerprint = lambda: (json.dumps(c.get("/api/store", headers=gp).json(), sort_keys=True), sql("SELECT count(*) FROM audit_log"))
+        kept, before, gated = set(access.ASSISTANT_ALLOWED), fingerprint(), []
+        free = [n for n in names if access.ROUTES[mirrors[n]] == access.MEMBER]
+        try:
+            for n in names:
+                if n in free:
+                    continue
+                access.ASSISTANT_ALLOWED.difference_update(access._needs(access.ROUTES[mirrors[n]]))
+                got = call(n, **minimal(tools[n]["inputSchema"]))
+                access.ASSISTANT_ALLOWED.update(kept)
+                if "The AI assistant may not" not in str(got.get("error")) or "Nothing was done" not in str(got.get("error")):
+                    gated.append(f"{n}: {str(got)[:100]}")
+        finally:
+            access.ASSISTANT_ALLOWED.clear()
+            access.ASSISTANT_ALLOWED.update(kept)
+        check(tag + f"Each of the {len(names) - len(free)} tools with a permission is refused in words when its address's permission is taken from the "
+                    f"assistant's role, and nothing is done ({', '.join(free)}: what anyone let in reads)",
+              not gated and fingerprint() == before and len(free) <= 2, "; ".join(gated[:4]))
+
+        # reading: what the screens read
+        meta, yr = web("GET", "/api/meta").json(), web("GET", "/api/table/Yarn_Rates").json()
+        as_lists = lambda rows, cols: [[r[k] for k in cols] for r in rows]
+        listing, mt = call("rate_table"), call("rate_table", sheet="Yarn_Rates")
+        check(tag + "rate_table: every table the screens list, which can be edited, and a table's rows exactly as the screen reads them, numbered from 1",
+              [t["sheet"] for t in listing["tables"]] == list(meta["tables"]) and {t["sheet"] for t in listing["tables"] if t["editable"]} == set(meta["editable"])
+              and mt["columns"] == yr["columns"] and as_lists(mt["rows"], yr["columns"]) == yr["rows"] and mt["rows"][0]["row"] == 1
+              and call("rate_table", sheet="Nope").get("error") == detail(web("GET", "/api/table/Nope")))
+        ym, db, pw, pm = call("yarn_master"), call("dashboard"), web("GET", "/api/pilot").json(), call("pilot_results")
+        cot_w, cot_m = web("GET", "/api/cotton").json(), call("cotton_prices", last=5000)
+        diff = _first_difference(db["panels"], web("GET", "/api/insights").json())
+        check(tag + "yarn_master, dashboard, pilot_results and cotton_prices give what the Yarn prices page, the Dashboard, Pilot results and Cotton prices read",
+              ym["cotton_yarns_against_the_market"] == web("GET", "/api/dashboard").json()["yarns"] and as_lists(ym["yarns"], yr["columns"]) == yr["rows"]
+              and diff is None and db["negotiation_won"] == web("GET", "/api/negotiations/summary").json()
+              and pm["sheets"] == list(pw) and all(as_lists(pm["tables"][k], pw[k]["columns"]) == pw[k]["rows"] for k in pw)
+              and [[p["date"], p["price"]] for p in cot_m["prices"]] == cot_w["points"] and cot_m["unit"] == cot_w["unit"], str(diff))
+        tpl = web("GET", "/api/template").content
+        bm, bw = call("cost_template_file", file_base64=b64(tpl), file_name="t.xlsx"), upload("/api/bulk", "t.xlsx", tpl).json()
+        check(tag + "cost_template_file costs a filled template as Bulk upload does, and keeps nothing",
+              as_lists(bm["rows"], bw["results"]["columns"]) == bw["results"]["rows"] and bm["rows_refused"] == bw["rejected"] == 0
+              and json.dumps(c.get("/api/store", headers=gp).json(), sort_keys=True) == before[0])
+
+        # editing a rate table
+        cols = yr["columns"]
+        ki, ri = cols.index("Yarn key"), cols.index("Rate Rs/kg")
+        n = next(i for i, r in enumerate(yr["rows"]) if r[ki] == "Cotton 40S") + 1
+        r0 = yr["rows"][n - 1][ri]
+        v0 = versions()
+        stale = call("edit_rate_table", sheet="Yarn_Rates", changes=[{"row": n, "column": "Rate Rs/kg", "old": r0 + 1, "new": r0 + 7}])
+        v_stale = versions()
+        done = call("edit_rate_table", sheet="Yarn_Rates", changes=[{"row": n, "column": "Rate Rs/kg", "old": r0, "new": r0 + 7}])
+        t_ai, v_ai = web("GET", "/api/table/Yarn_Rates").json(), versions()
+        web("PUT", "/api/table/Yarn_Rates", json={"columns": cols, "rows": yr["rows"]})            # back as it was, on the screen
+        web("PUT", "/api/table/Yarn_Rates", json={"columns": cols, "rows": t_ai["rows"]})          # the same change, made on the screen
+        t_web, v_web = web("GET", "/api/table/Yarn_Rates").json(), versions()
+        check(tag + "edit_rate_table: a cell changed through the assistant (row, column, old and new figure) is stored exactly as the same change saved "
+                    "on the screen; the answer lists it, old and new; each save is a new rate version, the earlier ones kept; recorded as \"AI assistant\" "
+                    "where the screen records the admin",
+              t_ai["rows"][n - 1][ri] == r0 + 7 and t_web == t_ai and done.get("saved") is True
+              and done["changed"]["cells"] == [{"row": n, "column": "Rate Rs/kg", "old": r0, "new": r0 + 7}]
+              and v_ai[:-1] == v0 and v_ai[-1][1:] == (AI, "Table edited: Yarn_Rates") and v_web[:len(v_ai)] == v_ai and v_web[-1][1:] == ("gp@example.com", "Table edited: Yarn_Rates"),
+              str(done)[:300])
+        check(tag + "edit_rate_table: an old figure that is not what the table holds now is refused, saying so, and nothing is saved",
+              "does not hold the old figures" in stale.get("error", "") and f"{r0!r}" in stale["error"] and v_stale == v0, str(stale)[:200])
+        back = call("edit_rate_table", sheet="Yarn_Rates", rows=mt["rows"])        # the whole table, rows as rate_table gave them
+        check(tag + "edit_rate_table: the whole table sent back (as rate_table gave it) puts it back exactly, and says which cell changed",
+              web("GET", "/api/table/Yarn_Rates").json()["rows"] == yr["rows"] and back["changed"]["cells"] == [{"row": n, "column": "Rate Rs/kg", "old": r0 + 7, "new": r0}]
+              and versions()[-1][1] == AI)
+        bad = [list(r) for r in yr["rows"]]
+        bad[n - 1][ri] = "abc"
+        twice, blank = [list(r) for r in yr["rows"]] + [list(yr["rows"][n - 1])], [list(r) for r in yr["rows"]]
+        blank[n - 1][ki] = ""
+        v_before = versions()
+        refused = {what: (call("edit_rate_table", sheet=sheet, rows=rows), web("PUT", f"/api/table/{sheet}", json={"columns": cols, "rows": rows}))
+                   for what, sheet, rows in (("a word for a number", "Yarn_Rates", bad), ("a key twice", "Yarn_Rates", twice), ("a blank key", "Yarn_Rates", blank),
+                                             ("an empty table", "Yarn_Rates", []), ("a table not edited here", "Cotton_Prices", []), ("no such table", "Nope", []))}
+        check(tag + "edit_rate_table refuses what the screen refuses, in the same words (a word for a number, a key twice or blank, an empty table, a table "
+                    "not edited here), and nothing is saved",
+              all(same_refusal(m, w) for m, w in refused.values()) and versions() == v_before,
+              str({k: (m.get("error"), detail(w)) for k, (m, w) in refused.items() if not same_refusal(m, w)}))
+
+        # a cotton price
+        cot0 = len(web("GET", "/api/table/Cotton_Prices").json()["rows"])
+        day = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+        cm = call("add_cotton_price", date=day, price_per_candy=55555, source="check")
+        web("POST", "/api/cotton", json={"date": day, "price": 55555, "source": "check"})
+        cot, vv = web("GET", "/api/table/Cotton_Prices").json()["rows"], versions()
+        check(tag + "add_cotton_price adds the same row as Prices > Cotton prices, says the latest price before it, recorded as \"AI assistant\"; "
+                    "a bad date or price is refused in the screen's words",
+              len(cot) == cot0 + 2 and cot[-1] == cot[-2] and cm["added"]["Price"] == 55555 and cm["latest_before"] is not None
+              and vv[-2][1:] == (AI, f"Cotton price added: {day}, Rs 55555") and vv[-1][1] == "gp@example.com"
+              and same_refusal(call("add_cotton_price", date="not a date", price_per_candy=5), web("POST", "/api/cotton", json={"date": "not a date", "price": 5}))
+              and same_refusal(call("add_cotton_price", date=day, price_per_candy=-5), web("POST", "/api/cotton", json={"date": day, "price": -5})), str(cm)[:200])
+
+        # Bring in prices: a file, its columns, the rows added
+        csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n50s,Combed compact,402\n60s,Combed compact,\n"
+        fm, fw = call("intake_file", file_base64=b64(csv), file_name="list.csv"), upload("/api/intake/file", "list.csv", csv).json()
+        sheet = next(iter(fw["sheets"]))
+        mm = call("intake_map_columns", token=fm["token"], table=sheet, count_column="Count", rate_column="Rate", yarn_column="Yarn")
+        mw = web("POST", "/api/intake/map", json={"token": fw["token"], "sheet": sheet, "count": "Count", "low": "Rate", "yarn": "Yarn"}).json()
+        my0 = len(web("GET", "/api/table/Market_Yarn").json()["rows"])
+        am = call("intake_add_rows", rows=mm["rows"], source="list.csv")
+        aw = web("POST", "/api/intake/add", json={"rows": mw["rows"], "source": "list.csv"}).json()
+        my, vv = web("GET", "/api/table/Market_Yarn").json()["rows"], versions()
+        check(tag + "Bring in prices through the assistant reads the file, maps its columns and adds the rows exactly as the screen does (a file given "
+                    "as base64 with its name); the addition recorded as \"AI assistant\"",
+              {k: v["first_rows"] for k, v in fm["tables"].items()} == {k: v["rows"] for k, v in fw["sheets"].items()} and mm["rows"] == mw["rows"]
+              and mm["columns"] == mw["columns"] and am["added"] == aw["added"] == 2 and len(my) == my0 + 4 and my[-4:-2] == my[-2:]
+              and vv[-2][1:] == (AI, "Market yarn prices brought in: 2 rows") and vv[-1][1] == "gp@example.com", str(am))
+        refused = {"no such token": (call("intake_map_columns", token="nope", table=sheet, count_column="Count", rate_column="Rate"),
+                                     web("POST", "/api/intake/map", json={"token": "nope", "sheet": sheet, "count": "Count", "low": "Rate"})),
+                   "no complete row": (call("intake_add_rows", rows=[[None] * 6]), web("POST", "/api/intake/add", json={"rows": [[None] * 6]})),
+                   "a file of another kind": (call("intake_file", file_base64=b64(b"x"), file_name="x.exe"), upload("/api/intake/file", "x.exe", b"x")),
+                   "no page address": (call("intake_page", url=""), web("POST", "/api/intake/link", json={"url": ""})),
+                   "no endpoint": (call("intake_api", url=""), web("POST", "/api/intake/api", json={"url": ""}))}
+        check(tag + "Bring in prices refuses what the screen refuses, in its words; a file that is not base64, or without a name, is refused in words",
+              all(same_refusal(m, w) for m, w in refused.values()) and "not base64" in call("intake_file", file_base64="@@ not base64 @@", file_name="a.csv").get("error", "")
+              and "file's name" in call("intake_file", file_base64=b64(csv), file_name="").get("error", "") and len(web("GET", "/api/table/Market_Yarn").json()["rows"]) == my0 + 4,
+              str({k: (m.get("error"), detail(w)) for k, (m, w) in refused.items() if not same_refusal(m, w)}))
+
+        # the fabric list: a mill's sheet uploaded, a fabric added, rows removed
+        base = {"Brand": "AS", "Fab Code": "AI-1", "YD/NYD": "YD", "Material Type": "100% Cotton", "Warp": 40, "Weft": 40, "EPI": 136, "PPI": 90,
+                "Variety": "YDS", "Weave": "2/1 RHT", "F.W.": 145, "Finish": "Normal", "Arvind Ref": "x/1", "Total order qnty": 2255, "Base Price": 164,
+                "Std EPI": 122, "Std PPI": 76, "Actual EPI": 136, "Actual PPI": 90, "Diff EPI": 14, "Diff PPI": 14, "EPI Upch": 8.4, "PPI Upch": 12.6,
+                "Finish Upch": 0, "Dobby Upch": 0, "Upcharge/Print/Mcount": 0, "Double beam": 0, "Price": 185, "Upcharge for less qnty": 0,
+                "Discoun>2000 mts": 0, "Total price with qnty disc/upcharge": 185, "Ex mill price": 185, "C2FO @2.84%": 190.254}
+        hi = dict(base, **{"Fab Code": "AI-2", "Price": 240, "Ex mill price": 240, "Total price with qnty disc/upcharge": 240, "Total order qnty": 5000})
+        sheet_x = xlsx(pd.DataFrame([base, hi], columns=mill_sheet.COLUMNS))
+        live = lambda: {r["id"]: r for r in web("POST", "/api/list", json={}).json()["rows"]}
+        who = lambda: {r[0]: (r[1], r[2]) for r in sql("SELECT legacy_id, added_by, removed_by FROM quote")}
+        strip = lambda rows: sorted((json.dumps({k: v for k, v in r.items() if k not in ("id", "added", "upload")}, sort_keys=True) for r in rows))
+        ids0 = set(live())
+        um = call("upload_to_fabric_list", file_base64=b64(sheet_x), file_name="ai sheet.xlsx")
+        rows_ai = [r for i, r in live().items() if i not in ids0]
+        again = call("upload_to_fabric_list", file_base64=b64(sheet_x), file_name="ai sheet.xlsx")
+        web("POST", "/api/list/remove", json={"ids": [r["id"] for r in rows_ai]})
+        uw = upload("/api/list/upload", "ai sheet.xlsx", sheet_x).json()
+        rows_web = [r for i, r in live().items() if i not in ids0]
+        by = who()
+        check(tag + "upload_to_fabric_list: a mill's sheet as base64 gives the same rows, costings and quote alerts as Bulk upload; a row already on the "
+                    "list is not added twice; the rows recorded as added by \"AI assistant\", as the screen records the admin",
+              um["added"] == uw["added"] == 2 and again["added"] == 0 and again["already_on_the_list"] == 2 and strip(rows_ai) == strip(rows_web)
+              and um["read_as"] == uw["kind"] == "mill sheet" and len(um["alerts"]) == len(uw["alerts"]) >= 1
+              and all(by[r["id"]] == (AI, "gp@example.com") for r in rows_ai) and all(by[r["id"]] == ("gp@example.com", None) for r in rows_web), str(um)[:300])
+        check(tag + "upload_to_fabric_list refuses what the screen refuses, in its words (not Excel; no known headings)",
+              same_refusal(call("upload_to_fabric_list", file_base64=b64(b"not excel"), file_name="x.xlsx"), upload("/api/list/upload", "x.xlsx", b"not excel"))
+              and same_refusal(call("upload_to_fabric_list", file_base64=b64(xlsx(pd.DataFrame([{"a": 1}]))), file_name="y.xlsx"),
+                               upload("/api/list/upload", "y.xlsx", xlsx(pd.DataFrame([{"a": 1}])))))
+        ex = dict(masters.EXAMPLE_ROW, **{"Fabric code": "AI-3", "Supplier": "Check Mills", "Quoted price (Rs/m)": 240, "Order quantity (m)": 3000})
+        fm_ = call("add_fabric_to_list", choices=ex)
+        fw_ = web("POST", "/api/list/add", json=ex).json()
+        rows = live()
+        rp = call("add_fabric_to_list", choices=dict(ex, **{"Quoted price (Rs/m)": 230}), replaces_key=fm_["key"])
+        rows2, by = live(), who()
+        rp_id = rp["key"].split("|", 1)[1]
+        check(tag + "add_fabric_to_list adds the same row as Cost a fabric's Add to list, and replaces a row as editing it does; recorded as \"AI assistant\"",
+              strip([rows[fm_["key"].split("|", 1)[1]]]) == strip([rows[fw_["id"]]]) and rp["replaced"] == fm_["key"] and fm_["key"].split("|", 1)[1] not in rows2
+              and rows2[rp_id]["inputs"]["Quoted price (Rs/m)"] == 230 and by[fm_["key"].split("|", 1)[1]] == (AI, AI) and by[rp_id] == (AI, None)
+              and by[fw_["id"]] == ("gp@example.com", None), str(rp))
+        bad_weave = dict(ex, Weave="Not a weave")
+        check(tag + "add_fabric_to_list refuses a fabric the costing refuses, in the screen's words; a field name it does not know is refused, not kept",
+              same_refusal(call("add_fabric_to_list", choices=bad_weave), web("POST", "/api/list/add", json=bad_weave))
+              and "Unknown field" in call("add_fabric_to_list", choices=dict(ex, Shade="Dark")).get("error", "") and len(live()) == len(rows2))
+        rm = call("remove_fabric_list_rows", keys=[rp["key"], "Fabric list|nope"])
+        check(tag + "remove_fabric_list_rows removes a row as the screen does, names it, says which key was not on the list; recorded as removed by "
+                    "\"AI assistant\"; no rows given is refused in the screen's words",
+              rm["removed"] == 1 and rm["rows"] == [{"key": rp["key"], "code": "AI-3", "supplier": "Check Mills"}] and rm["not_on_the_list"] == ["Fabric list|nope"]
+              and rp_id not in live() and who()[rp_id] == (AI, AI)
+              and same_refusal(call("remove_fabric_list_rows", keys=[]), web("POST", "/api/list/remove", json={"ids": []})), str(rm))
+
+        # mill cost sheets: upload, the drafts applied, rows removed
+        cs = pd.read_excel(io.BytesIO(web("GET", "/api/costsheet/template").content), sheet_name="Cost sheet")
+        cs.loc[0, "Overhead %"], cs.loc[0, "Mill"] = 6, "Mill A"
+        cs2 = cs.copy()
+        cs2["Mill"] = "Mill B"
+        cs2.loc[0, "Overhead %"] = 8
+        csx = xlsx(pd.concat([cs, cs2]), sheet="Cost sheet")
+        # a row as the screen shows it, without what differs by the upload itself (its id, time, name, who); the mill's own row likewise
+        cut = lambda v: [json.dumps(dict({k: x for k, x in r.items() if k not in ("id", "added", "upload", "by", "row")},
+                                         row={k: x for k, x in (r.get("row") or {}).items() if not k.startswith("_")}), sort_keys=True) for r in v["rows"]]
+        cum = call("upload_mill_cost_sheet", file_base64=b64(csx), file_name="cost sheets.xlsx")
+        vm = web("GET", "/api/costsheet").json()
+        cuw = upload("/api/costsheet/upload", "cost sheets.xlsx", csx).json()
+        vw, tm = web("GET", "/api/costsheet").json(), call("mill_cost_sheets")
+        check(tag + "upload_mill_cost_sheet reads the sheet as Mill cost sheets does (the same rows and drafts; sent again, it takes the place of the "
+                    "mill's rows); each row records who brought it in: \"AI assistant\", or the admin on the screen",
+              cum["added"] == cuw["added"] == 2 and cuw["replaced"] == 2 and cut(vm) == cut(vw) and vm["drafts"] == vw["drafts"] and vw["drafts"]
+              and all(r["by"] == AI for r in vm["rows"]) and all(r["by"] == "gp@example.com" for r in vw["rows"])
+              and [r["id"] for r in tm["rows"]] == [r["id"] for r in vw["rows"]] and [(d["id"], d["proposed"]) for d in tm["drafts"]] == [(d["id"], d["proposed"]) for d in vw["drafts"]],
+              str(cum))
+        check(tag + "upload_mill_cost_sheet refuses what the screen refuses, in its words",
+              same_refusal(call("upload_mill_cost_sheet", file_base64=b64(b"nope"), file_name="c.xlsx"), upload("/api/costsheet/upload", "c.xlsx", b"nope"))
+              and same_refusal(call("upload_mill_cost_sheet", file_base64=b64(xlsx(pd.DataFrame([{"a": 1}]))), file_name="c.xlsx"),
+                               upload("/api/costsheet/upload", "c.xlsx", xlsx(pd.DataFrame([{"a": 1}])))))
+        d = vw["drafts"][0]
+        t0 = web("GET", f"/api/table/{d['table']}").json()
+        ap = call("apply_cost_sheet_drafts", draft_ids=[d["id"]])
+        t1, v1 = web("GET", f"/api/table/{d['table']}").json(), versions()
+        web("PUT", f"/api/table/{d['table']}", json={"columns": t0["columns"], "rows": t0["rows"]})
+        apw = web("POST", "/api/costsheet/apply", json={"ids": [d["id"]]}).json()
+        t2, v2 = web("GET", f"/api/table/{d['table']}").json(), versions()
+        check(tag + "apply_cost_sheet_drafts writes the ticked draft into the rate master exactly as the screen does (the rate and its Basis), after "
+                    "keeping the rate master as it was; recorded as \"AI assistant\"",
+              ap["applied"] == apw["applied"] and ap["applied"] and t1 == t2 and t1 != t0 and v1[-1][1] == AI and v1[-1][2].startswith("Mill cost sheet drafts applied")
+              and v2[-1][1] == "gp@example.com", str(ap))
+        check(tag + "apply_cost_sheet_drafts refuses what the screen refuses, in its words (nothing ticked; a draft no longer there)",
+              same_refusal(call("apply_cost_sheet_drafts", draft_ids=[]), web("POST", "/api/costsheet/apply", json={"ids": []}))
+              and same_refusal(call("apply_cost_sheet_drafts", draft_ids=["nope"]), web("POST", "/api/costsheet/apply", json={"ids": ["nope"]})))
+        web("PUT", f"/api/table/{d['table']}", json={"columns": t0["columns"], "rows": t0["rows"]})
+        rmm = call("remove_mill_cost_sheet_rows", ids=[vw["rows"][0]["id"]])
+        left_ai = web("GET", "/api/costsheet").json()
+        upload("/api/costsheet/upload", "cost sheets.xlsx", csx)
+        web("POST", "/api/costsheet/remove", json={"ids": [web("GET", "/api/costsheet").json()["rows"][0]["id"]]})
+        left_web = web("GET", "/api/costsheet").json()
+        gone = call("remove_mill_cost_sheet_rows", upload=left_web["rows"][0]["upload"])
+        check(tag + "remove_mill_cost_sheet_rows removes a row, or a whole upload, as the screen does",
+              rmm["removed"] == 1 and cut(left_ai) == cut(left_web) and len(left_ai["rows"]) == 1 and gone["removed"] == 1 and web("GET", "/api/costsheet").json()["rows"] == [])
+
+        # quote alerts seen
+        al = web("GET", "/api/alerts").json()
+        aid = sorted(al["ids"])[0]
+        seen = lambda: {r[0]: r[1] for r in sql("SELECT quote_id, seen_by FROM alert_seen")}
+        sm = call("mark_alerts_seen", keys=[f"Fabric list|{aid}"])
+        after_ai, by_ai = web("GET", "/api/alerts").json(), seen()
+        web("POST", "/api/alerts/seen", json={"ids": [aid], "undo": True})
+        web("POST", "/api/alerts/seen", json={"ids": [aid]})
+        after_web, by_web = web("GET", "/api/alerts").json(), seen()
+        back = call("mark_alerts_seen", keys=[aid], bring_back=True)
+        call("mark_alerts_seen", keys=[aid])
+        every = call("mark_alerts_seen", bring_all_back=True)
+        check(tag + "mark_alerts_seen marks an alert seen for everyone, and brings one or all back, exactly as the screens do; recorded as seen by \"AI assistant\"",
+              al["count"] >= 1 and after_ai == after_web and sm["alerts_to_look_at_now"] == al["count"] - 1 and by_ai.get(aid) == AI and by_web.get(aid) == "gp@example.com"
+              and back["alerts_to_look_at_now"] == al["count"] and every["marked_seen"] == 0 and web("GET", "/api/alerts").json()["count"] == al["count"], str(sm))
+
+        # a negotiation step removed, whoever recorded it
+        key3 = f"Fabric list|{fw_['id']}"
+        web("POST", "/api/negotiations/event", json={"key": key3, "kind": "Mill's quote", "price": 240, "date": today, "code": "AI-3", "supplier": "Check Mills"})
+        st = call("tracker_steps", key=key3)
+        sid = st["steps"][0]["id"]
+        rs = call("remove_tracker_step", key=key3, step_id=sid)
+        ng = web("GET", "/api/negotiations").json()["items"][key3]
+        check(tag + "remove_tracker_step removes a step a person recorded, as an admin can on the Negotiation tab; it is kept in the Log, removed by "
+                    "\"AI assistant\"; a step already gone is refused in the screen's words",
+              st["steps"][0]["by"] == "gp@example.com" and rs["removed"] is True and rs["removed_step"]["recorded_by"] == "gp@example.com" and ng["events"] == []
+              and ng["removed"][-1]["removed_by"] == AI and ng["removed"][-1]["id"] == sid
+              and same_refusal(call("remove_tracker_step", key=key3, step_id=sid), web("POST", "/api/negotiations/remove", json={"key": key3, "id": sid})), str(rs)[:200])
+        rec = call("record_tracker_step", key=key3, kind="Mill's quote", price_per_m=240, date=today)
+        steps = sql("SELECT recorded_by FROM negotiation_step WHERE negotiation_key = %s AND removed_at IS NULL", (key3,))
+        check(tag + "A step recorded through the assistant is stored as recorded by \"AI assistant\"", rec.get("recorded") is True and [r[0] for r in steps] == [AI])
+
+        # users and roles
+        u0 = web("GET", "/api/users").json()
+        ur = call("users_and_roles")
+        check(tag + "users_and_roles shows the people, the roles, the assistant's fixed role and the change record as the admin page does",
+              ur["people"] == u0["people"] and ur["change_record"] == u0["audit"][:50] and ur["assistant"]["note"] == access.ASSISTANT_NOTE
+              and set(ur["roles"]) == set(access.ROLES) and ur["admins_named_in_the_setting"] == ["gp@example.com"])
+        pa = call("add_person", email="Asha <asha@example.com>", role="Buyer", name="Asha")
+        web("POST", "/api/users/add", json={"email": "bala@example.com", "role": "Buyer", "name": "Bala"})
+        people = {p["email"]: p for p in web("GET", "/api/users").json()["people"]}
+        like = lambda p: {k: v for k, v in p.items() if k not in ("email", "name", "added_at", "added_by")}
+        check(tag + "add_person lets a person in as the admin page does; recorded as added by \"AI assistant\"; the person is let in with that role",
+              pa.get("added") == "asha@example.com" and people["asha@example.com"]["added_by"] == AI and people["bala@example.com"]["added_by"] == "gp@example.com"
+              and like(people["asha@example.com"]) == like(people["bala@example.com"])
+              and c.get("/api/me", headers={"X-MS-CLIENT-PRINCIPAL-NAME": "asha@example.com"}).json()["role"] == "Buyer", str(pa))
+        refused = {what: (call("add_person", **args), web("POST", "/api/users/add", json=args)) for what, args in
+                   (("not an address", {"email": "asha at example", "role": "Buyer"}), ("an unknown role", {"email": "z@example.com", "role": "Owner"}),
+                    ("a person twice", {"email": "ASHA@example.com", "role": "Viewer"}))}
+        check(tag + "add_person refuses what the admin page refuses, in its words (not an address, an unknown role, a person twice)",
+              all(same_refusal(m, w) for m, w in refused.values()), str({k: (m.get("error"), detail(w)) for k, (m, w) in refused.items() if not same_refusal(m, w)}))
+        asha = {"X-MS-CLIENT-PRINCIPAL-NAME": "asha@example.com"}
+        call("change_person", email="asha@example.com", role="Viewer")
+        web("POST", "/api/users/change", json={"email": "bala@example.com", "role": "Viewer"})
+        viewer = c.post("/api/list/remove", json={"ids": ["x"]}, headers=asha).status_code
+        call("change_person", email="asha@example.com", name="Asha Rao")
+        call("change_person", email="asha@example.com", active=False)
+        switched = c.get("/api/meta", headers=asha)
+        call("change_person", email="asha@example.com", active=True)
+        log = web("GET", "/api/users").json()["audit"]
+        mine = [a for a in log if a["subject"] == "asha@example.com"]
+        theirs = [a for a in log if a["subject"] == "bala@example.com"]
+        check(tag + "change_person changes a role, a name, switches a person off and on, at once, as the admin page does; each change recorded as made by "
+                    "\"AI assistant\", with what it was and what it became",
+              viewer == 403 and switched.status_code == 403 and "switched off" in switched.json()["detail"] and c.get("/api/meta", headers=asha).status_code == 200
+              and [a["action"] for a in reversed(mine)] == ["person added", "role changed", "name changed", "switched off", "switched on"] and all(a["who"] == AI for a in mine)
+              and next(a for a in mine if a["action"] == "role changed")["detail"] == next(a for a in theirs if a["action"] == "role changed")["detail"] == {"from": "Buyer", "to": "Viewer"}
+              and all(a["who"] == "gp@example.com" for a in theirs), str([(a["action"], a["who"]) for a in mine]))
+        call("add_person", email="boss@example.com", role="Admin")
+        last = [(call("change_person", email="boss@example.com", role="Buyer"), web("POST", "/api/users/change", json={"email": "boss@example.com", "role": "Buyer"})),
+                (call("change_person", email="boss@example.com", active=False), web("POST", "/api/users/change", json={"email": "boss@example.com", "active": False})),
+                (call("change_person", email="asha@example.com", role="Viewer"), web("POST", "/api/users/change", json={"email": "asha@example.com", "role": "Viewer"})),
+                (call("change_person", email="nobody@example.com", role="Viewer"), web("POST", "/api/users/change", json={"email": "nobody@example.com", "role": "Viewer"}))]
+        check(tag + "The last-admin rule holds for the assistant: the last admin in the list is not made something else or switched off; nothing to change, "
+                    "or a person not in the list, is refused; each in the admin page's words",
+              all(same_refusal(m, w) for m, w in last) and "last admin" in last[0][0]["error"] and "last admin" in last[1][0]["error"],
+              str([(m.get("error"), detail(w)) for m, w in last]))
+        pm_ = call("change_role_permissions", changes=[{"role": "Viewer", "permission": "page:pilot", "allowed": False}])
+        no_pilot = c.get("/api/pilot", headers=asha).status_code
+        grid = web("GET", "/api/users").json()["grid"]["Viewer"]["page:pilot"]
+        call("change_role_permissions", changes=[{"role": "Viewer", "permission": "page:pilot", "allowed": True}])
+        refused = [(call("change_role_permissions", changes=ch), web("POST", "/api/users/permissions", json={"changes": ch})) for ch in
+                   ([{"role": "Admin", "permission": "page:pilot", "allowed": False}], [{"role": "Buyer", "permission": "do:manage_users", "allowed": True}], [])]
+        check(tag + "change_role_permissions changes what a role may do, at once, as the grid does, and puts it back; Admin's permissions and user admin "
+                    "stay as they are, refused in the grid's words",
+              pm_["changed"] == [{"role": "Viewer", "permission": "page:pilot", "allowed": False}] and no_pilot == 403 and grid == {"allowed": False, "default": True}
+              and c.get("/api/pilot", headers=asha).status_code == 200 and all(same_refusal(m, w) for m, w in refused), str([(m.get("error"), detail(w)) for m, w in refused]))
+        log = web("GET", "/api/users").json()["audit"]
+        check(tag + "users_and_roles reads back the whole change record as the admin page shows it, the assistant's changes made by \"AI assistant\"",
+              call("users_and_roles", record_limit=300)["change_record"] == log and {a["who"] for a in log} == {AI, "gp@example.com"}
+              and sum(1 for a in log if a["who"] == AI) == 8)          # Asha added, her role, name, off, on; boss added; a permission off and on
+        os.environ.pop("RIGHTPRICE_ADMINS")
+        off = [(call("add_person", email="z@example.com", role="Buyer"), web("POST", "/api/users/add", json={"email": "z@example.com", "role": "Buyer"})),
+               (call("users_and_roles"), web("GET", "/api/users"))]
+        os.environ["RIGHTPRICE_ADMINS"] = "gp@example.com"
+        check(tag + "With permissions off the assistant changes no one and reads no one, refused in the admin page's words",
+              all(same_refusal(m, w) for m, w in off), str([(m.get("error"), detail(w)) for m, w in off]))
+
+        # a draft to a mill, the suppliers, the list and the store: once Right cost's verdicts are worked out, as the screens read them
+        for _ in range(600):
+            if web("GET", "/api/costs").json().get("ready"):
+                break
+            time.sleep(0.5)
+        drafts = [(call("draft_message_to_mill", mill="Check Mills", ask="breakup"), web("POST", "/api/draft", json={"scope": {"type": "supplier", "mill": "Check Mills"}, "ask": "breakup"})),
+                  (call("draft_message_to_mill", keys=[key3], writer="GP", contact="Ravi"),
+                   web("POST", "/api/draft", json={"scope": {"type": "rows", "keys": [key3]}, "writer": "GP", "contact": "Ravi"}))]
+        nothing = (call("draft_message_to_mill"), web("POST", "/api/draft", json={"scope": {}}))
+        check(tag + "draft_message_to_mill gives the draft the screen gives (for a mill, and for chosen fabrics), sending and keeping nothing; asked about "
+                    "nothing it is refused in the screen's words",
+              all(w.status_code == 200 and m == w.json() for m, w in drafts) and drafts[0][0]["source"] == "template" and same_refusal(*nothing),
+              str([(str(m)[:120], w.status_code) for m, w in drafts]))
+        flm = call("fabric_list", limit=1000)
+        check(tag + "list_suppliers, fabric_list and store_status read what Right cost's Suppliers tab, Bulk upload and /api/store read",
+              call("list_suppliers") == web("GET", "/api/suppliers").json() and [r["key"] for r in flm["rows"]] == [f"Fabric list|{r['id']}" for r in web("POST", "/api/list", json={}).json()["rows"]]
+              and call("fabric_list", search="AI-2")["found"] == 1 and call("store_status") == web("GET", "/api/store").json()
+              and call("store_status")["rate_master_in_use"]["by"] == "gp@example.com")
+    for k in ("RIGHTPRICE_MCP_TOKEN", "RIGHTPRICE_ADMINS"):
+        os.environ.pop(k, None)
+    print("ALL OK" if ok else "SOMETHING FAILED")
+    return 0 if ok else 1
+
+
 # ===================================================================== the move from files to a database, proved
 def build(c):
     """Fill an empty data folder through the app, as people would: two mill sheets, fabrics added on screen, a rate
@@ -1251,6 +1697,8 @@ def child():
         return main()
     if task == "access":
         return access_checks()
+    if task == "assistant":
+        return assistant_checks()
     with TestClient(server.app) as c:
         if task == "build":
             build(c)
@@ -1523,6 +1971,9 @@ def _parent(pg):
     # stage 3: users, roles and permissions, on each store, each on a database of its own
     access_runs = [("files", None), ("sqlite", sqlite_url("access.db"))] + ([("postgres", pg.new())] if not pg.why else [])
     procs += [(f"{kind}, users and roles", _run(kind, "access", url=url)) for kind, url in access_runs]
+    # GP's decision of 27 Nov 2026: the AI assistant does what an Admin can, each tool set beside its web route, on each database
+    assistant_runs = [("sqlite", sqlite_url("assistant.db"))] + ([("postgres", pg.new())] if not pg.why else [])
+    procs += [(f"{kind}, the AI assistant as an admin", _run(kind, "assistant", url=url)) for kind, url in assistant_runs]
     # 2a. meanwhile, a data folder filled on the files, and every answer kept
     folder = os.path.join(sp, "data")
     os.makedirs(folder)

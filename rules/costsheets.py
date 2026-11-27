@@ -33,11 +33,12 @@ def costsheet_view():
     a = costsheet.analyse(rows, common.get_masters()) if rows else {"rows": [], "drafts": []}
     for item, r in zip(a["rows"], rows):
         item["id"], item["added"], item["upload"] = r.get("_id"), r.get("_added"), r.get("_upload")
+        item["by"] = r.get("_by") or ""         # who brought it in: the signed-in person, or "AI assistant"
     return a          # numbers read from the rate master are numpy types: the web layer writes them as plain ones
 
 
 @common.one_at_a_time
-def costsheet_upload(filename, data):
+def costsheet_upload(filename, data, who=""):
     try:
         book = pd.read_excel(io.BytesIO(data), sheet_name=None)
     except Exception:
@@ -57,6 +58,7 @@ def costsheet_upload(filename, data):
     keep = [r for r in rows if key(r) not in fresh]      # a mill's sheet sent again takes the place of its earlier rows
     for n, r in enumerate(new):
         r["_id"], r["_added"], r["_upload"] = f"{now:%Y%m%d%H%M%S%f}{n:04d}", now.date().isoformat(), upload
+        r["_by"] = who or ""
     _save_sheets(keep + new)
     a = costsheet.analyse(new, common.get_masters())
     return {"added": len(new), "replaced": len(rows) - len(keep), "not_read": sum(1 for x in a["rows"] if x["problems"])}
