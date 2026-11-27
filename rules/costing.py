@@ -196,6 +196,10 @@ def brief(res, m, quantity=None, notes=(), sel=None):
         adjusted = (lo, hi) != (cat["p25"], cat["p75"])
         band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%".replace("-", "\u2212") if adjusted else "")
 
+    ro = res.get("rates_of") or {}
+    if ro.get("dated"):     # stage 5: the range is measured on today's rates; say so when this should-cost is not
+        band_why += (f". The range is measured on today's rates (the purchase orders as costed in the pilot); this should-cost "
+                     f"has its yarn on the dated rates of {ro['label']}")
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False
     if why_qty:

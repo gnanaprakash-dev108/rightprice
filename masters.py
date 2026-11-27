@@ -146,7 +146,8 @@ def _dated_note(month, yarns):
         if y.get("typed"):
             notes.append(f"{y['yarn']}: a typed price (Rs {y['rate']:g}) is used, not a dated rate")
         elif y["dated"]:
-            notes.append(f"{y['yarn']}: the dated rate for {month_label(month)} is used (Rs {y['rate']:g}; today's is Rs {y['today']:g})")
+            notes.append(f"{y['yarn']}: the dated rate for {month_label(month)} is used (Rs {y['rate']:g}; today's is Rs {y['today']:g})"
+                         + (": a placeholder, entered with no source" if y.get("placeholder") else ""))
         else:
             notes.append(f"No dated rate for {y['yarn']} in {month_label(month)}: today's rate used (Rs {y['today']:g})")
     return notes
@@ -238,8 +239,13 @@ def resolve(sel, masters, on=None, dated=None):
             if month is not None:           # a costing on a date: the dated rate of that month, where there is one
                 hit = (dated.get(key) or {}).get(month)
                 if hit is not None:
-                    rate, basis = float(hit["rate"]), f"Dated rate for {month_label(month)}: {hit['basis']}"
-                dated_yarns.append({"side": side, "yarn": key, "dated": hit is not None, "rate": rate, "today": float(row["Rate Rs/kg"])})
+                    # rule 4: a dated rate with no data behind it stays a Placeholder, so the brief, the list's placeholder
+                    # column and every verdict treat it as today's placeholder was treated
+                    rate = float(hit["rate"])
+                    basis = (f"Placeholder: dated rate for {month_label(month)} with no source ({hit['basis']})"
+                             if str(hit["basis"]).startswith("Placeholder") else f"Dated rate for {month_label(month)}: {hit['basis']}")
+                dated_yarns.append({"side": side, "yarn": key, "dated": hit is not None, "rate": rate, "today": float(row["Rate Rs/kg"]),
+                                    "placeholder": basis.startswith("Placeholder")})
         elif month is not None:
             dated_yarns.append({"side": side, "yarn": key, "dated": False, "typed": True, "rate": rate})
         count = _num(sel.get(f"{side} count override (Ne)")) or float(row["Count Ne (resultant)"])

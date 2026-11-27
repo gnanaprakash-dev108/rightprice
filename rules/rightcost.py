@@ -57,7 +57,11 @@ def _pilot_briefs(rows, key):
                         out[r["code"]]["rates"] = dated.po_rates(r["code"], months, res)
                         if (res.get("rates_of") or {}).get("dated"):        # a dated yarn rate moved the should-cost itself
                             out[r["code"]]["dated_should"] = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1),
-                                                              "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]}}
+                                                              "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]},
+                                                              "placeholders": ", ".join(res["placeholders"]) or None,
+                                                              # worked out as the pilot works them (masters.cost_many, pilot.py)
+                                                              "gap": None if res["gap"] is None else round(res["gap"], 2),
+                                                              "gap_pct": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1)}
                 except Exception as e:      # a costing that no longer works on today's rates
                     out[r["code"]] = {"stance": "error", "weak": [str(e)]}
             _briefs.update(key=key, data=out)
@@ -124,11 +128,11 @@ def costs():
                 r["range"] = [v["lo"], v["hi"]]
             if v.get("dated_should"):       # a dated yarn rate was used: the figures follow that costing, not the pilot's
                 ds = v["dated_should"]
-                r.update(should=ds["should"], per_kg=ds["per_kg"], buckets={b: ds["buckets"].get(b) for b in dashboard.BUCKETS})
-                if r["price"] is not None and r["should"]:
-                    r["gap"] = round(r["price"] - r["should"], 2)
-                    r["gap_pct"] = round((r["price"] / r["should"] - 1) * 100, 1)
-                    r["excess"] = None if r["metres"] is None else r["gap"] * r["metres"]
+                # the placeholder column follows the costing too: a dated rate with no source is still a placeholder
+                r.update(should=ds["should"], per_kg=ds["per_kg"], buckets={b: ds["buckets"].get(b) for b in dashboard.BUCKETS},
+                         placeholders=ds["placeholders"])
+                if ds["gap"] is not None:
+                    r.update(gap=ds["gap"], gap_pct=ds["gap_pct"], excess=None if r["metres"] is None else ds["gap"] * r["metres"])
         elif verdicts is None:
             r["band"] = "Working it out"
     listed = fabric_list.list_view({})["rows"]
@@ -168,6 +172,8 @@ def costs():
         if r["metres"] is None:
             q = mill_sheet._num(i["mill"].get("Total order qnty")) if i["mill"] else None
             r["metres"] = q if q and q > 0 else None
+    for r in out:           # stage 5: which rates each costing is on, in a few words, for the list and the spreadsheet
+        r["rates_of"] = "Working it out" if r["band"] == "Working it out" else dated.rates_label(r.get("rates"))
     mills._learn_mill_names({r["supplier"] for r in out})
     for r in out:
         r["mill"] = mills.mill_key(r["supplier"])
@@ -196,7 +202,7 @@ def costs_download(payload: dict = None):
             ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid (purchase orders) or quoted (fabric list) Rs/m"),
             ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"),
             ("excess", "Above should-cost Rs (gap x metres; minus = below)"), ("band", "Against the usual range"),
-            ("placeholders", "Placeholder rates used"), ("status", "Status"), ("remarks", "Remarks")]
+            ("placeholders", "Placeholder rates used"), ("rates_of", "Rates of"), ("status", "Status"), ("remarks", "Remarks")]
     df = pd.DataFrame([{h: r.get(k) for k, h in cols} for r in pick], columns=[h for _, h in cols])
     buf = io.BytesIO()
     df.to_excel(buf, index=False)

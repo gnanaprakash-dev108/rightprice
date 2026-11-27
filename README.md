@@ -158,8 +158,12 @@ or loaded from the market history in hand (`inputs/Yarn_Inteliigence_Master.xlsx
 of the yarn master (today: Linen 40 and 60 lea, June 2026; the rest is listed with why it is left out).
 
 The rule for the rate of a month (also on the Yarn prices page, `rules/dated.py` RULE): one rate per yarn per month,
-not carried into the next month; a month without one uses today's rate and says so for that yarn; a range counts as its
-midpoint; several prices in a month as their average, never mixing prices with and without GST; a person's rate takes
-the place of an earlier one for that yarn and month (kept, marked replaced), and the market history never replaces a
-person's rate; a fabric code ordered in several months is costed on the month holding most of its metres. Only yarn
-rates are dated. `masters.cost(sel, m, on=<date>)` costs on a date; without `on` nothing changes.
+not carried into the next month; a month without one uses today's rate and says so for that yarn; a rate says what it
+rests on, and one typed with no source is a Placeholder (rule 4); a range counts as its midpoint, typed or brought in;
+several prices in a month as their average, never mixing prices with and without GST (each import says which); the month
+comes from the document's own date where it can be read, otherwise the person chooses it, never today's; a person's rate
+takes the place of an earlier one for that yarn and month (kept, marked replaced); the market history never replaces a
+person's rate, never brings back a rate a person removed, and a load that changes nothing writes nothing; a fabric code
+ordered in several months is costed on the month holding most of its metres (the earlier on a tie, said). Only yarn
+rates are dated; the usual ranges are on today's rates and the brief says so. `masters.cost(sel, m, on=<date>)` costs
+on a date; without `on` nothing changes.

@@ -32,6 +32,12 @@ S5-6. **A place in the side panel?** Dated yarn rates sit on Prices > Yarn price
 S5-7. **The linen placeholders look far too low.** Raymond's June 2026 linen is Rs 1,600 to 1,650 a kilo (40 lea) and
       Rs 2,200 to 2,250 (60 lea), with GST and freight; the yarn master has placeholders of Rs 900 and Rs 1,200. Nothing
       was changed (rule 2). A real linen quote would settle it.
+S5-8. **The calibration draft, tested fairly.** On cloth it was not fitted on, and on later months, the draft shows no
+      measurable gain (about +1 point within 10%, with a 95% interval from about −5 to +8), and it makes piece-dyed satin
+      clearly worse (docs/HELD_BACK_SPLITS.md). 1. Do not apply it (recommended). 2. Apply only the piece-dyed twill
+      weaving rate. 3. Wait for the July to November yarn prices and test again on dated rates.
+S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rate of the rate master with no data behind
+      it: the brief and the verdicts treat it as unsure. 1. As now. 2. Refuse a typed rate with no source.
 
 ## Answered 27 Nov 2026 (for stages 2, 3 and 5)
 

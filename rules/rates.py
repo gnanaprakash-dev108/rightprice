@@ -117,8 +117,27 @@ def add_cotton(payload: dict, who: str = ""):
     return {"saved": True}
 
 
-def _stage(df, note=""):
-    return {"kind": "rows", "note": note, **common.records(df[pi.STAGE_COLS])}
+def _stage(df, note="", dated=None):
+    """Rows for the review table. dated: (the document's own date, where it was read) when one was found; the rows then
+    carry it. Without it the rows carry today's date for the market reference, and the stage says the date was not read
+    (stage 5: a dated yarn rate never takes its month from today)."""
+    df = df.copy()
+    if dated and dated[0]:
+        df["Date"] = dated[0]
+    out = {"kind": "rows", "note": note, **common.records(df[pi.STAGE_COLS]),
+           "date_read": bool(dated and dated[0]), "date_from": dated[1] if dated and dated[0] else None}
+    if dated and dated[0]:
+        out["note"] = (note + " " if note else "") + f"Dated {dated[0]}, read from {dated[1]}."
+    return out
+
+
+def _date_of(*where):
+    """The first date found in (text, what it is) pairs: the document's own date and where it was read."""
+    for text, what in where:
+        d = pi.find_date(text)
+        if d:
+            return d, what
+    return None
 
 
 def _tables(named, source):
@@ -139,7 +158,8 @@ def _pdf(data, source):
         note = f"Read {len(rows)} price lines from {info['pages']} pages. Check them before adding."
         if info["image_pages"]:
             note += f" {info['image_pages']} pages are pictures with no readable text; their rates need typing in."
-    return _stage(rows if len(rows) else pi.empty_stage(), note)
+    return _stage(rows if len(rows) else pi.empty_stage(), note,
+                  _date_of((source, "the file name")) or ((info["date"], "the document's text") if info.get("date") else None))
 
 
 def intake_file(filename, data):
@@ -154,7 +174,7 @@ def intake_file(filename, data):
         if ext in ("png", "jpg", "jpeg", "webp"):
             pi.keep_file(name, data)
             return _stage(pi.empty_stage(), "Pictures cannot be read here. The picture is kept as the source; type its "
-                                            "rates into the table.") | {"source": name}
+                                            "rates into the table.", _date_of((name, "the file name"))) | {"source": name}
     except common.Refused:
         raise
     except Exception as e:
@@ -174,7 +194,8 @@ def intake_link(payload: dict):
         if tables:
             return _tables({f"Table {i + 1} ({len(t)} rows)": t for i, t in enumerate(tables)}, url)
         rows = pi.rows_from_text(text, url)
-        return _stage(rows if len(rows) else pi.empty_stage(), f"No tables on the page; {len(rows)} price-like lines found in its text.")
+        return _stage(rows if len(rows) else pi.empty_stage(), f"No tables on the page; {len(rows)} price-like lines found in its text.",
+                      _date_of((url, "the page address"), (text[:4000], "the page's text")))
     except Exception as e:
         raise common.Refused(400, f"Could not read this page: {e}. Pages behind a login cannot be read.")
 
@@ -200,7 +221,10 @@ def intake_map(payload: dict):
                               payload.get("yarn") or None, payload.get("date") or None, hit[1])
     except Exception as e:
         raise common.Refused(400, f"Those columns could not be read: {e}")
-    return _stage(rows, f"{len(rows)} rows with a rate were read. Check them before adding.")
+    note = f"{len(rows)} rows with a rate were read. Check them before adding."
+    if payload.get("date"):         # the file's own date column
+        return _stage(rows, note) | {"date_read": True, "date_from": f"the file's column {payload['date']}"}
+    return _stage(rows, note, _date_of((hit[1], "the file name"), (payload.get("sheet"), "the sheet's name")))
 
 
 def intake_add(payload: dict, who: str = ""):

@@ -2,10 +2,10 @@
 month. GP's decision, 27 Nov 2026: purchase orders on the rates of their order month; quotes and Cost a fabric on
 today's rates; each costing says which date's rates it used.
 
-A dated rate comes in three ways, each kept with its source: typed on the Yarn prices page, brought in through Bring in
-prices (the rows reviewed there, each given a yarn of the yarn master), or loaded from the market history in hand
-(inputs/Yarn_Inteliigence_Master.xlsx, sheet Yarn_Master), only where its yarn surely is a yarn of the yarn master.
-The rate master's own Yarn_Rates are never changed here. Kept in the database only (data_dated.py)."""
+A dated rate comes in three ways, each kept with its source: typed on the Yarn prices page (saying what it rests on),
+brought in through Bring in prices (the rows reviewed there, each given a yarn of the yarn master), or loaded from the
+market history in hand (inputs/Yarn_Inteliigence_Master.xlsx, sheet Yarn_Master), only where its yarn surely is a yarn
+of the yarn master. The rate master's own Yarn_Rates are never changed here. Kept in the database only (data_dated.py)."""
 import datetime as dt
 import math
 import os
@@ -20,30 +20,44 @@ import paths
 RULE = [
     "One rate per yarn per month. A dated rate is for its calendar month only: it is not carried into the next month. "
     "A month with no dated rate for a yarn uses today's rate (the yarn master), and the costing says so for that yarn.",
-    "A price given as a range (low to high) counts as its midpoint.",
-    "Several prices for one yarn in one month count as their average, each range as its midpoint. Prices with GST and "
-    "prices without are never averaged together: where a month has both, only those without GST are used.",
-    "A rate a person enters for a yarn and a month (typed here, or brought in through Bring in prices) takes the place "
-    "of any earlier one for that yarn and month; the earlier one is kept, marked replaced. Loading the market history "
-    "never replaces a rate a person entered.",
-    "From the market history in hand, a price is used only where its yarn surely is a yarn of the yarn master (the "
-    "same fibre, count and kind); everything else is left out, and this page says what and why.",
+    "A dated rate says what it rests on: a market circular, a price list, a yarn quote or invoice, another document, or "
+    "the market history. A rate typed with no source is a Placeholder, as in the rate master: the costing warns about "
+    "it and the brief treats it as it treats any placeholder.",
+    "A price given as a range (low to high) counts as its midpoint, typed or brought in.",
+    "Several prices for one yarn in one month count as their average, each range as its midpoint. Each import says "
+    "whether its prices include GST, and prices with GST and without are never averaged together: where a month has "
+    "both, only those without GST are used.",
+    "The month comes from the document's own date where it can be read; otherwise the person chooses the month before "
+    "anything is added. It is never taken from today's date.",
+    "A rate a person enters for a yarn and a month takes the place of any earlier one for that yarn and month; the "
+    "earlier one is kept, marked replaced. Loading the market history never replaces a rate a person entered, never "
+    "brings back a rate a person removed, and writes nothing when nothing has changed.",
+    "From the market history in hand, a price is used only where its yarn surely is a yarn of the yarn master (the same "
+    "fibre and blend, count, kind and spinner), in rupees a kilo, between Rs 50 and Rs 5,000; everything else is left "
+    "out, and this page says what and why.",
     "A purchase order is costed on the yarn rates of its order month; a fabric code ordered in more than one month, on "
-    "the month that holds most of its metres. Quotes and Cost a fabric are on today's rates. Only yarn rates are "
-    "dated: every other rate (weaving, dyeing, finishing, wastage, overhead, margin) is today's.",
+    "the month that holds most of its metres (the earlier month when two hold the same, and the costing says so). Quotes "
+    "and Cost a fabric are on today's rates. Only yarn rates are dated: every other rate (weaving, dyeing, finishing, "
+    "wastage, overhead, margin) is today's, and so are the usual ranges, which come from the purchase orders as costed "
+    "in the pilot.",
 ]
-RATE_LIMITS = (50.0, 5000.0)        # rupees per kilo: outside this a typed figure is a slip
+RATE_LIMITS = (50.0, 5000.0)        # rupees per kilo: outside this a figure is a slip, or not a yarn rate per kilo
 FIRST_MONTH = "2019-01"             # the market history in hand starts in 2019
 NEED_DB = ("Dated yarn rates are kept in the database, and this server keeps its data in files (the app setting "
            "DATABASE_URL is not set). Every costing uses today's yarn rates, and says so.")
 SOURCES = {"typed": "Typed in the tool", "brought in": "Brought in", "market history": "Market history"}
+# what a typed rate rests on; "none" makes it a Placeholder (rule 4)
+RESTS_ON = {"circular": "Market circular", "price list": "Price list (mill or spinner)", "quote": "Yarn quote",
+            "invoice": "Yarn invoice", "other": "Another document", "none": None}
 
 MARKET_FILE = paths.find("Yarn_Inteliigence_Master.xlsx")
 MARKET_SHEET = "Yarn_Master"
-# The only rows of the market history that are loaded: (yarn category, count) -> yarn key of the yarn master, and why
-# the match is sure. Everything else is left out with the reason in LEFT_OUT.
-SURE = {("linen yarn", "40 lea"): ("Linen 40 Lea", "Raymond 100% linen, 40 lea: the same fibre and count as the yarn master's Linen 40 Lea"),
-        ("linen yarn", "60 lea"): ("Linen 60 Lea", "Raymond 100% linen, 60 lea: the same fibre and count as the yarn master's Linen 60 Lea")}
+# The only rows of the market history that are loaded: (category, material, blend, count, variant, spinner) -> the yarn
+# key of the yarn master, and why the match is sure. Everything else is left out with the reason in LEFT_OUT.
+SURE = {("linen yarn", "linen", "100% linen", "40 lea", "standard", "raymond"):
+        ("Linen 40 Lea", "Raymond 100% linen, 40 lea, standard: the same fibre, blend and count as the yarn master's Linen 40 Lea"),
+        ("linen yarn", "linen", "100% linen", "60 lea", "standard", "raymond"):
+        ("Linen 60 Lea", "Raymond 100% linen, 60 lea, standard: the same fibre, blend and count as the yarn master's Linen 60 Lea")}
 LEFT_OUT = {
     "raw cotton": "Raw cotton (Shankar-6, V-797, MCX), not yarn: it is the cotton price history on Cotton prices",
     "polyester yarn": "Polyester filament in deniers the yarn master does not have (it has Polyester 75D only; the file has 50, 70, 80, "
@@ -54,7 +68,7 @@ LEFT_OUT = {
     "viscose yarn": "Viscose and modal yarns: the yarn master has only Viscose 40/2, and the file's 2/40s comes two ways (ring doubled, "
                     "TFO doubled) without saying which the master's is",
     "blended yarn": "Cotton/viscose 52/48: no such yarn in the yarn master",
-    "linen yarn": "Linen 44 lea: no such yarn in the yarn master",
+    "linen yarn": "Linen not matching a yarn of the master in fibre, blend, count, kind and spinner (44 lea, or another kind)",
 }
 PO_FILE = paths.find("Fabric _ 3Months_4746.xlsx")
 
@@ -110,6 +124,20 @@ def _month_ok(month, what):
     return month
 
 
+def _range(low, high, rate, what):
+    """RULE: a range counts as its midpoint. Returns (rate, low, high)."""
+    if low is None and high is None:
+        return rate, None, None
+    if low is None or high is None:
+        raise common.Refused(400, f"{what}: give both a low and a high, or neither")
+    if high < low:
+        raise common.Refused(400, f"{what}: the high price is below the low price")
+    mid = round((low + high) / 2, 2)
+    if rate is not None and abs(rate - mid) > 0.005:
+        raise common.Refused(400, f"{what}: with a low and a high the rate is their midpoint, Rs {mid:,.2f}. Leave the rate empty, or type {mid:g}")
+    return mid, low, high
+
+
 # ------------------------------------------------------------------ the month's figure from several prices
 def month_figure(prices):
     """The rate of a month from its prices (each {low, high, gst, ...}), by RULE: each range counts as its midpoint, the
@@ -124,31 +152,53 @@ def month_figure(prices):
 
 
 # ------------------------------------------------------------------ the purchase orders' months
-def order_months():
-    """Each purchase-order fabric code's order month: the month holding most of its metres (the earlier on a tie), with
-    every month it was ordered in. Read from the purchase file the pilot was costed from, the same lines it kept.
-    Stage 2 keeps the purchase history with dates in the database; this is where it would be read from instead."""
+def po_lines():
+    """The purchase-order lines the pilot was costed from, by fabric code and month: metres and value. Read from the
+    purchase file (the same lines pilot.build_inputs keeps). Stage 2 keeps the purchase history with dates in the
+    database; this is where it would be read from instead."""
     if not os.path.exists(PO_FILE):
-        return {}
+        return None
 
     def load():
         po = pd.read_excel(PO_FILE, usecols=["Purchasing Document", "Document Date", "Material", "Purchasing Doc. Type",
                                              "Order Quantity", "Order Unit", "Net Price", "Currency", "Deletion Indicator"])
         po = po[po["Purchasing Document"].notna()]
         b = po[po["Purchasing Doc. Type"].isin(["BO", "ZLOI", "BF"]) & (po["Net Price"] > 0) & po["Deletion Indicator"].isna()
-               & (po["Currency"] == "INR") & (po["Order Unit"] == "M")].copy()      # the lines pilot.build_inputs keeps
+               & (po["Currency"] == "INR") & (po["Order Unit"] == "M")].copy()
         b["Material"] = b["Material"].astype(str).str.strip()
         b["month"] = pd.to_datetime(b["Document Date"], errors="coerce").dt.strftime("%Y-%m")
+        b["value"] = b["Net Price"] * b["Order Quantity"]
         b = b.dropna(subset=["month"])
-        g = b.groupby(["Material", "month"])["Order Quantity"].sum().reset_index()
+        return b.groupby(["Material", "month"]).agg(qty=("Order Quantity", "sum"), value=("value", "sum")).reset_index()
+    return common.cached(PO_FILE + "#lines", load)
+
+
+def order_months():
+    """Each purchase-order fabric code's order month: the month holding most of its metres (the earlier on a tie, said
+    so), with every month it was ordered in."""
+    g = po_lines()
+    if g is None:
+        return {}
+
+    def load():
         out = {}
         for code, d in g.groupby("Material"):
-            d = d.sort_values(["Order Quantity", "month"], ascending=[False, True])
-            total = float(d["Order Quantity"].sum())
+            d = d.sort_values(["qty", "month"], ascending=[False, True])
+            total = float(d["qty"].sum())
             out[str(code)] = {"month": d["month"].iloc[0], "months": sorted(d["month"].tolist()),
-                              "share": float(d["Order Quantity"].iloc[0]) / total if total else 1.0}
+                              "share": float(d["qty"].iloc[0]) / total if total else 1.0,
+                              "tie": len(d) > 1 and float(d["qty"].iloc[0]) == float(d["qty"].iloc[1])}
         return out
     return common.cached(PO_FILE + "#months", load)
+
+
+def rates_label(rates):
+    """One short text for a list column or a spreadsheet: which rates a costing is on."""
+    if not rates:
+        return ""
+    if not rates.get("month"):
+        return "Today's rates"
+    return f"{rates['label']}: " + ("dated yarn rate" if rates["dated"] else "today's yarn rates (no dated rate)")
 
 
 def po_rates(code, months, res):
@@ -160,7 +210,10 @@ def po_rates(code, months, res):
                 "note": "The order month is not known (the purchase file is not on this server): costed on today's rates."}
     ro = res["rates_of"]
     more = ""
-    if len(om["months"]) > 1:
+    if om.get("tie"):
+        more = (f" Ordered in {', '.join(masters.month_label(x) for x in om['months'])}, the most metres in two months alike; "
+                f"costed on the earlier, {ro['label']}.")
+    elif len(om["months"]) > 1:
         more = (f" Ordered in {', '.join(masters.month_label(x) for x in om['months'])}; costed on {ro['label']}, which holds "
                 f"{om['share']:.0%} of the metres.")
     return {"month": ro["month"], "label": ro["label"], "dated": ro["dated"],
@@ -170,6 +223,20 @@ def po_rates(code, months, res):
 def today_rates():
     """What a costing on today's rates says about them (quotes, Cost a fabric)."""
     return {"month": None, "label": "today", "dated": False, "note": "On today's rates (the rate master in use): a quote is costed on today's rates."}
+
+
+def pilot_rates_note():
+    """Which rates the dashboard's purchase-order panels are on, beside Right cost's (for the dashboard)."""
+    from rules import rightcost          # late: rightcost uses this module
+    data = rightcost._briefs.get("data") or {}
+    n = sum(1 for v in data.values() if v and (v.get("rates") or {}).get("dated"))
+    base = ("Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (no dated yarn rate), and "
+            "every usual range comes from them.")
+    if not data:
+        return base
+    return base + (f" Right cost costs {n} of these orders on a dated yarn rate of their order month, so for those its should-cost "
+                   "and verdict can differ from these panels." if n else
+                   " Right cost costs each order on the yarn rates of its order month where a dated rate exists; none does yet, so they agree.")
 
 
 # ------------------------------------------------------------------ the Yarn prices page
@@ -190,11 +257,13 @@ def page():
         series.append({"key": key, "today": None if y is None else common.clean(y["Rate Rs/kg"]),
                        "in_master": y is not None,
                        "points": [None if mo not in mine else {"month": mo, "rate": mine[mo]["rate"], "low": mine[mo]["low"],
-                                                               "high": mine[mo]["high"], "source": mine[mo]["source"]} for mo in months]})
+                                                               "high": mine[mo]["high"], "source": mine[mo]["source"],
+                                                               "placeholder": str(mine[mo]["basis"]).startswith("Placeholder")} for mo in months]})
     orders = _orders_by_month(active)
     return {"rule": RULE, "this_month": last, "months": months, "series": series,
             "yarns": [{"key": k, "rate": common.clean(r["Rate Rs/kg"]), "basis": str(r["Basis"]), "date": common.clean(r["Rate date"])}
                       for k, r in yarns.items()],
+            "rests_on": [{"value": k, "text": v or "No source: a guess (kept as a placeholder)"} for k, v in RESTS_ON.items()],
             "entries": [_shown(r) for r in active],
             "history": [_shown(r) for r in sorted((r for r in every if r["removed_at"]), key=lambda r: r["removed_at"], reverse=True)[:40]],
             "orders": orders, "limits": RATE_LIMITS, "first_month": FIRST_MONTH,
@@ -204,7 +273,8 @@ def page():
 def _shown(r):
     return {k: r[k] for k in ("id", "yarn_key", "month", "rate", "low", "high", "entries", "basis", "source", "entered_by",
                               "entered_at", "removed_at", "removed_by", "removed_why")} | {"label": masters.month_label(r["month"]),
-                                                                                            "note": (r["detail"] or {}).get("note")}
+                                                                                            "note": (r["detail"] or {}).get("note"),
+                                                                                            "placeholder": str(r["basis"]).startswith("Placeholder")}
 
 
 def _orders_by_month(active):
@@ -230,28 +300,33 @@ def _orders_by_month(active):
 
 
 def add(payload: dict, who: str = ""):
-    """A dated rate typed on the Yarn prices page: a yarn, a month, and the rate (or a low and a high, counted as their
-    midpoint). It takes the place of any earlier rate for that yarn and month."""
+    """A dated rate typed on the Yarn prices page: a yarn, a month, what it rests on (no source: a placeholder), whether
+    it includes GST, and the rate (or a low and a high: their midpoint). It takes the place of any earlier rate for that
+    yarn and month."""
     _need_db()
     payload = payload or {}
     key = str(payload.get("yarn_key") or "").strip()
     if key not in _yarns():
         raise common.Refused(400, "Choose a yarn of the yarn master")
     month = _month_ok(payload.get("month"), "Month")
-    low, high, rate = _num(payload.get("low")), _num(payload.get("high")), _num(payload.get("rate"))
-    if rate is None and low is not None:
-        high = low if high is None else high
-        if high < low:
-            raise common.Refused(400, "The high price is below the low price")
-        rate = round((low + high) / 2, 2)           # RULE: a range counts as its midpoint
-    _rate_ok(rate, "Rate")
-    if low is not None and high is not None and not low <= rate <= high:
-        raise common.Refused(400, "The rate is outside the low to high range typed with it")
+    rests = str(payload.get("rests_on") or "").strip()
+    if rests not in RESTS_ON:
+        raise common.Refused(400, "Say what the rate rests on (a circular, a price list, a quote, an invoice, another document), "
+                                  "or that it has no source: it is then kept as a placeholder")
     note = str(payload.get("note") or "").strip()[:300]
-    basis = SOURCES["typed"] + (f": {note}" if note else "")
+    if rests == "other" and not note:
+        raise common.Refused(400, "Name the document the rate comes from in the note")
+    rate, low, high = _range(_num(payload.get("low")), _num(payload.get("high")), _num(payload.get("rate")), "Rate")
+    _rate_ok(rate, "Rate")
+    gst = bool(payload.get("gst"))
+    if RESTS_ON[rests] is None:
+        basis = "Placeholder: typed in the tool with no source" + (f" ({note})" if note else "")
+    else:
+        basis = f"{SOURCES['typed']}: {RESTS_ON[rests]}" + (f", {note}" if note else "")
+    basis += "; includes GST" if gst else ""
     data_dated.add([{"yarn_key": key, "month": month, "rate": round(rate, 2), "low": low, "high": high, "entries": 1,
-                     "basis": basis, "source": "typed", "detail": {"note": note} if note else {}}], who=who)
-    return {"saved": True, "yarn_key": key, "month": month, "rate": round(rate, 2)}
+                     "basis": basis, "source": "typed", "detail": {"note": note, "rests_on": rests, "gst": gst}}], who=who)
+    return {"saved": True, "yarn_key": key, "month": month, "rate": round(rate, 2), "placeholder": basis.startswith("Placeholder")}
 
 
 def remove(payload: dict, who: str = ""):
@@ -268,11 +343,22 @@ def remove(payload: dict, who: str = ""):
 # ------------------------------------------------------------------ from Bring in prices
 def intake_add(payload: dict, who: str = ""):
     """Rows reviewed on Bring in prices, each given a yarn of the yarn master, added as dated rates: by RULE, one rate per
-    yarn and month (a range as its midpoint, several prices as their average). Rows given no yarn are left out."""
+    yarn and month (a range as its midpoint, several prices as their average). The month is the one the person chose for
+    the whole document, or, only where the document's own dates were read (dates_read), each row's date: never today's.
+    gst: whether these prices include GST (asked once per import). Rows given no yarn are left out."""
     _need_db()
+    payload = payload or {}
     yarns = _yarns()
-    rows = (payload or {}).get("rows") or []
-    source = str((payload or {}).get("source") or "").strip()[:120]
+    rows = payload.get("rows") or []
+    source = str(payload.get("source") or "").strip()[:120]
+    if payload.get("gst") not in (True, False):
+        raise common.Refused(400, "Say whether these prices include GST")
+    gst = payload["gst"]
+    chosen = payload.get("month") or None
+    chosen = None if chosen is None else _month_ok(chosen, "Month")
+    if chosen is None and not payload.get("dates_read"):
+        raise common.Refused(400, "The document's own date was not read, so choose the month these prices are for")
+    date_from = str(payload.get("date_from") or "").strip()[:120]
     groups, skipped = {}, 0
     for n, r in enumerate(rows, start=1):
         r = list(r) + [None] * (7 - len(r))
@@ -283,7 +369,7 @@ def intake_add(payload: dict, who: str = ""):
             continue
         if key not in yarns:
             raise common.Refused(400, f"Row {n}: '{key}' is not a yarn of the yarn master")
-        month = _month_ok(str(date or "")[:10], f"Row {n}")
+        month = chosen or _month_ok(str(date or "")[:10], f"Row {n}")
         low, high = _num(low), _num(high)
         high = low if high is None else high
         if low is None:
@@ -292,7 +378,7 @@ def intake_add(payload: dict, who: str = ""):
             raise common.Refused(400, f"Row {n}: the high rate is below the low rate")
         _rate_ok(low, f"Row {n}")
         _rate_ok(high, f"Row {n}")
-        groups.setdefault((key, month), []).append({"low": low, "high": high, "gst": False, "date": str(date or "")[:10],
+        groups.setdefault((key, month), []).append({"low": low, "high": high, "gst": gst, "date": str(date or "")[:10],
                                                     "yarn": yarn, "count": count, "source": src or source})
     if not groups:
         raise common.Refused(400, "No row was given a yarn of the yarn master: choose the yarn for each row to add as a dated rate")
@@ -300,9 +386,11 @@ def intake_add(payload: dict, who: str = ""):
     for (key, month), prices in sorted(groups.items()):
         rate, low, high, used, note = month_figure(prices)
         what = source or next((p["source"] for p in prices if p["source"]), "") or "Bring in prices"
+        when = f"month chosen: {masters.month_label(month)}" if chosen else (f"dated from {date_from}" if date_from else "dated from the document")
         entries.append({"yarn_key": key, "month": month, "rate": rate, "low": low, "high": high, "entries": len(used),
-                        "basis": f"{SOURCES['brought in']}: {what}" + (f", {len(used)} prices averaged" if len(used) > 1 else ""),
-                        "source": "brought in", "detail": {"prices": used, "file": what}})
+                        "basis": f"{SOURCES['brought in']}: {what}, {when}" + (f", {len(used)} prices averaged" if len(used) > 1 else "")
+                                 + ("; includes GST" if gst else ""),
+                        "source": "brought in", "detail": {"prices": used, "file": what, "month_chosen": bool(chosen), "date_from": date_from, "gst": gst}})
     data_dated.add(entries, who=who)
     return {"added": len(entries), "rows": sum(len(g) for g in groups.values()), "left_out": skipped,
             "rates": [{"yarn_key": e["yarn_key"], "month": e["month"], "rate": e["rate"], "entries": e["entries"]} for e in entries]}
@@ -345,21 +433,54 @@ def _market_day(cell):
     return str(cell.date() if isinstance(cell, (pd.Timestamp, dt.datetime)) else cell)
 
 
-def _market_price(standard, original):
-    """(low, high) of a market-history price: the standard price, or the original written as a range ('1600-1650')."""
-    v = _num(standard)
+def _per_kilo(unit):
+    return str(unit or "").replace(" ", "").lower() in ("₹/kg", "rs/kg", "inr/kg", "rs./kg")
+
+
+def _market_price(r):
+    """(low, high) of a market-history price, in rupees a kilo, or (None, why): the standard price where its unit is a kilo,
+    else the original price (a figure, or a range '1600-1650') where that unit is a kilo."""
+    v = _num(r.get("Standard Price"))
     if v is not None and v > 0:
-        return v, v
-    nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", str(original or ""))]
+        return ((v, v), None) if _per_kilo(r.get("Standard Unit")) else (None, "Not a price per kilo")
+    nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", str(r.get("Original Price") or ""))]
+    if not nums:
+        return None, "It has no price"
+    if not _per_kilo(r.get("Original Unit")):
+        return None, "Not a price per kilo"
     if len(nums) == 1:
-        return nums[0], nums[0]
+        return (nums[0], nums[0]), None
     if len(nums) == 2 and nums[0] <= nums[1]:
-        return nums[0], nums[1]
-    return None
+        return (nums[0], nums[1]), None
+    return None, "Its price cannot be read"
+
+
+def market_decide(r, yarns):
+    """One row of the market history: (yarn key, month, price) to use, or (None, why it is left out)."""
+    low_ = lambda k: re.sub(r"\s+", " ", str(r.get(k) or "").strip().lower())
+    cat = low_("Yarn Category")
+    sure = SURE.get((cat, low_("Material"), low_("Blend / Composition"), low_("Count"), low_("Variant"), low_("Supplier / Mill")))
+    if sure is None:
+        return None, LEFT_OUT.get(cat, "No yarn of the yarn master matches it surely")
+    if sure[0] not in yarns:
+        return None, f"{sure[0]} is no longer in the yarn master"
+    price, why = _market_price(r)
+    if price is None:
+        return None, why
+    lo, hi = RATE_LIMITS
+    if not (lo <= price[0] and price[1] <= hi):
+        return None, f"A price outside Rs {lo:,.0f} to Rs {hi:,.0f} a kilo: not taken as a yarn rate"
+    month = _market_month(r.get("Date"), r.get("Year"), r.get("Month"))
+    if month is None:
+        return None, "Its date cannot be read"
+    return {"key": sure[0], "month": month, "low": price[0], "high": price[1],
+            "gst": str(r.get("GST Included") or "").lower().startswith("yes"), "date": _market_day(r.get("Date")),
+            "supplier": str(r.get("Supplier / Mill") or ""), "count": str(r.get("Count") or ""), "variant": str(r.get("Variant") or ""),
+            "price_basis": str(r.get("Price Basis") or ""), "why_sure": sure[1]}, None
 
 
 def _market_read():
-    """The market history, every row decided: loaded (with its yarn key and month) or left out (with why)."""
+    """The market history, every row decided: used (by yarn key and month) or left out (with why)."""
     if not os.path.exists(MARKET_FILE):
         return None
 
@@ -369,28 +490,12 @@ def _market_read():
     yarns = _yarns()
     use, out = {}, {}
     for r in common.cached(MARKET_FILE + "#" + MARKET_SHEET, load):
-        cat, count = str(r.get("Yarn Category") or "").strip().lower(), str(r.get("Count") or "").strip().lower()
-        sure = SURE.get((cat, count))
-        why = None
-        if sure is None:
-            why = LEFT_OUT.get(cat, "No yarn of the yarn master matches it surely")
-        elif sure[0] not in yarns:
-            why = f"{sure[0]} is no longer in the yarn master"
-        elif str(r.get("Standard Unit") or r.get("Original Unit") or "").replace(" ", "") not in ("₹/kg", "Rs/kg"):
-            why = "Not a price per kilo"
-        month = None if why else _market_month(r.get("Date"), r.get("Year"), r.get("Month"))
-        price = None if why or month is None else _market_price(r.get("Standard Price"), r.get("Original Price"))
-        if why is None and month is None:
-            why = "Its date cannot be read"
-        elif why is None and price is None:
-            why = "It has no price"
+        got, why = market_decide(r, yarns)
         if why:
             out[why] = out.get(why, 0) + 1
             continue
-        use.setdefault((sure[0], month), []).append({
-            "low": price[0], "high": price[1], "gst": str(r.get("GST Included") or "").lower().startswith("yes"),
-            "date": _market_day(r.get("Date")), "supplier": str(r.get("Supplier / Mill") or ""), "count": str(r.get("Count") or ""),
-            "variant": str(r.get("Variant") or ""), "price_basis": str(r.get("Price Basis") or ""), "why_sure": sure[1]})
+        p = {k: v for k, v in got.items() if k not in ("key", "month")}
+        use.setdefault((got["key"], got["month"]), []).append(p)
     return use, out
 
 
@@ -408,32 +513,56 @@ def _market_entries(use):
     return entries
 
 
-def market_preview():
-    """What loading the market history would add, and everything it leaves out, with why."""
-    _need_db()
+def _market_plan():
+    """Each monthly rate the market history gives, and what loading it would do: new, changed, unchanged (nothing to
+    write), kept (a person entered a rate for that yarn and month) or held (a person removed the rate for it)."""
     got = _market_read()
     if got is None:
         raise common.Refused(404, "The market history file (Yarn_Inteliigence_Master.xlsx) is not on this server")
     use, out = got
-    entries = _market_entries(use)
-    have = {(r["yarn_key"], r["month"]): r for r in data_dated.rows()}
+    every = data_dated.rows(include_removed=True)
+    active = {(r["yarn_key"], r["month"]): r for r in every if not r["removed_at"]}
+    removed = {(r["yarn_key"], r["month"]) for r in every if r["removed_why"] == "removed"}
+    plan = []
+    for e in _market_entries(use):
+        k, now = (e["yarn_key"], e["month"]), active.get((e["yarn_key"], e["month"]))
+        if now is not None and now["source"] != "market history":
+            status = "kept"
+        elif now is None and k in removed:
+            status = "held"
+        elif now is not None and all(now[f] == e[f] for f in ("rate", "low", "high", "entries", "basis")):
+            status = "unchanged"
+        else:
+            status = "changed" if now is not None else "new"
+        plan.append((e, status))
+    return plan, use, out
+
+
+STATUS = {"new": "", "changed": "the market history changed: will be replaced", "unchanged": "loaded already: nothing to do",
+          "kept": "a person's rate is kept", "held": "removed by a person: not loaded again"}
+
+
+def market_preview():
+    """What loading the market history would add, and everything it leaves out, with why."""
+    _need_db()
+    plan, use, out = _market_plan()
     return {"file": os.path.basename(MARKET_FILE), "sheet": MARKET_SHEET,
             "rows": sum(len(v) for v in use.values()) + sum(out.values()), "used_rows": sum(len(v) for v in use.values()),
+            "to_load": sum(1 for _, s in plan if s in ("new", "changed")),
             "rates": [{"yarn_key": e["yarn_key"], "month": e["month"], "label": masters.month_label(e["month"]), "rate": e["rate"],
-                       "low": e["low"], "high": e["high"], "entries": e["entries"], "basis": e["basis"],
-                       "held": (e["yarn_key"], e["month"]) in have and have[(e["yarn_key"], e["month"])]["source"] != "market history"}
-                      for e in entries],
+                       "low": e["low"], "high": e["high"], "entries": e["entries"], "basis": e["basis"], "status": s, "status_text": STATUS[s]}
+                      for e, s in plan],
             "left_out": [{"why": k, "rows": v} for k, v in sorted(out.items(), key=lambda kv: -kv[1])]}
 
 
 def market_load(who: str = ""):
-    """Load the market history's monthly rates (only the yarns surely matched). A rate a person entered for the same yarn
-    and month stays; an earlier load's rate is replaced, so loading twice changes nothing."""
+    """Load the market history's monthly rates (only the yarns surely matched). A rate a person entered stays, a rate a
+    person removed is not brought back, and a load that changes nothing writes nothing (so nothing is worked out again)."""
     _need_db()
-    got = _market_read()
-    if got is None:
-        raise common.Refused(404, "The market history file (Yarn_Inteliigence_Master.xlsx) is not on this server")
-    entries = _market_entries(got[0])
-    added, held = data_dated.add(entries, who=who or "market history", keep=lambda old: old["source"] != "market history")
-    return {"added": len(added), "kept": len(held),
-            "kept_rates": [{"yarn_key": e["yarn_key"], "month": e["month"]} for e in held]}
+    plan, _, _ = _market_plan()
+    write = [e for e, s in plan if s in ("new", "changed")]
+    count = lambda st: sum(1 for _, s in plan if s == st)
+    added, held = data_dated.add(write, who=who or "market history", keep=lambda old: old["source"] != "market history") if write else ([], [])
+    return {"added": len(added), "kept": count("kept") + len(held), "held_removed": count("held"), "unchanged": count("unchanged"),
+            "kept_rates": [{"yarn_key": e["yarn_key"], "month": e["month"]} for e, s in plan if s == "kept"] +
+                          [{"yarn_key": e["yarn_key"], "month": e["month"]} for e in held]}

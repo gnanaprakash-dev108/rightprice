@@ -52,7 +52,7 @@ window.RPDated = (() => {
     let path = "";            // a line only between neighbouring months that both have a rate: a gap stays a gap
     pts.forEach((p, i) => { if (p) path += (i && pts[i - 1] ? "L" : "M") + X(i).toFixed(1) + " " + Y(p.rate).toFixed(1); });
     g += `<path class="dr-line" d="${path}"/>`;
-    have.forEach(p => { g += `<circle class="dr-dot" cx="${X(p.i).toFixed(1)}" cy="${Y(p.rate).toFixed(1)}" r="4.5"/>`; });
+    have.forEach(p => { g += `<circle class="dr-dot${p.placeholder ? " dr-ph" : ""}" cx="${X(p.i).toFixed(1)}" cy="${Y(p.rate).toFixed(1)}" r="4.5"/>`; });
     const last = have[have.length - 1];
     if (last) g += `<text class="dr-val" x="${X(last.i).toFixed(1)}" y="${(Y(last.rate) - 9).toFixed(1)}" text-anchor="middle">${money(last.rate)}</text>`;
     months.forEach((mo, i) => { g += `<rect class="dr-hit" data-i="${i}" x="${(m.l + i * bw).toFixed(1)}" y="${m.t}" width="${bw.toFixed(1)}" height="${H - m.t - m.b}"/>`; });
@@ -61,7 +61,7 @@ window.RPDated = (() => {
     const box = el("div", { class: "dr-chart", html: svgText });
     box.querySelectorAll(".dr-hit").forEach(r => {
       const i = Number(r.dataset.i), p = pts[i];
-      const html = () => `<b>${label(months[i])}</b><br>` + (p ? `Rs ${money(p.rate, 2)} a kilo` + (p.low !== null && p.high !== null && p.low !== p.high ? ` (Rs ${money(p.low)} to ${money(p.high)})` : "") + `<br>${esc(SOURCE[p.source] || p.source)}`
+      const html = () => `<b>${label(months[i])}</b><br>` + (p ? `Rs ${money(p.rate, 2)} a kilo` + (p.low !== null && p.high !== null && p.low !== p.high ? ` (Rs ${money(p.low)} to ${money(p.high)})` : "") + `<br>${esc(SOURCE[p.source] || p.source)}` + (p.placeholder ? "<br>A placeholder: entered with no source" : "")
         : `No dated rate: today's rate (Rs ${money(s.today)}) is used`) + (p && s.today !== null ? `<br>Today: Rs ${money(s.today)}` : "");
       r.addEventListener("mousemove", e => tip(html(), e.clientX, e.clientY)); r.addEventListener("mouseleave", untip);
     });
@@ -94,16 +94,21 @@ window.RPDated = (() => {
       const rate = el("input", { id: "dr-rate", type: "number", step: "0.01", min: String(d.limits[0]), max: String(d.limits[1]), inputmode: "decimal", placeholder: "Rs a kilo" });
       const low = el("input", { id: "dr-low", type: "number", step: "0.01", inputmode: "decimal", placeholder: "optional" });
       const high = el("input", { id: "dr-high", type: "number", step: "0.01", inputmode: "decimal", placeholder: "optional" });
-      const note = el("input", { id: "dr-note", type: "text", maxlength: "300", placeholder: "Where it is from (a circular, a mill's quote…)" });
+      const note = el("input", { id: "dr-note", type: "text", maxlength: "300", placeholder: "Which document, its date (a circular of 21 Nov…)" });
+      const rests = el("select", { id: "dr-rests", required: true }, el("option", { value: "" }, "Choose…"), d.rests_on.map(o => el("option", { value: o.value }, o.text)));
+      const gst = el("input", { id: "dr-gst", type: "checkbox" });
+      const mid = () => { rate.placeholder = low.value && high.value ? `midpoint ${money((Number(low.value) + Number(high.value)) / 2, 2)}` : "Rs a kilo"; };
+      low.addEventListener("input", mid); high.addEventListener("input", mid);
       const f = (id, text, input, hint) => el("div", { class: "field" }, el("label", { for: id }, text), input, hint ? el("span", { class: "hint" }, hint) : null);
       const form = el("form", { class: "dr-form", onsubmit: async e => {
         e.preventDefault();
         try {
-          const r = await call("/api/dated-rates", { yarn_key: yarn.value, month: month.value, rate: rate.value || null, low: low.value || null, high: high.value || null, note: note.value });
-          say(msg, `Saved: ${r.yarn_key}, ${label(r.month)}, Rs ${money(r.rate, 2)} a kilo. Purchase orders of that month are costed on it from now on.`); await load();
+          const r = await call("/api/dated-rates", { yarn_key: yarn.value, month: month.value, rate: rate.value || null, low: low.value || null, high: high.value || null, note: note.value, rests_on: rests.value, gst: gst.checked });
+          say(msg, `Saved: ${r.yarn_key}, ${label(r.month)}, Rs ${money(r.rate, 2)} a kilo` + (r.placeholder ? ", as a placeholder (no source): costings on it warn, as on any placeholder" : "") + ". Purchase orders of that month are costed on it from now on."); await load();
         } catch (err) { say(msg, err.message, "err"); }
-      } }, el("div", { class: "fields dr-fields" }, f("dr-yarn", "Yarn (of the yarn master)", yarn), f("dr-month", "Month", month), f("dr-rate", "Rate, Rs a kilo", rate, "Or give a low and a high"),
-        f("dr-low", "Low", low), f("dr-high", "High", high), f("dr-note", "Note", note)),
+      } }, el("div", { class: "fields dr-fields" }, f("dr-yarn", "Yarn (of the yarn master)", yarn), f("dr-month", "Month", month), f("dr-rate", "Rate, Rs a kilo", rate, "Or a low and a high: their midpoint"),
+        f("dr-low", "Low", low), f("dr-high", "High", high), f("dr-rests", "What it rests on", rests, "No source: kept as a placeholder"), f("dr-note", "Note", note),
+        el("div", { class: "field" }, el("span", { class: "lbl" }, "GST"), el("label", { for: "dr-gst", class: "dr-check" }, gst, " This price includes GST"))),
         el("div", { class: "row-actions" }, el("button", { class: "btn primary", type: "submit" }, "Save the dated rate")),
         el("p", { class: "dr-small" }, "A rate for a yarn and month that already has one takes its place; the earlier one is kept below, marked replaced. The yarn master (today's rates) is not changed."));
       // the market history in hand
@@ -112,21 +117,20 @@ window.RPDated = (() => {
         market.replaceChildren(el("p", { class: "dr-empty" }, "Reading the market history…"));
         try {
           const p = await call("/api/dated-rates/market");
-          const fresh = p.rates.filter(r => !r.held);
           market.replaceChildren(
             el("p", {}, `${p.file}, sheet ${p.sheet}: ${money(p.rows)} prices. ${money(p.used_rows)} of them are of a yarn that surely is in the yarn master, giving ${p.rates.length} monthly ${p.rates.length === 1 ? "rate" : "rates"}:`),
-            table([{ t: "Yarn" }, { t: "Month" }, { t: "Rate", n: true }, { t: "From" }, { t: "" }], p.rates.map(r => el("tr", {}, el("td", {}, r.yarn_key), el("td", {}, r.label), el("td", { class: "n" }, money(r.rate, 2)), el("td", { class: "w" }, r.basis), el("td", {}, r.held ? "a person's rate is kept" : ""))), { label: "Rates the market history gives", empty: "None" }),
+            table([{ t: "Yarn" }, { t: "Month" }, { t: "Rate", n: true }, { t: "From" }, { t: "On Load" }], p.rates.map(r => el("tr", {}, el("td", {}, r.yarn_key), el("td", {}, r.label), el("td", { class: "n" }, money(r.rate, 2)), el("td", { class: "w" }, r.basis), el("td", {}, r.status_text || "added"))), { label: "Rates the market history gives", empty: "None" }),
             el("p", { class: "dr-small" }, "Left out, and why:"),
             el("ul", { class: "dr-why" }, p.left_out.map(x => el("li", {}, el("b", { class: "num" }, money(x.rows)), " ", x.why))),
-            el("div", { class: "row-actions" }, el("button", { class: "btn" + (fresh.length ? " primary" : ""), type: "button", disabled: !p.rates.length, onclick: async () => {
-              try { const r = await call("/api/dated-rates/market", {}); say(msg, `Loaded ${r.added} monthly ${r.added === 1 ? "rate" : "rates"} from the market history` + (r.kept ? `; ${r.kept} kept as a person entered them` : "") + "."); await load(); }
+            el("div", { class: "row-actions" }, el("button", { class: "btn" + (p.to_load ? " primary" : ""), type: "button", disabled: !p.to_load, onclick: async () => {
+              try { const r = await call("/api/dated-rates/market", {}); say(msg, `Loaded ${r.added} monthly ${r.added === 1 ? "rate" : "rates"} from the market history` + (r.kept ? `; ${r.kept} kept as a person entered them` : "") + (r.held_removed ? `; ${r.held_removed} a person removed stay removed` : "") + "."); await load(); }
               catch (err) { say(msg, err.message, "err"); }
-            } }, `Load ${p.rates.length} monthly ${p.rates.length === 1 ? "rate" : "rates"}`)));
+            } }, p.to_load ? `Load ${p.to_load} monthly ${p.to_load === 1 ? "rate" : "rates"}` : "Nothing new to load")));
         } catch (err) { market.replaceChildren(el("div", { class: "notice err" }, err.message)); }
       };
       const entryRow = (r, removable) => el("tr", {}, el("td", {}, r.yarn_key), el("td", {}, r.label), el("td", { class: "n" }, money(r.rate, 2)),
         el("td", { class: "n" }, r.low !== null && r.high !== null && r.low !== r.high ? `${money(r.low)} to ${money(r.high)}` : ""), el("td", { class: "n" }, String(r.entries)),
-        el("td", {}, SOURCE[r.source] || r.source), el("td", { class: "w" }, r.basis), el("td", {}, [r.entered_by || "", r.entered_at ? " " + r.entered_at.slice(0, 10) : ""].join("").trim()),
+        el("td", {}, SOURCE[r.source] || r.source), el("td", { class: "w" }, r.placeholder ? [el("span", { class: "tag warn" }, "Placeholder"), " ", r.basis] : r.basis), el("td", {}, [r.entered_by || "", r.entered_at ? " " + r.entered_at.slice(0, 10) : ""].join("").trim()),
         el("td", {}, removable ? el("button", { class: "btn small", type: "button", "aria-label": `Remove the rate for ${r.yarn_key}, ${r.label}`, onclick: async () => {
           if (!confirm(`Remove the dated rate for ${r.yarn_key}, ${r.label}? Purchase orders of that month go back to today's rate for it.`)) return;
           try { await call("/api/dated-rates/remove", { id: r.id }); await load(); } catch (err) { say(msg, err.message, "err"); }
@@ -151,7 +155,7 @@ window.RPDated = (() => {
 
   /* Bring in prices: the reviewed rows, each given a yarn of the yarn master, added as dated rates. A row is matched for
      you only when its yarn and count are exactly a yarn key ("Cotton" and "40s" is Cotton 40S); otherwise you choose. */
-  async function fromIntake(rows, source, box) {
+  async function fromIntake(rows, source, box, info = {}) {
     let yarns;
     try { yarns = (await call("/api/meta")).yarns; } catch (e) { say(box, e.message, "err"); return; }
     const norm = s => String(s || "").toLowerCase().replace(/[^a-z0-9/]/g, "");
@@ -163,17 +167,32 @@ window.RPDated = (() => {
     const body = [...groups.entries()].map(([k, g]) => {
       const s = el("select", { "aria-label": `Yarn of the yarn master for ${k}` }, el("option", { value: "" }, "Leave out"), yarns.map(y => el("option", { value: y.key }, y.key)));
       s.value = g.pick; picks.set(k, s);
-      const months = [...new Set(g.rows.map(r => String(r[0] || "").slice(0, 7)))].join(", ");
-      return el("tr", {}, el("td", {}, k), el("td", { class: "n" }, String(g.rows.length)), el("td", {}, months), el("td", {}, s));
+      const cell = el("td", { class: "dr-months" });
+      return { tr: el("tr", {}, el("td", {}, k), el("td", { class: "n" }, String(g.rows.length)), cell, el("td", {}, s)), cell, g };
     });
+    // the month: each row's own date only where the document's date was read; otherwise one month the person chooses
+    const one = el("input", { type: "month", id: "dr-in-month", max: new Date().toISOString().slice(0, 7), "aria-label": "The month these prices are for" });
+    const useOne = el("input", { type: "checkbox", id: "dr-in-one" }); useOne.checked = !info.date_read;
+    const showMonths = () => body.forEach(b => b.cell.textContent = useOne.checked ? (one.value ? label(one.value) : "choose the month above")
+      : [...new Set(b.g.rows.map(r => String(r[0] || "").slice(0, 7)).filter(Boolean))].map(m => /^\d{4}-\d{2}$/.test(m) ? label(m) : m).join(", "));
+    one.addEventListener("input", showMonths); useOne.addEventListener("change", () => { one.disabled = !useOne.checked; showMonths(); });
+    one.disabled = !useOne.checked; showMonths();
+    const gstYes = el("input", { type: "radio", name: "dr-in-gst", id: "dr-in-gst-y", value: "yes" }), gstNo = el("input", { type: "radio", name: "dr-in-gst", id: "dr-in-gst-n", value: "no" });
+    const when = el("div", { class: "dr-when" },
+      el("p", { class: "dr-small", style: "margin:0 0 6px" }, info.date_read ? `The document is dated: read from ${info.date_from}. Each row's month is taken from its date, shown below.` : "The document's own date was not read, so choose the month these prices are for. It is never taken from today's date."),
+      info.date_read ? el("label", { for: "dr-in-one", class: "dr-check" }, useOne, " Use one month for every row instead") : null,
+      el("div", { class: "field", style: "max-width:220px" }, el("label", { for: "dr-in-month" }, "Month these prices are for"), one),
+      el("div", { class: "field" }, el("span", { class: "lbl" }, "Do these prices include GST?"), el("div", { class: "dr-radios" }, el("label", { for: "dr-in-gst-y", class: "dr-check" }, gstYes, " Yes, they include GST"), el("label", { for: "dr-in-gst-n", class: "dr-check" }, gstNo, " No, without GST"))));
     const msg = el("div", { "aria-live": "polite" });
     box.replaceChildren(el("div", { class: "card dr-card" }, el("div", { class: "card-head" }, el("h2", {}, "Add as dated yarn rates")),
-      el("p", { class: "dr-small" }, "Give each kind of yarn read here the yarn of the yarn master it is. Only a sure match should be given: a different kind of yarn (semi-combed for combed, say) would cost purchase orders on the wrong rate. Each row's month is taken from its date; a range counts as its midpoint, and several prices of a yarn in one month as their average."),
-      table([{ t: "Yarn and count as read" }, { t: "Rows", n: true }, { t: "Months" }, { t: "Yarn of the yarn master" }], body, { label: "Yarns read" }), msg,
+      el("p", { class: "dr-small" }, "Give each kind of yarn read here the yarn of the yarn master it is. Only a sure match should be given: a different kind of yarn (semi-combed for combed, say) would cost purchase orders on the wrong rate. A range counts as its midpoint, and several prices of a yarn in one month as their average."),
+      when, table([{ t: "Yarn and count as read" }, { t: "Rows", n: true }, { t: "Month" }, { t: "Yarn of the yarn master" }], body.map(b => b.tr), { label: "Yarns read" }), msg,
       el("div", { class: "row-actions" }, el("button", { class: "btn primary", type: "button", onclick: async () => {
         const out = rows.map(r => r.slice(0, 6).concat([(picks.get(`${r[1] || ""} | ${r[2]}`) || {}).value || ""]));
+        if (useOne.checked && !one.value) { say(msg, "Choose the month these prices are for.", "err"); one.focus(); return; }
+        if (!gstYes.checked && !gstNo.checked) { say(msg, "Say whether these prices include GST.", "err"); gstYes.focus(); return; }
         try {
-          const r = await call("/api/intake/add-dated", { rows: out, source });
+          const r = await call("/api/intake/add-dated", { rows: out, source, month: useOne.checked ? one.value : null, dates_read: !useOne.checked && !!info.date_read, date_from: info.date_from || "", gst: gstYes.checked });
           say(msg, `${r.added} dated ${r.added === 1 ? "rate" : "rates"} added from ${r.rows} rows` + (r.left_out ? `; ${r.left_out} rows left out (no yarn given)` : "") + ": " + r.rates.map(x => `${x.yarn_key} ${label(x.month)} Rs ${money(x.rate, 2)}`).join("; ") + ". They are on the Yarn prices page.");
         } catch (err) { say(msg, err.message, "err"); }
       } }, "Add the dated rates"), el("a", { class: "btn", href: "#yarn" }, "Yarn prices"))));

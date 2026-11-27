@@ -129,6 +129,20 @@ def dated_checks(m):
         ("A typed price is kept over a dated rate", over["inputs"]["warp_rate"] == 350 and over["inputs"]["weft_rate"] == 360
          and any("typed price" in n for n in over["rates_of"]["notes"])),
         ("Without a date the dated rates are not looked at", masters.cost(ex, m, dated=table) == base),
+        ("A dated rate on a placeholder yarn, entered with no source at today's figure, changes nothing: the same figure and placeholders",
+         (lambda sl: (lambda a, b: a["placeholders"] == b["placeholders"] and a["total_per_m"] == b["total_per_m"] and "Warp yarn" in b["placeholders"])(
+             masters.cost(sl, m), masters.cost(sl, m, on="2026-09", dated={"Cotton Slub 20S": {"2026-09": {
+                 "rate": 338.0, "basis": "Placeholder: typed in the tool with no source"}}})))(
+             dict(ex, **{"Warp yarn": "Cotton Slub 20S", "Weft yarn": "Cotton Slub 20S"}))),
+        ("A dated rate entered with no source is a placeholder (rule 4) even on a yarn whose today's rate is not",
+         (lambda ph, ph_res: ph_res["placeholders"] == ["Warp yarn", "Weft yarn"] + base["placeholders"]
+          and next(u["Basis"] for u in ph_res["rates_used"] if u["Item"] == "Warp yarn").startswith("Placeholder")
+          and abs(ph_res["total_per_m"] - base["total_per_m"]) < 1e-12)(None, masters.cost(ex, m, on="2026-09", dated={"Cotton 40S": {"2026-09": {
+              "rate": 345.0, "basis": "Placeholder: typed in the tool with no source"}}}))),
+        ("A placeholder yarn given a dated rate with a source is no longer a placeholder for that month",
+         (lambda sl: "Warp yarn" in masters.cost(sl, m)["placeholders"] and "Warp yarn" not in masters.cost(sl, m, on="2026-09", dated={
+             "Cotton Slub 20S": {"2026-09": {"rate": 338.0, "basis": "Typed in the tool: Market circular"}}})["placeholders"])(
+             dict(ex, **{"Warp yarn": "Cotton Slub 20S", "Weft yarn": "Cotton Slub 20S"}))),
         ("A month is read from a date, a day or a month; anything else is refused",
          masters.month_of("2026-09-18") == masters.month_of("2026-09") == "2026-09" and masters.month_of(__import__("datetime").date(2026, 9, 1)) == "2026-09"
          and all(_refused(lambda v=v: masters.month_of(v)) for v in ("Sept 2026", "2026-13", ""))),

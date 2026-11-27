@@ -25,6 +25,35 @@ def empty_stage(rows=8):
     return df
 
 
+_MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+
+def find_date(text):
+    """The first date written in a text (a file name, a circular's words): 21.11.2026, 21-11-2026, 21/11/2026 (day
+    first), 2026-11-21, 21 Nov 2026, 21st November 2026, Nov 21, 2026. None when there is no believable one (stage 5: a
+    dated yarn rate takes its month from the document, never from today)."""
+    t = str(text or "")
+    found = []
+    for m in re.finditer(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](20\d\d)(?!\d)", t):
+        found.append((m.start(), int(m.group(3)), int(m.group(2)), int(m.group(1))))
+    for m in re.finditer(r"(?<!\d)(20\d\d)-(\d{1,2})-(\d{1,2})(?!\d)", t):
+        found.append((m.start(), int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    for m in re.finditer(r"(?<!\d)(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?,?\s+(20\d\d)(?!\d)", t):
+        if m.group(2)[:3].lower() in _MONTHS:
+            found.append((m.start(), int(m.group(3)), _MONTHS[m.group(2)[:3].lower()], int(m.group(1))))
+    for m in re.finditer(r"\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d\d)(?!\d)", t):
+        if m.group(1)[:3].lower() in _MONTHS:
+            found.append((m.start(), int(m.group(3)), _MONTHS[m.group(1)[:3].lower()], int(m.group(2))))
+    for _, y, mo, d in sorted(found):
+        try:
+            day = dt.date(y, mo, d)
+        except ValueError:
+            continue
+        if dt.date(2019, 1, 1) <= day <= dt.date.today():
+            return day.isoformat()
+    return None
+
+
 def keep_file(name, data):
     """Keep a copy of the source document so a rate can be traced back to it."""
     os.makedirs(SOURCE_DIR, exist_ok=True)
@@ -68,7 +97,8 @@ def read_pdf(data, source):
     pages = [page.get_text() for page in doc]
     text = "\n".join(pages)
     info = {"pages": doc.page_count, "characters": len(text.strip()),
-            "image_pages": sum(1 for p in pages if len(p.strip()) < 40)}
+            "image_pages": sum(1 for p in pages if len(p.strip()) < 40),
+            "date": find_date(text[:4000])}          # the circular's own date, where its first lines say it
     if info["characters"] < 40 * max(1, doc.page_count):
         info["scanned"] = True
         return pd.DataFrame(columns=STAGE_COLS), info
