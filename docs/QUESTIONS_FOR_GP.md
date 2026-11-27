@@ -12,6 +12,27 @@
 - Dark mode: added, following RightPrice's switch. Avatar: initials from the Microsoft sign-in
   (read from Azure's /.auth/me; off Azure it shows RP).
 
+## Asked 27 Nov 2026, stage 5 (dated yarn rates): built one way meanwhile, each can be changed
+
+S5-1. **Which kind are the yarn master's cotton yarns (Cotton 16S to 40S)?** The market history in hand has two years of
+      KPR and SSM *semi-combed* prices for 16s, 20s, 24s, 30s, 34s and 40s (613 prices, July 2022 to June 2026). The yarn
+      master does not say combed, combed compact or semi-combed, so they were **not** loaded (only a sure match is).
+      1. Semi-combed: load them as dated rates. 2. Combed or combed compact: leave them out (as now). 3. Not sure: leave them out.
+S5-2. **A price given as a range** (Rs 1,600 to 1,650): built as **the midpoint**. 1. Midpoint (as now). 2. The low end
+      (what a mill buying well pays). 3. The high end.
+S5-3. **Prices that include GST.** The only market prices loaded (Raymond linen 40 and 60 lea, June 2026) include GST and
+      freight, as the file says; they are kept as they are, and the basis says so. 1. Keep as they are (as now).
+      2. Take 5% GST out. 3. Leave GST-inclusive prices out.
+S5-4. **A month with no dated rate** uses today's rate (the yarn master), and the costing says so per yarn. 1. Today's
+      rate (as now). 2. The nearest earlier month's dated rate, if there is one within, say, two months.
+S5-5. **Viscose 40/2 in the yarn master**: 2/40s TFO doubled or ring doubled? The market file has both; neither was
+      loaded. 1. TFO doubled. 2. Ring doubled. 3. Leave it out.
+S5-6. **A place in the side panel?** Dated yarn rates sit on Prices > Yarn prices (under the yarn master), and Bring in
+      prices has "Add as dated yarn rates". Nothing was added to the side panel. 1. Fine where it is. 2. Wanted in the panel.
+S5-7. **The linen placeholders look far too low.** Raymond's June 2026 linen is Rs 1,600 to 1,650 a kilo (40 lea) and
+      Rs 2,200 to 2,250 (60 lea), with GST and freight; the yarn master has placeholders of Rs 900 and Rs 1,200. Nothing
+      was changed (rule 2). A real linen quote would settle it.
+
 ## Answered 27 Nov 2026 (for stages 2, 3 and 5)
 
 - Stage 2, "priced well above its group": **the same rule as the brief**: above the group's usual range (the middle half

@@ -291,7 +291,8 @@ def supplier(mill: str):
                                               "band", "range", "duplicate_of", "problems", "why_unsure", "placeholders", "above_range", "tracked", "sheet_price", "first_quote",
                                               "rates")}
     return {"key": key, "name": _mill_names(rows)[0], "names": _mill_names(rows), "ready": d["ready"],
-            "bought": dict(b_side, rows=[slim(r) for r in sorted(po, key=lambda r: (-r["above_range"], -(r["excess"] or 0)))], rates=_bought_rates(po)),
+            "bought": dict(b_side, rows=[slim(r) for r in sorted(po, key=lambda r: (-r["above_range"], -(r["excess"] or 0)))],
+                           rates=_bought_rates(po) if d["ready"] else {"of": len(po), "known": 0, "dated": 0, "by_month": {}, "text": ""}),
             "quoted": dict(q_side, rows=[slim(r) for r in sorted(fl, key=lambda r: (r.get("tracked") == "Agreed", -r["above_range"]))], not_costed=not_costed, sheets=sheets),
             "sums": sums, "hint": hint, "today": common._day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},

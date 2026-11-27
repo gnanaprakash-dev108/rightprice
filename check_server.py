@@ -680,8 +680,16 @@ def dated_checks(c, check):
           and all(r["rates"]["dated"] is False and r["rates"]["note"].startswith("On today's rates") for r in d["rows"] if r["source"] == "Fabric list"),
           str(sorted((k or "none", v) for k, v in by.items())))
     if STORE == "files":
-        # the proof that nothing moved: every purchase-order costing on its order month equal to the costing without a date
-        m = rules_common.get_masters()
+        # the proof that nothing moved: every purchase-order costing on its order month equal to the costing without a date,
+        # on the rate master as it ships (read, never saved: the checks above edited this copy's rates on purpose)
+        import pandas as pd
+        import mill_sheet
+        import rate_card
+        import store
+        import yarn_seed
+        m = pd.read_excel(store.SHIPPED_MASTER, sheet_name=None)
+        for add_ in (rate_card.apply, yarn_seed.apply, mill_sheet.apply):
+            add_(m)
         t0, same = time.time(), 0
         for r in po:
             a = masters.cost(r["choices"], m)

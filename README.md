@@ -63,8 +63,8 @@ full-screen view.
 | Negotiation pack | One printable page for a whole mill sheet (or the rows ticked on the list): totals, the rows to lead with, every row with its stance and money at stake, the mill's sums that are off and what its own sums give, the questions to ask, and the rows not costed |
 | Compare | Two costings side by side on today's rates: every group and sub-cost, the difference, and the choices that differ |
 | Bulk upload and list | Upload a mill's price sheet as it comes, or the RightPrice template. One list of every fabric costed, in the mill sheet's headings, with should-cost, the gap and a check of the mill's sums; tick rows to open, compare or remove; move a yarn price across the whole list |
-| Yarn prices | Yarn master and market reference, both editable; master against market |
-| Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference |
+| Yarn prices | Yarn master and market reference, both editable; master against market; dated yarn rates (each yarn by month, gaps left as gaps, entered, brought in or loaded from the market history; database only) |
+| Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference, or as dated yarn rates |
 | Cotton prices | Shankar-6 history and chart |
 | Rate tables | Weaving, sizing, dyeing, finishing, print method, dobby, weft, rate card quantity, defaults, weave list, content groups |
 | Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |

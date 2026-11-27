@@ -128,6 +128,42 @@ Found while measuring on 27 Nov, and told to GP:
 - Most fabric codes were ordered once (378 of 4,495 priced codes have three or more orders), so a per-code price chart is
   thin until more months are loaded; the Fab group chart is where the history shows.
 
+### Stage 5 as built (27 Nov, branch claude/sleepy-dirac-dknzrp-stage5)
+
+GP's decision: purchase orders on the rates of their order month; quotes and Cost a fabric on today's rates; each costing
+says which. **Built so; no rate in the rate master changed, no calibration proposal applied.**
+- **Dated yarn rates** (`db/005_dated_rates.sql`, `data_dated.py`, `rules/dated.py`): one rate per yarn per month, in the
+  database only (on the files every dated endpoint answers 503 saying it needs a database, and every costing falls back).
+  Three ways in, each kept with its source: typed on Prices > Yarn prices; "Add as dated yarn rates" on Bring in prices
+  (the reviewed rows, each given a yarn of the yarn master); "Load" of the market history in hand. A replaced or removed
+  rate is kept, marked. The rule for the rate of a month is on the Yarn prices page and in `rules/dated.py` (RULE): for
+  its calendar month only; a range counts as its midpoint; several prices as their average, never mixing GST and no GST;
+  a person's rate replaces an earlier one and the market history never replaces a person's.
+- **The market history** (`inputs/Yarn_Inteliigence_Master.xlsx`, Yarn_Master, 5,275 prices, every date read; the Year
+  column is wrong on 227 rows and the date text is used): only Raymond linen 40 and 60 lea (June 2026) surely match a
+  yarn of the master. Left out with the reason shown: raw cotton 3,312, polyester filament 806, semi-combed cotton 613
+  (the master does not say semi-combed: question S5-1), viscose and modal 463, cotton/viscose 78, linen 44 lea 1.
+  **Nothing is loaded until someone presses Load** (the live database has none yet).
+- **Costing on a date**: `masters.cost(sel, m, on=<date>)`; without `on` nothing changes (check_engine.py proves it,
+  with the seven V1 qualities). With it each yarn is on its month's dated rate, else today's, and `rates_of` says so per
+  yarn. Right cost's 1,696 purchase-order verdicts, the supplier page's purchase questions and the MCP brief use the
+  order month (the month holding most of a code's metres, from the purchase file); `/api/cost` takes `_rates_on` only
+  from a purchase order's Negotiation tab. The negotiation pack holds fabric-list rows only (quotes), so it is on today's.
+- **What shows a different figure: nothing today.** There is no dated rate for Aug to Nov 2026, so all 1,696
+  purchase-order costings (Aug 200, Sep 1,047, Oct 336, Nov 113 by order month) fall back to today's rates, equal to the
+  paisa, line by line (check_server.py proves all 1,696 on files). What is new on screen: each purchase order says its
+  order month and that today's rate was used; the supplier page says which rates its purchases are on. Once a dated rate
+  is entered, the purchase orders of that month on that yarn follow it (should-cost, gap, verdict), and say so.
+- **The calibration test re-run** (`calibrate_splits.py`, `pilot/Held_Back_Splits.xlsx`, `docs/HELD_BACK_SPLITS.md`):
+  by construction (a stand-in for stage 2's Fab groups, `construction.py`) and by order month. On unseen constructions
+  the draft adds about one point within 10% (48.6% → 49.7%), as before; the level is lower than the old split said
+  (52.4%), within 5% falls, and the printing and order-size proposals change with the split. Only piece-dyed satin and
+  twill weaving hold on every split. Today's rates fit later months worse (median gap −4.8% in Aug to +3.9% in Nov).
+- Left as they are: the tracker card on a purchase order still says "today's should-cost" (true until a dated rate
+  exists for its month); `python store.py export` does not write dated rates (the files have no place for them); the
+  Right cost list has no "rates of" column (the detail page and the supplier page say it); dashboard panel 3 is still
+  cotton only; a side-panel entry was not added (question S5-6).
+
 ### Where things stand
 
 - **27 Nov, second session: stage 1 merged (pull request 24, merge commit 98756be) and deployed: the deploy run was green
@@ -701,7 +737,7 @@ yarn-dyed oxford −2.7%, 46%; piece-dyed satin 3.1%, 57%; piece-dyed twill 4.3%
 10. **Dollar purchases, per-kg purchases and knits** are not covered.
 11. **Cotton price history stops at 24 June 2026.**
 12. **Pictures are not read automatically** in the price intake; rates are typed beside the image.
-13. **Yarn rates are one date.** Orders span August to November, costed on November rates.
+13. **Yarn rates are one date.** Orders span August to November, costed on November rates. (Stage 5: dated yarn rates can now be entered and orders are costed on their month where one exists; none exists yet for August to November 2026.)
 
 ## Mill rate card, built in 24 Nov 2026
 
