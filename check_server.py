@@ -1,21 +1,51 @@
-"""Checks the web server against the engine: same numbers, every page's data, bad input refused.
+"""Checks the web server against the engine: same numbers, every page's data, bad input refused; and the data layer.
 
 Run: python check_server.py     It must print ALL OK. It does not start the classic screens.
+
+What it runs:
+1. The checks below on the files (as before the data layer), on a SQLite database file, and on PostgreSQL.
+2. The move from files to a database, proved: a data folder is filled through the app on the files and every page's
+   answer is kept; the folder is then copied into PostgreSQL and into SQLite the way the live app will do it, and every
+   answer must be exactly the same (every costing equal to the paisa, and everything else). The files must not have
+   changed; the database written back out as files must give the same answers again.
+3. The data layer itself: tables added once, writers waiting for each other, a dropped connection made again, the app
+   refusing a database when the files changed after the move, and an unreachable database (503, no password shown).
+
+It never touches the live database: DATABASE_URL is ignored. PostgreSQL is used when RIGHTPRICE_TEST_DATABASE_URL names
+a test server: a throwaway database is made on it for each run and dropped after. The "checks" job on GitHub runs one,
+and sets RIGHTPRICE_CHECK_REQUIRE_POSTGRES=1 so that a missing PostgreSQL fails instead of being skipped.
 """
+import datetime as _dt
+import hashlib
 import io
+import re
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 
-os.environ["RIGHTPRICE_NO_CLASSIC"] = "1"
-# Everything here runs on a copy of the rate master in a temporary folder, so the edits it tries
-# never touch data/Rate_Master.xlsx.
-os.environ["RIGHTPRICE_DATA"] = tempfile.mkdtemp(prefix="rightprice-check-")
+HERE = os.path.dirname(os.path.abspath(__file__))
+STORE = os.environ.get("RIGHTPRICE_CHECK_STORE")       # set for one run, by the run that starts it
+if STORE:
+    os.environ["RIGHTPRICE_NO_CLASSIC"] = "1"
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+    os.environ.pop("DATABASE_URL", None)
+    # everything runs on a copy of the rate master in a temporary folder, so the edits it tries never touch
+    # data/Rate_Master.xlsx
+    if not os.environ.get("RIGHTPRICE_DATA"):
+        os.environ["RIGHTPRICE_DATA"] = tempfile.mkdtemp(prefix="rightprice-check-")
+    if STORE != "files":
+        os.environ["DATABASE_URL"] = os.environ["RIGHTPRICE_CHECK_URL"]
 
-from fastapi.testclient import TestClient  # noqa: E402
+    from fastapi.testclient import TestClient  # noqa: E402
 
-import masters  # noqa: E402
-import server  # noqa: E402
+    import masters  # noqa: E402
+    import server  # noqa: E402
+    from rules import common as rules_common, drafts as rules_drafts, mills as rules_mills  # noqa: E402
 
 
 def main():
@@ -167,8 +197,19 @@ def main():
         put = c.put("/api/table/Yarn_Rates", json={"columns": yr["columns"], "rows": rows})
         after = c.post("/api/cost", json=masters.EXAMPLE_ROW).json()["total_per_m"]
         check("Yarn rate edit saved and used", put.status_code == 200 and after > 181.41, f"{after:.2f}")
-        check("Dated copy kept on the first change of the day",
-              any(f.startswith("Rate_Master backup") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
+        st = c.get("/api/store").json()
+        if st["store"] == "files":
+            check("Dated copy kept on the first change of the day",
+                  any(f.startswith("Rate_Master backup") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
+        else:       # a database keeps every version: the one before the edit is still there, and the files are not written
+            import store as _store
+            with _store.get().tx() as tx_:
+                kept_, now_ = [pd.read_excel(io.BytesIO(bytes(r[0])), sheet_name="Yarn_Rates") for r in
+                               tx_.all("SELECT workbook FROM rate_version ORDER BY id DESC LIMIT 2")][::-1]
+            rate_ = lambda df: float(df.set_index("Yarn key").loc["Cotton 40S", "Rate Rs/kg"])
+            check("Dated copy kept on the first change of the day (the earlier version, in the database, as it was)",
+                  st["rate_master_in_use"]["reason"].startswith("Table edited: Yarn_Rates") and rate_(kept_) != 355 and rate_(now_) == 355
+                  and not any(f.startswith("Rate_Master") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
         row40[ri] = "abc"
         bad = c.put("/api/table/Yarn_Rates", json={"columns": yr["columns"], "rows": rows})
         check("Text in a number column refused", bad.status_code == 400 and "needs a number" in bad.json()["detail"])
@@ -266,7 +307,9 @@ def main():
         cd = c.get("/api/table/Class_Defaults").json()
         row = next(r for r in cd["rows"] if r[0] == "Dobby/Matt" and r[1] == "Yarn Dyed")
         check("Cost sheet: an applied draft changes that rate only, with its basis and a dated backup",
-              ap.get("backup", "").startswith("Rate_Master before mill cost sheet") and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
+              (ap.get("backup", "").startswith("Rate_Master before mill cost sheet") if c.get("/api/store").json()["store"] == "files"
+               else ap.get("backup", "").startswith("rate version ") and ap["backup"].endswith("kept in the database"))
+              and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
               and row[cd["columns"].index("Basis")].startswith("V1 workbook; Overhead from mill cost sheet"))
         mm = masters.load()
         half = {"id": "Sizing_Rates|Yarn Dyed|40", "table": "Sizing_Rates", "match": {"Route type": "Yarn Dyed", "Warp count up to (Ne)": 40},
@@ -357,8 +400,8 @@ def main():
         nc = ev({"key": "Fabric list|T-15", "code": "T-15", "kind": "Mill's quote", "price": 2150, "row_price": 185, "date": "2026-11-20"}).json()["summary"]
         check("Tracker: a fabric not costed is checked against the price on its row", any("price on the row" in w for w in nc["warnings"]))
         check("Mill names: Ltd, Limited, Mills and a cut-off Limited are dropped",
-              server.mill_key("Rajapalayam Mills Limite") == server.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and server.mill_key("Arvind") == server.mill_key("Arvind Limited"))
-        check("Rupees in Indian grouping", server._inr(99999999) == "9,99,99,999.00" and server._inr(1234.5) == "1,234.50")
+              rules_mills.mill_key("Rajapalayam Mills Limite") == rules_mills.mill_key("RAJAPALAYAM MILLS LTD.") == "rajapalayam" and rules_mills.mill_key("Arvind") == rules_mills.mill_key("Arvind Limited"))
+        check("Rupees in Indian grouping", rules_common._inr(99999999) == "9,99,99,999.00" and rules_common._inr(1234.5) == "1,234.50")
         # a list row that repeats another order: no second negotiation
         buf = io.BytesIO()
         pd.DataFrame([dict(base_row, **{"Fab Code": "D-1", "Total order qnty": 3100}), dict(base_row, **{"Fab Code": "D-2", "Total order qnty": 3100})],
@@ -395,11 +438,11 @@ def main():
         check("Supplier page: an agreed fabric is closed, not money to push on",
               sp2["quoted"]["agreed"] == 1 and sp2["quoted"]["above_range"] == round((205 - upper) * 4100) and sp2["quoted"]["agreed_above_range"] == round((230 - upper) * 5000), str({k: v for k, v in sp2["quoted"].items() if k != "rows"}))
         check("Mill names: a name cut short is the fuller name; Textiles and Mills of one name stay apart",
-              server._mill_base("Nahar Industrial Enterpr") != "" and server._mill_base("Sri Shyam Fashions India Pvt Ltd") == server._mill_base("Sri Shyam Fashion India")
-              and server._mill_base("Ruby Textiles Pvt Ltd") != server._mill_base("The Ruby Mills Limited") and server._mill_base("\u0905\u0930\u0935\u093f\u0902\u0926") != "")
-        server._learn_mill_names({"Nahar Industrial Enterpr", "Nahar Industrial Enterprises Ltd", "Arvind Ltd", "Arvind Ltd (Denim Division)"})
-        check("Mill names: only a cut-off name joins the fuller one", server.mill_key("Nahar Industrial Enterpr") == server.mill_key("Nahar Industrial Enterprises Ltd")
-              and server.mill_key("Arvind Ltd") != server.mill_key("Arvind Ltd (Denim Division)"))
+              rules_mills._mill_base("Nahar Industrial Enterpr") != "" and rules_mills._mill_base("Sri Shyam Fashions India Pvt Ltd") == rules_mills._mill_base("Sri Shyam Fashion India")
+              and rules_mills._mill_base("Ruby Textiles Pvt Ltd") != rules_mills._mill_base("The Ruby Mills Limited") and rules_mills._mill_base("\u0905\u0930\u0935\u093f\u0902\u0926") != "")
+        rules_mills._learn_mill_names({"Nahar Industrial Enterpr", "Nahar Industrial Enterprises Ltd", "Arvind Ltd", "Arvind Ltd (Denim Division)"})
+        check("Mill names: only a cut-off name joins the fuller one", rules_mills.mill_key("Nahar Industrial Enterpr") == rules_mills.mill_key("Nahar Industrial Enterprises Ltd")
+              and rules_mills.mill_key("Arvind Ltd") != rules_mills.mill_key("Arvind Ltd (Denim Division)"))
         q2 = [q["text"] for q in sp2["questions"]["quoted"] if q["code"] == "S-2"]
         r2 = next(r for r in sp2["quoted"]["rows"] if r["code"] == "S-2")
         check("Supplier page: a fabric the mill has moved on is judged and asked about at the price it is at now, holding our counter",
@@ -427,7 +470,7 @@ def main():
               "already agreed" in c.post("/api/draft", json={"scope": {"type": "fabric", "key": k_s1["key"]}}).json().get("detail", ""))
         other = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r["mill"] != mill)
         check("Draft: fabrics of two mills are refused", c.post("/api/draft", json={"scope": {"type": "rows", "keys": [k_d2, "Purchase orders|" + other["code"]]}}).status_code == 400)
-        facts = {k: v for k, v in server._draft_facts({"scope": {"type": "fabric", "key": k_d2}, "ask": "breakup"}).items() if k not in ("skipped", "left_out", "adjusted")}
+        facts = {k: v for k, v in rules_drafts._draft_facts({"scope": {"type": "fabric", "key": k_d2}, "ask": "breakup"}).items() if k not in ("skipped", "left_out", "adjusted")}
         check("Draft: what goes to the API is this fabric's figures and nothing else",
               [i["code"] for i in facts["items"]] == ["S-2"] and set(facts) == {"writer", "contact", "mill", "ask", "wants", "items"}
               and facts["writer"] == "[Your name]" and facts["items"][0]["price"] == 205 and facts["items"][0]["price_to_name"] == 180 and facts["items"][0]["purpose"] == "revise")
@@ -506,7 +549,7 @@ def main():
         check("Quote alerts: a corrected sheet makes the older row say so, with both prices", any("240.00" in f["text"] and "185.00" in f["text"] for f in old_row["flags"]) and len(old_row["flags"]) == 1)
         newer = [a for a in c.get("/api/alerts").json()["all"].values() if any("An older row for this code and quantity" in f["text"] for f in a["flags"])]
         check("Quote alerts: the newer row says an older one is on the list", len(newer) == 1 and newer[0]["state"] == "live")
-        check("Quantities as mills type them", server._qty("5000 mtr") == 5000 and server._qty("3,333") == 3333 and server._qty(4200) == 4200 and server._qty("about 5") is None)
+        check("Quantities as mills type them", rules_common._qty("5000 mtr") == 5000 and rules_common._qty("3,333") == 3333 and rules_common._qty(4200) == 4200 and rules_common._qty("about 5") is None)
         tot_q = c.get("/api/negotiations/summary").json()
         check("Tracker: a fabric agreed before a re-quote arrived keeps its gain", any(t for t in [tot_q] if t["duplicates"] == 0))
         # MCP: an assistant's way in, behind a secret token
@@ -601,5 +644,499 @@ def main():
     return 0 if ok else 1
 
 
+# ===================================================================== the move from files to a database, proved
+def build(c):
+    """Fill an empty data folder through the app, as people would: two mill sheets, fabrics added on screen, a rate
+    edited (which keeps a dated copy), a cotton price, negotiations with every kind of step and one removed, an alert
+    marked seen, a row removed, and mill cost sheets."""
+    import pandas as pd
+    import mill_sheet
+    today = _dt.date.today()
+    day = lambda n: (today - _dt.timedelta(days=n)).isoformat()
+    base = {"Brand": "AS", "Fab Code": "P-1", "YD/NYD": "YD", "Material Type": "100% Cotton", "Warp": 40, "Weft": 40,
+            "EPI": 136, "PPI": 90, "Variety": "YDS", "Weave": "2/1 RHT", "F.W.": 145, "Finish": "Normal",
+            "Arvind Ref": "x/1", "Total order qnty": 2255, "Base Price": 164, "Std EPI": 122, "Std PPI": 76,
+            "Actual EPI": 136, "Actual PPI": 90, "Diff EPI": 14, "Diff PPI": 14, "EPI Upch": 8.4, "PPI Upch": 12.6,
+            "Finish Upch": 0, "Dobby Upch": 0, "Upcharge/Print/Mcount": 0, "Double beam": 0, "Price": 185,
+            "Upcharge for less qnty": 0, "Discoun>2000 mts": 0, "Total price with qnty disc/upcharge": 185,
+            "Ex mill price": 185, "C2FO @2.84%": 190.254}
+    hi = dict(base, **{"Price": 240, "Ex mill price": 240, "Total price with qnty disc/upcharge": 240, "Total order qnty": 5000})
+    sheets = [[base, dict(base, **{"Fab Code": "P-2", "Price": 188}), dict(base, **{"Fab Code": "P-3", "YD/NYD": "NYD"}),
+               dict(base, **{"Fab Code": "P-4", "Warp": "40+2/80 (98/2)"}), dict(hi, **{"Fab Code": "P-5"}), dict(hi, **{"Fab Code": "P-6"}),
+               dict(base, **{"Fab Code": "P-7", "Material Type": "PC 65/35"}),
+               dict(base, **{"Fab Code": "P-8", "Price": 70, "Ex mill price": 70, "Total price with qnty disc/upcharge": 70, "Total order qnty": 3300})],
+              [dict(base, **{"Fab Code": "R-1", "Total order qnty": 4100, "Weave": "Plain"}), dict(hi, **{"Fab Code": "R-2", "EPI": 144})]]
+    for n, rows in enumerate(sheets):
+        buf = io.BytesIO()
+        pd.DataFrame(rows, columns=mill_sheet.COLUMNS).to_excel(buf, index=False)
+        assert c.post("/api/list/upload", files={"file": (f"mill sheet {n + 1}.xlsx", io.BytesIO(buf.getvalue()))}).status_code == 200
+    for sup, price, code in (("Arvind Limited", 200, "S-1"), ("Rajapalayam Mills Ltd", 171.5, "S-2"), ("Nahar Industrial Enterprises", 150, "S-3")):
+        assert c.post("/api/list/add", json=dict(masters.EXAMPLE_ROW, **{"Fabric code": code, "Supplier": sup, "Quoted price (Rs/m)": price,
+                                                                         "Order quantity (m)": 3000})).status_code == 200
+    yr = c.get("/api/table/Yarn_Rates").json()
+    ki, ri = yr["columns"].index("Yarn key"), yr["columns"].index("Rate Rs/kg")
+    rows = [list(r) for r in yr["rows"]]
+    next(r for r in rows if r[ki] == "Cotton 40S")[ri] = 352
+    assert c.put("/api/table/Yarn_Rates", json={"columns": yr["columns"], "rows": rows}).status_code == 200
+    assert c.post("/api/cotton", json={"date": day(1), "price": 55400, "source": "check"}).status_code == 200
+    listed = {r["mill"].get("Fab Code") or (r["inputs"] or {}).get("Fabric code"): r for r in c.post("/api/list", json={}).json()["rows"]}
+    k1, k2 = f"Fabric list|{listed['S-1']['id']}", f"Fabric list|{listed['R-2']['id']}"
+    for key, kind, price, n in ((k1, "Mill's quote", 200, 10), (k1, "Our counter", 185, 8), (k1, "Mill's revised quote", 192, 5),
+                                (k1, "Agreed", 190, 2), (k2, "Mill's quote", 240, 6), (k2, "Our counter", 205, 4)):
+        assert c.post("/api/negotiations/event", json={"key": key, "kind": kind, "price": price, "date": day(n), "metres": 3000,
+                                                       "code": key, "note": f"{kind} by phone"}).status_code == 200, kind
+    step = c.get("/api/negotiations").json()["items"][k2]["events"][-1]
+    assert c.post("/api/negotiations/remove", json={"key": k2, "id": step["id"]}).status_code == 200
+    po = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r.get("price"))
+    kp = f"Purchase orders|{po['code']}"
+    for kind, price, n in (("Mill's quote", round(po["price"], 2), 20), ("Agreed", round(po["price"] * 0.97, 2), 12)):
+        assert c.post("/api/negotiations/event", json={"key": kp, "kind": kind, "price": price, "date": day(n), "metres": 1200}).status_code == 200
+    al = c.get("/api/alerts").json()
+    assert al["ids"], "no alerts to mark seen"
+    c.post("/api/alerts/seen", json={"ids": sorted(al["ids"])[:1]})
+    assert c.post("/api/list/remove", json={"ids": [listed["P-3"]["id"]]}).json()["removed"] == 1
+    tpl = c.get("/api/costsheet/template")
+    cs = pd.read_excel(io.BytesIO(tpl.content), sheet_name="Cost sheet")
+    cs.loc[0, "Overhead %"] = 6
+    cs.loc[0, "Mill"] = "Mill A"
+    cs2 = cs.copy()
+    cs2["Mill"] = "Mill B"
+    cs2.loc[0, "Overhead %"] = 8
+    buf = io.BytesIO()
+    pd.concat([cs, cs2]).to_excel(buf, index=False)
+    assert c.post("/api/costsheet/upload", files={"file": ("cost sheets.xlsx", io.BytesIO(buf.getvalue()))}).status_code == 200
+
+
+def dump(c):
+    """Every page's answer that carries a figure, for comparing two stores exactly."""
+    import pandas as pd
+    for _ in range(600):            # Right cost works its verdicts out in the background after a start
+        costs = c.get("/api/costs").json()
+        if costs.get("ready") and not any(r.get("band") == "Working it out" for r in costs["rows"]):
+            break
+        time.sleep(0.5)
+    else:
+        raise SystemExit("Right cost's verdicts were not ready after five minutes")
+    out = {"costs": costs, "meta": c.get("/api/meta").json(), "cost": c.post("/api/cost", json=masters.EXAMPLE_ROW).json(),
+           "list": c.post("/api/list", json={}).json(), "list with yarn moved": c.post("/api/list", json={"yarn_pct": {"*": 7.5}}).json(),
+           "pack": c.post("/api/pack", json={}).json(), "alerts": c.get("/api/alerts").json(),
+           "negotiations": c.get("/api/negotiations").json(), "won": c.get("/api/negotiations/summary").json(),
+           "suppliers": c.get("/api/suppliers").json(), "dashboard": c.get("/api/dashboard").json(), "insights": c.get("/api/insights").json(),
+           "cost sheets": c.get("/api/costsheet").json(), "cotton": c.get("/api/cotton").json()}
+    out["tables"] = {t: c.get(f"/api/table/{t}").json() for t in out["meta"]["tables"]}
+    listed = sorted({r["supplier"] for r in out["costs"]["rows"] if r["source"] == "Fabric list" and r.get("supplier")})
+    mills = listed + [s["name"] for s in out["suppliers"]["suppliers"][:4]]
+    out["supplier pages"] = {m: c.get("/api/supplier", params={"mill": m}).json() for m in mills}
+    out["drafts"] = {m: c.post("/api/draft", json={"scope": {"type": "supplier", "mill": m}, "ask": "breakup"}).json() for m in listed}
+    out["list download"] = pd.read_excel(io.BytesIO(c.post("/api/list/download", json={}).content)).to_json()
+    keys = [f"{r['source']}|{r.get('id') or r['code']}" for r in out["costs"]["rows"] if r["source"] == "Fabric list"]
+    keys += [f"{r['source']}|{r['code']}" for r in out["costs"]["rows"] if r["source"] == "Purchase orders"][:40]
+    out["Right cost download"] = pd.read_excel(io.BytesIO(c.post("/api/costs/download", json={"keys": keys}).content)).to_json()
+    out["store"] = c.get("/api/store").json()
+    return out
+
+
+def child():
+    """One run on one store: the checks, or one step of the proof. Answers go to RIGHTPRICE_CHECK_OUT."""
+    task, out = os.environ.get("RIGHTPRICE_CHECK_TASK", "suite"), os.environ.get("RIGHTPRICE_CHECK_OUT")
+    if task == "suite":
+        return main()
+    with TestClient(server.app) as c:
+        if task == "build":
+            build(c)
+        result = dump(c) if task in ("build", "dump") else None
+        if task == "refused":
+            result = {"store": c.get("/api/store").json(), "list": [c.post("/api/list", json={}).status_code, c.post("/api/list", json={}).json()],
+                      "cost": c.post("/api/cost", json=masters.EXAMPLE_ROW).status_code, "home": c.get("/").status_code}
+    if task == "export":
+        import store
+        result = store.export(os.environ["RIGHTPRICE_CHECK_EXPORT"])        # as `python store.py export <folder>` does
+    with open(out, "w", encoding="utf8") as f:
+        json.dump(result, f, sort_keys=True, default=str)
+    return 0
+
+
+def _first_difference(a, b, path="$"):
+    if type(a) is not type(b) and not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        return f"{path}: {type(a).__name__} {str(a)[:80]} / {type(b).__name__} {str(b)[:80]}"
+    if isinstance(a, dict):
+        for k in sorted(set(a) | set(b)):
+            if k not in a or k not in b:
+                return f"{path}.{k}: only on one side"
+            d = _first_difference(a[k], b[k], f"{path}.{k}")
+            if d:
+                return d
+    elif isinstance(a, list):
+        if len(a) != len(b):
+            return f"{path}: {len(a)} items / {len(b)}"
+        for n, (x, y) in enumerate(zip(a, b)):
+            d = _first_difference(x, y, f"{path}[{n}]")
+            if d:
+                return d
+    elif a != b:
+        return f"{path}: {str(a)[:80]} / {str(b)[:80]}"
+    return None
+
+
+def _hashes(folder):
+    out = {}
+    for name in sorted(os.listdir(folder)):
+        p = os.path.join(folder, name)
+        if os.path.isfile(p):
+            with open(p, "rb") as f:
+                out[name] = (hashlib.sha256(f.read()).hexdigest(), os.path.getmtime(p))
+    return out
+
+
+class _Postgres:
+    """Throwaway databases on the test server named by RIGHTPRICE_TEST_DATABASE_URL, dropped at the end."""
+
+    def __init__(self):
+        self.admin = os.environ.get("RIGHTPRICE_TEST_DATABASE_URL", "").strip()
+        self.made, self.why = [], None
+        if not self.admin:
+            self.why = "RIGHTPRICE_TEST_DATABASE_URL is not set"
+        elif "azure.com" in self.admin.split("@")[-1] or self.admin == os.environ.get("DATABASE_URL", "").strip():
+            raise SystemExit("RIGHTPRICE_TEST_DATABASE_URL names the live database: the checks never run on it")
+        else:
+            try:
+                import psycopg
+                psycopg.connect(self.admin, autocommit=True, connect_timeout=10).close()
+            except Exception as e:
+                self.why = f"the test PostgreSQL could not be reached ({type(e).__name__})"
+
+    def new(self):
+        import psycopg
+        from urllib.parse import urlsplit, urlunsplit
+        name = f"rp_check_{os.getpid()}_{len(self.made)}"
+        with psycopg.connect(self.admin, autocommit=True) as conn:
+            conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+            conn.execute(f'CREATE DATABASE "{name}"')
+        self.made.append(name)
+        u = urlsplit(self.admin)
+        return urlunsplit((u.scheme, u.netloc, "/" + name, u.query, u.fragment))
+
+    def drop(self):
+        import psycopg
+        with psycopg.connect(self.admin, autocommit=True) as conn:
+            for name in self.made:
+                conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+
+
+def _run(store_kind, task, data=None, url=None, out=None, extra=None):
+    env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "RIGHTPRICE_DATA", "ANTHROPIC_API_KEY")}
+    # one hash seed for every run, so that two runs compare like with like (anything that walks a set of names in
+    # Python's own order then walks it the same way in both)
+    env.update(RIGHTPRICE_CHECK_STORE=store_kind, RIGHTPRICE_CHECK_TASK=task, PYTHONUNBUFFERED="1", PYTHONHASHSEED="20261127")
+    if data:
+        env["RIGHTPRICE_DATA"] = data
+    if url:
+        env["RIGHTPRICE_CHECK_URL"] = url
+    if out:
+        env["RIGHTPRICE_CHECK_OUT"] = out
+    env.update(extra or {})
+    return subprocess.Popen([sys.executable, os.path.abspath(__file__)], env=env, cwd=HERE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+
+
+def _finish(p, label, show=False):
+    stdout, stderr = p.communicate()
+    if show or p.returncode:
+        print(f"\n== {label} ==")
+        print("\n".join(line for line in stdout.splitlines() if line.strip()))
+    if p.returncode:
+        print("\n".join(stderr.splitlines()[-25:]))
+    return p.returncode == 0, stdout + stderr
+
+
+def store_checks(check, kinds, fresh, pg_url=None):
+    """The data layer on its own, on each database: tables added once, writers waiting for each other across
+    connections, steps removed in order, the list's columns kept, a dropped connection made again."""
+    import store
+    for kind, url in kinds:
+        empty = tempfile.mkdtemp(prefix="rightprice-store-")
+        s = store.SqlStore(url, folder=empty)
+        check(f"[{kind}] Tables added and the (empty) files copied in", s.error is None and s.imported is not None, str(s.error))
+        s.migrate()
+        with s.tx() as c:
+            n = c.one("SELECT count(*) FROM schema_migration")[0]
+        check(f"[{kind}] Each numbered file of tables applied once, however often the app starts", n == len([f for f in os.listdir(os.path.join(HERE, "db")) if f[:3].isdigit()]))
+        others = [store.SqlStore(url, folder=empty, start=False) for _ in range(6)]       # six connections, as six processes would be
+        wins, fails = [], []
+
+        def record(x, n):
+            try:
+                x.add_step("Fabric list|race", {"code": "race"}, {"id": f"r{n}", "at": "2026-11-27T10:00:00", "date": "2026-11-27",
+                                                                 "kind": "Mill's quote", "price": 100.0 + n, "note": "", "by": ""}, seen=0)
+                wins.append(n)
+            except store.Conflict:
+                fails.append(n)
+        ts = [threading.Thread(target=record, args=(x, n)) for n, x in enumerate(others)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        check(f"[{kind}] Six pages recording a first step at once: one is recorded, five are told to look again",
+              len(wins) == 1 and len(fails) == 5 and len(s.read_negotiations()["Fabric list|race"]["events"]) == 1, f"{wins} {fails}")
+        for n in (2, 3, 4):
+            s.add_step("Fabric list|race", {}, {"id": f"s{n}", "at": "x", "date": "2026-11-27", "kind": "Our counter", "price": 90.0, "note": "", "by": "GP"})
+        s.remove_step("Fabric list|race", "s4", "2026-11-27T11:00:00", "GP")
+        s.remove_step("Fabric list|race", "s2", "2026-11-27T11:00:00", "GP")
+        rec = s.read_negotiations()["Fabric list|race"]
+        check(f"[{kind}] Removed steps kept, in the order they were removed",
+              [e["id"] for e in rec["removed"]] == ["s4", "s2"] and [e["id"] for e in rec["events"]] == [f"r{wins[0]}", "s3"]
+              and rec["removed"][0]["removed_by"] == "GP")
+        s.append_list([{"Fabric code": "A", "Id": "1", "Inputs": '{"a": 1}'}, {"Fabric code": "B", "Id": "2", "Odd column": "x"}])
+        s.remove_list({"1", "2"})
+        f = s.read_list()
+        check(f"[{kind}] The list keeps its columns when every row is removed, as the file did",
+              len(f) == 0 and list(f.columns)[-1] == "Odd column" and "Inputs" in f.columns)
+        s.change_seen(["a", "b"])
+        s.change_seen(["a"], undo=True)
+        b = s.read_seen()
+        s.change_seen(restore=True)
+        check(f"[{kind}] Alerts seen, one brought back, all brought back", b == {"b"} and s.read_seen() == set())
+        if kind == "postgres":
+            import psycopg
+            pid = s._read(lambda c: c.one("SELECT pg_backend_pid()")[0])
+            with psycopg.connect(url, autocommit=True) as conn:
+                conn.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            time.sleep(0.5)
+            check("[postgres] A connection the server dropped is made again at the next read", s.read_seen() == set()
+                  and s._read(lambda c: c.one("SELECT pg_backend_pid()")[0]) != pid)
+        for x in others + [s]:
+            x._drop()
+        # a step saved by an earlier version, without "by": copied in, and read back without it
+        old = tempfile.mkdtemp(prefix="rightprice-old-")
+        with open(os.path.join(old, "negotiations.json"), "w", encoding="utf8") as f:
+            json.dump({"Fabric list|1": {"key": "Fabric list|1", "events": [{"id": "e1", "at": "2026-11-26T09:00:00", "date": "2026-11-26",
+                                                                            "kind": "Mill's quote", "price": 180, "note": ""}]}}, f)
+        with open(os.path.join(old, "alerts_seen.json"), "w", encoding="utf8") as f:
+            json.dump([1, "2"], f)
+        o = store.SqlStore(fresh(kind), folder=old)
+        check(f"[{kind}] A tracker step saved before steps had a 'by' copies in and reads back as it was",
+              o.error is None and o.read_negotiations() == store.FileStore(old).read_negotiations(), str(o.error))
+        # the files' note: an empty database where these files were already moved is refused, nothing copied
+        e = store.SqlStore(fresh(kind), folder=old)
+        check(f"[{kind}] An empty database for files already moved is refused, and nothing is copied",
+              e.started is False and "already copied into a database" in (e.error or ""))
+        # files worked on after the move; then keep-database sets them aside (they are not changed)
+        with open(os.path.join(old, "alerts_seen.json"), "w", encoding="utf8") as f:
+            json.dump(["1", "2", "3"], f)
+        o2 = store.SqlStore(o.url, folder=old)
+        stopped = o2.started is False and "alerts_seen.json" in (o2.error or "")
+        before_files = _hashes(old)
+        store.SqlStore(o.url, folder=old, start=False).keep_database()
+        o3 = store.SqlStore(o.url, folder=old)
+        check(f"[{kind}] Files worked on after the move stop the start; keep-database lets it start, the files untouched",
+              stopped and o3.started and o3.read_seen() == {"1", "2"} and _hashes(old) == before_files, str(o3.error))
+        for x in (o, e, o2, o3):
+            x._drop()
+    # an outage at start passes by itself: the store tries again
+    if pg_url:
+        import socket
+        from urllib.parse import urlsplit
+        target = urlsplit(pg_url)
+        lsock = socket.socket()
+        lsock.bind(("127.0.0.1", 0))
+        port = lsock.getsockname()[1]
+        lsock.close()          # nothing listens there yet: the database "cannot be reached"
+        late = pg_url.replace(f"{target.hostname}:{target.port}", f"127.0.0.1:{port}")
+        d = store.SqlStore(late, folder=tempfile.mkdtemp(prefix="rightprice-late-"))
+        d.RETRY = 0.5
+        down = d.started is False and "could not be reached" in (d.error or "")
+
+        def relay():
+            srv = socket.socket()
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", port))
+            srv.listen(5)
+            while True:
+                a, _ = srv.accept()
+                b = socket.create_connection((target.hostname, target.port))
+                for x, y in ((a, b), (b, a)):
+                    threading.Thread(target=lambda x=x, y=y: [y.sendall(chunk) for chunk in iter(lambda: x.recv(65536), b"")], daemon=True).start()
+        threading.Thread(target=relay, daemon=True).start()
+        time.sleep(1)
+        check("[postgres] A database that was down when the app started is used once it answers, with no restart",
+              down and d.read_seen() == set() and d.started, str(d.error))
+        d._drop()
+    # passwords as people type them; a relative SQLite path
+    p = store.SqlStore("postgresql://rpadmin:Pa@ss:w/rd#1%x?y@db.example.com:5432/postgres?sslmode=require", start=False)
+    q = store.SqlStore("postgresql://rpadmin:Summer%2026@db.example.com/postgres?sslmode=require&application_name=me@laptop"
+                       "&options=-c%20search_path%3Dpublic", start=False)
+    v = store.SqlStore("postgresql:///postgres?host=db.example.com&port=6432&user=gp", start=False)
+    check("A password in DATABASE_URL is typed as it is, whatever its characters, and is never shown; the rest is read as PostgreSQL reads it",
+          p._pg["password"] == "Pa@ss:w/rd#1%x?y" and p._pg["host"] == "db.example.com" and p._pg["sslmode"] == "require"
+          and "ss:w" not in p.where() + p.scrub("x Pa@ss:w/rd#1%x?y x") and q._pg["password"] == "Summer%2026"
+          and q._pg["application_name"] == "me@laptop" and q.where() == "db.example.com:5432/postgres"
+          and v._pg.get("user") == "gp" and v.where() == "db.example.com:6432/postgres")
+    rel = os.path.join(HERE, "rightprice-data-check-relative")
+    r = store.SqlStore("sqlite:///rightprice-data-check-relative/rp.db", folder=tempfile.mkdtemp(prefix="rightprice-rel-"))
+    try:
+        r.read_seen()
+        used = True
+    except store.StoreUnavailable:
+        used = False
+    check("A SQLite file named by a relative path is refused (a deploy would replace it), and stays refused at the next request",
+          r.started is False and "full path" in (r.error or "") and not used and not os.path.exists(rel))
+    m = store.SqlStore("mysql://x@y/z")
+    check("A setting that is neither PostgreSQL nor SQLite is refused, and says so", m.started is False and "neither postgresql" in (m.error or ""))
+
+
+def parent():
+    pg = _Postgres()
+    try:
+        return _parent(pg)
+    finally:            # the throwaway databases go, whatever happened
+        if not pg.why:
+            pg.drop()
+
+
+def _parent(pg):
+    ok = True
+
+    def check(name, good, detail=""):
+        nonlocal ok
+        ok &= bool(good)
+        print(f"{name}: {'OK' if good else 'MISMATCH'} {detail}")
+
+    if pg.why:
+        need = os.environ.get("RIGHTPRICE_CHECK_REQUIRE_POSTGRES") == "1"
+        print(f"PostgreSQL: {'MISMATCH' if need else 'not tried'}: {pg.why}")
+        ok &= not need
+    sp = tempfile.mkdtemp(prefix="rightprice-checks-")
+    sqlite_url = lambda name: "sqlite:///" + os.path.join(sp, name)
+    t0 = time.time()
+
+    # 1. the checks on each store, side by side
+    runs = [("files", None), ("sqlite", sqlite_url("suite.db"))] + ([("postgres", pg.new())] if not pg.why else [])
+    procs = [(kind, _run(kind, "suite", url=url)) for kind, url in runs]
+    # 2a. meanwhile, a data folder filled on the files, and every answer kept
+    folder = os.path.join(sp, "data")
+    os.makedirs(folder)
+    built = _run("files", "build", data=folder, out=os.path.join(sp, "files.json"))
+    results = {}
+    for kind, p in procs:
+        good, text = _finish(p, f"the checks on {kind}", show=True)
+        results[kind] = good and "ALL OK" in text
+        check(f"The checks on {kind}", results[kind])
+    good, _ = _finish(built, "a data folder filled on the files")
+    check("A data folder filled through the app on the files", good)
+    if not good:
+        print("ALL OK" if False else "SOMETHING FAILED")
+        return 1
+    before = _hashes(folder)
+    with open(os.path.join(sp, "files.json"), encoding="utf8") as f:
+        files_answers = json.load(f)
+    # 2b. the same folder copied into each database at its first start, as the live app will do it
+    targets = [("sqlite", sqlite_url("moved.db"))] + ([("postgres", pg.new())] if not pg.why else [])
+    moves = [(kind, url, _run(kind, "dump", data=folder, url=url, out=os.path.join(sp, f"{kind}.json"))) for kind, url in targets]
+    n_costings = len(files_answers["costs"]["rows"])       # every purchase-order costing and every row of the list
+    for kind, url, p in moves:
+        good, _ = _finish(p, f"the folder copied into {kind}")
+        if not good:
+            check(f"The folder copied into {kind}", False)
+            continue
+        with open(os.path.join(sp, f"{kind}.json"), encoding="utf8") as f:
+            ans = json.load(f)
+        moved = ans.pop("store")
+        a = dict(files_answers)
+        a.pop("store")
+        diff = _first_difference(a, ans)
+        check(f"Moved into {kind}: every page's answer exactly as on the files: all {n_costings} costings of Right cost to the paisa, "
+              "the list with and without a yarn move, the pack, alerts, tracker, supplier pages, drafts, dashboard, tables, downloads",
+              diff is None, diff or "")
+        copied = moved.get("copied_in") or {}
+        check(f"Moved into {kind}: the app copied the files in at its start and checked them",
+              moved.get("store") == kind and moved.get("ok") and copied.get("checked", {}).get("equal") is True
+              and any(int(re.search(r"(\d+) costed on both, equal to the paisa", x).group(1)) >= 6 for x in copied["checked"]["summary"]
+                      if "costed on both" in x)
+              and moved["counts"]["fabric list rows"] == len(files_answers["list"]["rows"])
+              and moved["counts"]["rate versions"] >= 2,          # the dated copy of the rate edit came in as an earlier version
+              "; ".join(copied.get("checked", {}).get("summary", [])))
+        print("   " + "; ".join(copied.get("checked", {}).get("summary", [])))
+    after = _hashes(folder)
+    note = after.pop("moved_to_database.json", None)
+    check("The files were only read: every file in the folder is byte for byte as before; the one added is the note of the move",
+          before == after and note is not None)
+    # 2c. back from the database to files: the same answers again
+    if moves:
+        kind, url, _ = moves[-1]
+        back = os.path.join(sp, "exported")
+        good, _ = _finish(_run(kind, "export", data=folder, url=url, out=os.path.join(sp, "export.json"), extra={"RIGHTPRICE_CHECK_EXPORT": back}), "export")
+        good2, _ = _finish(_run("files", "dump", data=back, out=os.path.join(sp, "back.json")), "the exported files")
+        if good and good2:
+            with open(os.path.join(sp, "back.json"), encoding="utf8") as f:
+                ans = json.load(f)
+            ans.pop("store")
+            a = dict(files_answers)
+            a.pop("store")
+            diff = _first_difference(a, ans)
+            check(f"Written back out of {kind} as files, the app on those files gives the same answers", diff is None, diff or "")
+            with open(os.path.join(folder, "Rate_Master.xlsx"), "rb") as f1, open(os.path.join(back, "Rate_Master.xlsx"), "rb") as f2:
+                check("Written back out: the rate master is the same file, byte for byte", f1.read() == f2.read())
+        else:
+            check("Written back out of the database as files", False)
+        # 3. the guards: files changed after the move, and a database that cannot be reached
+        changed = os.path.join(sp, "changed")
+        shutil.copytree(folder, changed)
+        with open(os.path.join(changed, "negotiations.json"), "a", encoding="utf8") as f:
+            f.write(" ")
+        _finish(_run(kind, "refused", data=changed, url=url, out=os.path.join(sp, "changed.json")), "files changed after the move")
+        with open(os.path.join(sp, "changed.json"), encoding="utf8") as f:
+            r = json.load(f)
+        check("Files changed after the move: the app does not start on the database, says which file, and loses nothing",
+              r["store"].get("ok") is False and "negotiations.json" in r["store"].get("error", "") and r["list"][0] == 503
+              and "changed after the database took them" in r["list"][1]["detail"] and "keep-database" in r["list"][1]["detail"] and r["home"] == 200)
+        gone = os.path.join(sp, "gone")
+        shutil.copytree(folder, gone)
+        for name in ("negotiations.json", "alerts_seen.json", "cost_sheets.json"):
+            os.remove(os.path.join(gone, name))
+        _finish(_run(kind, "refused", data=gone, url=url, out=os.path.join(sp, "gone.json")), "files moved away after the move")
+        with open(os.path.join(sp, "gone.json"), encoding="utf8") as f:
+            r = json.load(f)
+        check("Files moved away or deleted after the move: the app works on the database as before", r["store"].get("ok") is True and r["list"][0] == 200)
+        p = _run(kind, "export", data=changed, url=url, out=os.path.join(sp, "export2.json"), extra={"RIGHTPRICE_CHECK_EXPORT": os.path.join(sp, "exported2")})
+        good, _ = _finish(p, "export while the guard has stopped the app")
+        check("While the files' guard has stopped the app, the database can still be written out as files",
+              good and os.path.exists(os.path.join(sp, "exported2", "negotiations.json")))
+    secret = "S3cret-Pa55word-x"
+    down_url = f"postgresql://rpadmin:{secret}@127.0.0.1:9/postgres?sslmode=disable&connect_timeout=3"
+    p = _run("postgres", "refused", data=tempfile.mkdtemp(prefix="rightprice-none-"), out=os.path.join(sp, "down.json"), url=down_url)
+    _, text = _finish(p, "a database that cannot be reached, before any move")
+    with open(os.path.join(sp, "down.json"), encoding="utf8") as f:
+        r = json.load(f)
+    check("A database that cannot be reached at a first start: 503 saying so, the home page opens, the files untouched and usable meanwhile",
+          r["list"][0] == 503 and "could not be reached" in r["list"][1]["detail"] and r["cost"] == 503 and r["home"] == 200
+          and r["store"]["ok"] is False and "tries the database again by itself" in r["store"]["advice"]
+          and "Nothing has been copied in yet" in r["store"]["advice"])
+    if moves:
+        after = os.path.join(sp, "after")
+        shutil.copytree(folder, after)          # holds the note of the move
+        p2 = _run("postgres", "refused", data=after, out=os.path.join(sp, "down2.json"), url=down_url)
+        _, text2 = _finish(p2, "a database that cannot be reached, after the move")
+        with open(os.path.join(sp, "down2.json"), encoding="utf8") as f:
+            r2 = json.load(f)
+        text += text2
+        check("A database that cannot be reached after the move: no advice to go back to the files (they are as at the move)",
+              r2["list"][0] == 503 and "Do not remove DATABASE_URL" in r2["store"]["advice"])
+        r = [r, r2]
+    check("A database that cannot be reached: the password is in no answer and no log line", secret not in json.dumps(r) and secret not in text)
+    # the data layer on its own
+    n_db = [0]
+
+    def fresh(kind):
+        n_db[0] += 1
+        return pg.new() if kind == "postgres" else sqlite_url(f"store{n_db[0]}.db")
+    store_checks(check, [("sqlite", sqlite_url("store.db"))] + ([("postgres", pg.new())] if not pg.why else []), fresh,
+                 None if pg.why else pg.new())
+    if os.environ.get("RIGHTPRICE_CHECK_KEEP") == "1":
+        print("Kept:", sp)
+    else:
+        shutil.rmtree(sp, ignore_errors=True)
+    print(f"\n({time.time() - t0:.0f} s; stores: {', '.join(k for k, _ in runs)})")
+    print("ALL OK" if ok else "SOMETHING FAILED")
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(child() if STORE else parent())

@@ -1,6 +1,11 @@
--- RightPrice: table design for the database (stage 1 of the rebuild agreed with GP on 27 Nov 2026).
--- DRAFT FOR GP TO LOOK OVER. Nothing reads or writes these tables yet; no data has moved.
--- PostgreSQL 16. Money is rupees; prices are per metre; quantities are metres.
+-- RightPrice: the full table design for the database (the rebuild agreed with GP on 27 Nov 2026).
+-- The tables IN USE are created by the numbered files beside this one, applied once at start by store.py:
+--   001_files_moved_in.sql (stage 1): store_state, store_meta, import_run, rate_version, quote, negotiation,
+--   negotiation_step, alert_seen, cost_sheet_row. They hold what the files held, as it was; their columns differ from the
+--   draft below where the files needed it (cells kept as the list file's text, so every row reads back exactly).
+-- Everything else below is the design for stages 2 to 6, still a draft: each stage brings its tables in its own numbered
+-- file, and may change them. PostgreSQL 16 accepts this file; nothing applies it.
+-- Money is rupees; prices are per metre; quantities are metres.
 --
 -- Three ideas run through it:
 --   1. One record per mill, per cloth (Fab group), per fabric code and per order line, so nothing is matched by name twice.

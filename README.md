@@ -21,10 +21,22 @@ Then open `http://localhost:8000`. The app needs only `data/Rate_Master.xlsx`. N
 workbooks are needed to cost a fabric. On Windows, `Start RightPrice.bat` does the same on port 8502.
 
 The front end is hand-built (`web/`, plain HTML, CSS and JavaScript, no build step) and reads its
-numbers from `server.py`. The costing has not moved: every number still comes from `engine.py` and
-`masters.py`, every rate from the rate master workbook, and there is no database. Rates are edited
-and yarn prices brought in from the new screens. The earlier Streamlit screens stay reachable at
-`/classic` ("Earlier screens" in the left panel) as a fallback.
+numbers from `server.py`. The back end has three layers (since 27 Nov 2026): the costing engine
+(`engine.py`, `masters.py`: every number, every rate from the rate master), the business rules
+(`rules/`: briefs, the fabric list, the pack, Right cost, the tracker, supplier pages, alerts, drafts,
+the dashboard, rate edits) and the web requests (`server.py`, which reads a request, calls one rule
+and shapes the answer). The rules read and write only through the data layer, `store.py`. The
+earlier Streamlit screens stay reachable at `/classic` ("Earlier screens" in the left panel).
+
+Where the data is kept, chosen by one setting:
+- `DATABASE_URL` not set: files in the data folder, as before (`RIGHTPRICE_DATA`, or `data/`).
+- `DATABASE_URL=postgresql://user:password@host:5432/postgres?sslmode=require`: a PostgreSQL database.
+- `DATABASE_URL=sqlite:////full/path/rightprice.db`: a database file.
+
+With a database set and empty, the app copies the files in at its first start, checks them and
+never changes them. `/api/store` says which store is in use and what it holds. `python store.py
+export <new folder>` writes a database back out as files. The tables are in `db/` (numbered files,
+applied once at start); the full design for the later stages is `db/schema.sql`.
 
 To host it on Azure, follow [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md). The environment variable
 `RIGHTPRICE_DATA` moves the rate master, saved costings and imported price files to a folder that
@@ -87,14 +99,17 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 |---|---|
 | `engine.py` | The calculation. Numbers in, numbers out. |
 | `masters.py` | Reads and saves the rate master, turns drop-down choices into rates, upload template, bulk costing |
-| `server.py` | The web server: serves `web/`, answers its requests, and passes `/classic` through to the Streamlit screens |
+| `server.py` | The web requests: serves `web/`, turns each request into one call to `rules/`, and passes `/classic` through to the Streamlit screens |
+| `rules/` | The business rules, one module per area (`costing`, `fabric_list`, `pack`, `rightcost`, `tracker`, `supplier`, `alerts`, `drafts`, `dashboard`, `rates`, `costsheets`, `mills`, `common`) |
+| `store.py` | The data layer: files, or PostgreSQL / SQLite when `DATABASE_URL` is set; copies the files in once; `python store.py status`, `export <folder>`, `keep-database` |
+| `db/` | `001_files_moved_in.sql` (the tables in use) and `schema.sql` (the full design for stages 2 to 6) |
 | `web/` | The front end: `index.html`, `app.css`, `app.js` |
 | `app.py` | The earlier Streamlit screens, now at `/classic` |
 | `mill_sheet.py` | Reads a mill's price sheet (base price plus upcharges), turns each row into the tool's choices, and checks the mill's arithmetic |
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
 | `draft.py` | E-mail and WhatsApp drafts to a mill, written by Claude (app setting `ANTHROPIC_API_KEY`), with a fixed template when there is no key |
 | `mcp_server.py` | RightPrice as an MCP server for an AI assistant: at `/mcp` on the web app behind the token `RIGHTPRICE_MCP_TOKEN`, or `python mcp_server.py` on a laptop. See [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md) |
-| `check_server.py` | Checks the server gives the engine's numbers and refuses bad input. Must print `ALL OK` |
+| `check_server.py` | Checks the server gives the engine's numbers and refuses bad input, on the files, SQLite and PostgreSQL (`RIGHTPRICE_TEST_DATABASE_URL`, never `DATABASE_URL`), and proves the move from files to a database changes no answer. Must print `ALL OK` |
 | `grouping.py` | Folds blend spellings into 17 content groups and weave names into 7 weave groups |
 | `price_import.py` | Yarn price intake from Excel, PDF, image, link or API |
 | `paths.py` | Finds the source workbooks (`inputs/`, or the env variable `SHOULD_COST_INPUTS`) |

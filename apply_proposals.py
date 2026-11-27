@@ -5,7 +5,6 @@ copying that file back.   Run: python apply_proposals.py
 """
 import datetime as dt
 import os
-import shutil
 
 import pandas as pd
 
@@ -19,8 +18,7 @@ CHECKED = f"Pilot-checked {dt.date.today():%d %b %Y} (unchanged)"
 
 
 def main():
-    backup = masters.MASTER_PATH.replace(".xlsx", f" before calibration {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
-    shutil.copy(masters.MASTER_PATH, backup)
+    stamp = f" before calibration {dt.datetime.now():%Y%m%d-%H%M}"
     m = dict(masters.load())
     p = pd.read_excel(PROPOSALS, sheet_name=None)
     log = []
@@ -62,7 +60,7 @@ def main():
         log.append(f"Printing: {pr['Current']:g} -> {pr['Proposed']:g} Rs/kg greige")
     m["Piece_Dyeing"] = pdt
 
-    masters.save(m)
+    backup = masters.save(m, reason="Calibration draft applied (apply_proposals.py)", backup=stamp)
     print("\n".join(log))
     print("Backup:", backup)
 

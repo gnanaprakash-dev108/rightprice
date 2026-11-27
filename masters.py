@@ -10,13 +10,15 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 import engine
 import rate_card
+import store
 import yarn_seed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHIPPED_MASTER = os.path.join(HERE, "data", "Rate_Master.xlsx")
 # On a server, set RIGHTPRICE_DATA to a folder that survives redeploys (Azure: /home/rightprice-data).
-# Unset, everything stays in the project's own data folder, as on a laptop.
-DATA_DIR = os.environ.get("RIGHTPRICE_DATA") or os.path.join(HERE, "data")
+# Unset, everything stays in the project's own data folder, as on a laptop. With DATABASE_URL set, what is
+# kept goes to the database instead (store.py); these paths are then only where the files were copied in from.
+DATA_DIR = store.data_dir()
 MASTER_PATH = os.path.join(DATA_DIR, "Rate_Master.xlsx")
 LOG_PATH = os.path.join(DATA_DIR, "costing_log.csv")
 
@@ -24,16 +26,19 @@ ROUTES = ["Yarn Dyed", "Piece Dyed", "RFD / Bleached", "Printed"]
 
 
 def load():
-    if not os.path.exists(MASTER_PATH):
+    """The rate master in use, as its tables, from the store (the file, or the database's latest version)."""
+    s = store.get()
+    data = s.read_rates()
+    if data is None:
+        # first start: begin from the rate master that came with the code
         if not os.path.exists(SHIPPED_MASTER):
             import build_masters
             build_masters.build()
-        if MASTER_PATH != SHIPPED_MASTER:
-            # first start on a server: begin from the rate master that came with the code
-            import shutil
-            os.makedirs(DATA_DIR, exist_ok=True)
-            shutil.copyfile(SHIPPED_MASTER, MASTER_PATH)
-    m = pd.read_excel(MASTER_PATH, sheet_name=None)
+        with open(SHIPPED_MASTER, "rb") as f:
+            data = f.read()
+        if s.kind != "files" or MASTER_PATH != SHIPPED_MASTER:
+            s.write_rates(data, reason="Begun from the rate master that came with the code")
+    m = pd.read_excel(io.BytesIO(data), sheet_name=None)
     return _add_missing_tables(m)
 
 
@@ -42,7 +47,7 @@ def _add_missing_tables(m):
 
     A server keeps its own rate master, which a new version of the code does not replace. The
     rate card tables are added to it here; every other rate, and every edit made in the app,
-    stays as it is. A dated copy is saved beside it first.
+    stays as it is. A dated copy is kept first (a file beside it, or the earlier version in the database).
     """
     import mill_sheet
     card = rate_card.apply(m)
@@ -51,20 +56,26 @@ def _add_missing_tables(m):
     log += terms
     if log:
         import datetime as dt
-        import shutil
         what = "rate card" if card else ("mill sheet terms" if terms else "blend yarns")
-        backup = MASTER_PATH.replace(".xlsx", f" before {what} {dt.datetime.now():%Y%m%d-%H%M}.xlsx")
-        shutil.copyfile(MASTER_PATH, backup)
-        save(m)
-        print("Rate master brought up to date:", "; ".join(log), "| Backup:", backup)
+        kept = save(m, reason="Brought up to date: " + "; ".join(log), backup=f" before {what} {dt.datetime.now():%Y%m%d-%H%M}")
+        print("Rate master brought up to date:", "; ".join(log), "| Backup:", kept)
     return m
 
 
-def save(masters):
-    with pd.ExcelWriter(MASTER_PATH, engine="openpyxl") as xw:
+def workbook(masters):
+    """The rate master as the bytes of an Excel workbook."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         for name, df in masters.items():
             df.to_excel(xw, sheet_name=name, index=False)
             xw.sheets[name].freeze_panes = "A2"
+    return buf.getvalue()
+
+
+def save(masters, reason="Rate master saved", who="", backup=None, backup_if_absent=False):
+    """Save the rate master through the store. `backup` keeps a dated copy of what was there first (see
+    store.FileStore.write_rates); in a database every version is kept anyway. Returns where the copy is."""
+    return store.get().write_rates(workbook(masters), reason=reason, who=who, backup=backup, backup_if_absent=backup_if_absent)
 
 
 def setting(masters, name, default=None):

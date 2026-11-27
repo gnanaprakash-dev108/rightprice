@@ -9,6 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 import masters
+import store
 import price_import as pi
 
 st.set_page_config(page_title="RightPrice", page_icon="🧵", layout="wide")
@@ -29,28 +30,26 @@ st.markdown("""
 
 
 @st.cache_data(show_spinner=False)
-def _load(mtime):
+def _load(version):
     return masters.load()
 
 
 def get_masters():
-    if not os.path.exists(masters.MASTER_PATH):
+    """The rate master in use, from the store (the file, or the database when DATABASE_URL is set)."""
+    if store.get().version("rates") is None:
         masters.load()
-    return _load(os.path.getmtime(masters.MASTER_PATH))
+    return _load(store.get().version("rates"))
 
 
 def save_sheet(name, df):
     m = dict(get_masters())
     m[name] = df
-    masters.save(m)
+    masters.save(m, reason=f"Table edited on the classic screens: {name}")
     st.cache_data.clear()
 
 
 def read_log():
-    if os.path.exists(masters.LOG_PATH):
-        return pd.read_csv(masters.LOG_PATH)
-    return pd.DataFrame(columns=["Saved on", "Fabric code", "Description", "Supplier", "Should-cost Rs/m",
-                                 "Should-cost Rs/kg", "Quoted Rs/m", "Gap Rs/m", "Gap %"])
+    return store.get().read_list()
 
 
 def rupee(v, d=2):
@@ -241,7 +240,7 @@ def page_cost(m):
                "Should-cost Rs/kg": round(res["per_kg"], 1), "Quoted Rs/m": res["quote"],
                "Gap Rs/m": None if res["gap"] is None else round(res["gap"], 2),
                "Gap %": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1)}
-        pd.concat([log, pd.DataFrame([row])], ignore_index=True).to_csv(masters.LOG_PATH, index=False)
+        store.get().append_list([row], who="classic screens")
         st.success("Saved.")
     s2.download_button("Download cost sheet", cost_sheet_xlsx(sel, res), f"Should cost {code}.xlsx")
 
@@ -530,7 +529,7 @@ def page_settings(m):
         "earlier qualities to the paisa.\n"
         "- Price basis: ex-mill, so freight is left out.\n"
         "- Scope: woven fabrics costed per metre; cost per kg is derived from the estimated fabric weight.\n"
-        f"- All rates live in one workbook: `{masters.MASTER_PATH}`")
+        f"- All rates live in one workbook: " + (f"`{masters.MASTER_PATH}`" if store.get().kind == "files" else f"the {store.get().kind} database's latest rate version"))
 
 
 PAGES = {"Dashboard": page_dashboard, "Cost a fabric": page_cost, "Bulk upload": page_bulk,

@@ -12,6 +12,14 @@
 - Dark mode: added, following RightPrice's switch. Avatar: initials from the Microsoft sign-in
   (read from Azure's /.auth/me; off Azure it shows RP).
 
+## Answered 27 Nov 2026 (stage 1 of the rebuild)
+
+- The Azure database `rightprice-db` exists (deployment completed 27 Nov). `DATABASE_URL` is added only when the build
+  session asks, after stage 1 is merged and deployed (steps: docs/AZURE_DEPLOY.md, "The database").
+- 9 purchase-order verdicts changed at a server restart (a cost line resting on two placeholders went to whichever Python
+  listed first). GP chose: work out the placeholder share every time (the line counts for both). Done; the 9 read Push (5)
+  and Fair (4).
+
 Doubts recorded while building, newest first. Each says what was done meanwhile, so nothing waits on
 the answer. Answer beside a question (or just tell the build session) and it will be acted on.
 
