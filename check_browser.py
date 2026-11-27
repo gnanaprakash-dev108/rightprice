@@ -10,16 +10,25 @@ each path opened in a fresh tab (a first load, as from a bookmark or a reload):
 1. every page of the shell (Home, Prices, Right cost, a fabric's page, a supplier's page, a setup list) and every tab of the
    New cost popup, in light and in dark at 1366 x 900 and in light at 390 x 844: it draws (nothing left on "Loading...",
    no "could not be loaded"), carries its heading or its tab, shows the theme's colours (computed, not only the switch),
-   on a phone neither the page nor the page's own box scrolls sideways, and the console stays empty;
-2. the main paths: Create cost (the example, Qlty-1, is Rs 181.40; Add to list adds a row; Print prints the cost alone);
-   Bulk upload (a mill sheet's rows, its alert and the rail's count); a row opened in Create cost at the list's
-   should-cost; Compare of two ticked rows, each side at its row's should-cost; the pack of the ticked rows and its
-   A4 landscape print; a Right cost row opened in Create cost, from the fabric's page and from its Negotiation tab, at
-   the row's should-cost; a rate table saved; prices brought in; a cotton price added (with Enter); a mill cost sheet's
-   draft applied; the supplier page printing with no other page's print rules; the keys (Ctrl+F is the browser's find
-   except on the list; Escape closes a chart's tooltip before the popup); a bookmark of the retired /classic;
-3. with users and roles on (stage 3): a Viewer, a Buyer and an Admin each see only the buttons their role may use, and
-   a Viewer's walk through every page asks the server for nothing it refuses.
+   on a phone nothing reaches past the screen's edge (the page, its own box, or a part cut off where it cannot be
+   scrolled to), and the console stays empty;
+2. the main paths: Create cost (the example, Qlty-1, is Rs 181.40, with the rates it is on under the figure; Add to list
+   adds a row; Print prints the cost alone, the cost in light colours and the shell left in its theme); Bulk upload (a
+   mill sheet's rows, its alert and the rail's count); a row opened in Create cost at the list's should-cost; Compare of
+   two ticked rows, each side at its row's should-cost; the pack of the ticked rows and its A4 landscape print (the pack
+   alone in light colours); a Right cost row opened in Create cost, from the fabric's page and from its Negotiation tab,
+   at the row's should-cost; the keys (Ctrl+F is the browser's find except on the list; Escape closes a chart's tooltip
+   before the popup); the supplier page and a Prices page printing at their own type size with no other page's print
+   rules; a rate table saved; prices brought in; a cotton price added (with Enter); a mill cost sheet's draft applied;
+   the rate master's lists read afresh for each popup (a yarn added since shows without a reload); stage 5's dated yarn
+   rates (a rate entered on Yarn prices shows in its card and moves the purchase orders of its month, and no other;
+   Bring in prices adds its rows as dated rates after asking the month and GST); a bookmark of the retired /classic;
+3. with users and roles on (stage 3): a Viewer, a Buyer, a Rates editor and an Admin each see only the buttons their role
+   may use; each walks every address (every page, every tab of the popup, Right cost, a fabric's page, a supplier's
+   page, a setup list, Users and roles): what the role may open draws, what it may not says so, the menus offer exactly
+   what it may open, and the server is asked for nothing it refuses; and the same walk for a Buyer with each page
+   unticked in turn.
+A crash fails the run like any check, and whenever something failed the data folder and the servers' logs are kept.
 """
 import io
 import json
@@ -30,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -44,10 +54,38 @@ THEME = {"light": ("rgb(246, 244, 238)", "rgb(29, 37, 33)", "rgb(255, 255, 255)"
 # the browser may be offline from the web font; that is not a fault of the app
 IGNORE = ("fonts.googleapis.com", "fonts.gstatic.com")
 DRAWN = """sel => { const r = document.querySelector(sel); return !!r && r.textContent.trim() !== 'Loading...' && r.children.length > 0 }"""
-SIDEWAYS = """sel => { const b = document.querySelector(sel); return Math.max(document.documentElement.scrollWidth - innerWidth,
-    b ? b.scrollWidth - b.clientWidth : 0) }"""
+# how far anything reaches past what can be seen or scrolled to, with where: the document or the page's own box scrolling
+# sideways; the box, or what holds it, past the screen's edge (the shell would cut it off); a part of the page cut off by
+# something that hides what overflows it (a part that scrolls, or ends in "...", is reachable)
+SIDEWAYS = """sel => { const b = document.querySelector(sel); if (!b) return [0, ''];
+  let worst = [Math.max(document.documentElement.scrollWidth - innerWidth, b.scrollWidth - b.clientWidth), 'scrolls sideways'];
+  const more = (v, what) => { if (v > worst[0]) worst = [v, what]; };
+  for (let e = b; e && e !== document.body; e = e.parentElement) { const r = e.getBoundingClientRect(); more(r.right - innerWidth, 'past the right edge: ' + e.className); more(-r.left, 'past the left edge: ' + e.className); }
+  for (const el of b.querySelectorAll('*')) {
+    if (el.closest('svg')) continue;
+    const r = el.getBoundingClientRect(); if (!r.width || !r.height) continue;
+    for (let a = el.parentElement; a && a !== b; a = a.parentElement) {
+      const cs = getComputedStyle(a), ox = cs.overflowX;
+      if (ox === 'auto' || ox === 'scroll' || cs.textOverflow === 'ellipsis') break;
+      if (ox === 'hidden' || ox === 'clip') { const ar = a.getBoundingClientRect(), what = 'cut off: ' + el.tagName.toLowerCase() + '.' + el.className + ' in .' + a.className;
+        more(r.right - ar.right, what); more(ar.left - r.left, what); break; }
+    }
+  }
+  return [Math.round(worst[0]), worst[1]]; }"""
 PAGE_RULES = """() => [...document.styleSheets].some(ss => { try { return [...ss.cssRules].some(r => r instanceof CSSPageRule ||
     (r instanceof CSSMediaRule && [...r.cssRules].some(x => x instanceof CSSPageRule))); } catch (e) { return false; } })"""
+# an element's own text and its type size on screen, in px
+TYPE = """sels => sels.map(s => { const e = document.querySelector(s); if (!e) return [s, '', 0];
+    return [s, [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim(), parseFloat(getComputedStyle(e).fontSize)] })"""
+# what each address needs (GP's permissions, rules/access.py): the shell's pages, and the New cost popup's tabs; a page
+# or tab not named here needs nothing. Written out here, not read from web/access.js, so a wrong need there shows.
+NEEDS = {"dashboard": "page:dashboard", "pilot": "page:pilot", "yarn": "page:prices", "cotton": "page:prices", "rates": "page:prices",
+         "ratecard": "page:prices", "settings": "page:prices", "costsheets": "page:costsheets", "intake": "do:edit_rates",
+         "rightcost": "page:rightcost", "item": "page:rightcost", "supplier": "page:rightcost", "users": "page:users",
+         "cost": "page:cost", "compare": "page:cost", "bulk": "page:list", "pack": "page:pack"}
+# what the menus offer: the Prices links, the sections' tabs above a page, the popup's tabs
+OFFERED = """() => [...CONFIG.flyouts.prices.groups.flatMap(g => g[1]).map(x => x[1].slice(1)).filter(x => !x.startsWith('lib/')),
+    ...Object.values(CONFIG.sections).flat(), ...CONFIG.popupTabs.map(t => t[0])]"""
 # records whether Ctrl+F reached the browser (not prevented), and stands in for the print dialog
 INIT = """addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") setTimeout(() => { window.__ctrlF = e.defaultPrevented; }); });
 window.__printed = 0; window.print = () => { window.__printed++; };"""
@@ -91,14 +129,34 @@ def cost_sheet_file(template):
     return buf.getvalue()
 
 
-def pdf_text(data):
-    """The pages of a PDF: (count, landscape?, text)."""
+def _pdf(data):
     try:
         import pymupdf as fitz
     except ImportError:          # an older PyMuPDF
         import fitz
-    doc = fitz.open(stream=data, filetype="pdf")
+    return fitz.open(stream=data, filetype="pdf")
+
+
+def pdf_text(data):
+    """The pages of a PDF: (count, landscape?, text)."""
+    doc = _pdf(data)
     return doc.page_count, all(p.rect.width > p.rect.height for p in doc), "\n".join(p.get_text() for p in doc)
+
+
+def type_on_paper(page, sels):
+    """Each element's type on paper against its size on screen (a px is 0.75 pt), printed on paper as wide as the screen
+    so the browser has no cause to shrink the page to fit: what is printed smaller or larger (a zoom, a scale, another
+    size in print) is listed, as is an element not found."""
+    want = page.evaluate(TYPE, sels)
+    doc = _pdf(page.pdf(width=f"{DESK['width']}px", height="2000px", margin={"top": "0", "bottom": "0", "left": "0", "right": "0"}))
+    spans = [(s["text"].strip(), s["size"]) for p in doc for b in p.get_text("dict")["blocks"] for line in b.get("lines", []) for s in line["spans"]]
+    off = []
+    for sel, text, px in want:
+        # the spans of that text (the same words may print elsewhere too): one of them at the size on screen
+        got = sorted({round(size, 2) for t, size in spans if text and t and (t[:20] == text[:20] or (len(t) >= 6 and text.startswith(t)))})
+        if not any(abs(g - px * 0.75) <= 0.1 for g in got):
+            off.append(f"{sel} {text[:20]!r}: {got or 'not found'} pt on paper against {px * 0.75:g} pt")
+    return off
 
 
 class App:
@@ -119,7 +177,8 @@ class App:
                     return
             except OSError:
                 time.sleep(0.5)
-        raise SystemExit("The app did not start: see " + self.log.name)
+        self.stop()
+        raise RuntimeError("The app did not start: see " + self.log.name)
 
     def api(self, path, body=None, who=None, method=None):
         headers = {"Content-Type": "application/json"}
@@ -130,6 +189,16 @@ class App:
         with urllib.request.urlopen(req, timeout=120) as r:
             raw = r.read()
             return json.loads(raw) if r.headers.get("content-type", "").startswith("application/json") else raw
+
+    def costs(self, who=None):
+        """Right cost's rows once their verdicts are worked out (in the background after a start or a change of rates;
+        until then the dated rates' months wait for them too)."""
+        for _ in range(240):
+            d = self.api("/api/costs", who=who)
+            if d["ready"]:
+                return d["rows"]
+            time.sleep(1)
+        raise RuntimeError("Right cost's verdicts were not ready after 4 minutes")
 
     def stop(self):
         self.proc.terminate()
@@ -153,15 +222,17 @@ def main():
 
     data = tempfile.mkdtemp(prefix="rightprice-browser-")
     files = {"sheet": os.path.join(data, "mill sheet.xlsx"), "prices": os.path.join(data, "yarn prices.csv"), "costsheet": os.path.join(data, "cost sheets.xlsx")}
-    with open(files["sheet"], "wb") as f:
-        f.write(mill_sheet_file())
-    with open(files["prices"], "w") as f:
-        f.write("Count,Rate,Yarn\n40s,352,Combed compact\n60s,430,Combed compact\n")
-    app = App(data)
+    app = None
     try:
+        with open(files["sheet"], "wb") as f:
+            f.write(mill_sheet_file())
+        with open(files["prices"], "w") as f:
+            f.write("Count,Rate,Yarn\n40s,352,Combed compact\n60s,430,Combed compact\n")
+        app = App(data)
         check("The app starts on a temporary folder and SQLite", app.api("/api/store")["store"] == "sqlite")
         with open(files["costsheet"], "wb") as f:
             f.write(cost_sheet_file(app.api("/api/costsheet/template")))
+        where = {}           # a fabric's page and a supplier's page, for the walks of section 3
         with sync_playwright() as p:
             browser = p.chromium.launch()
 
@@ -199,10 +270,10 @@ def main():
                     open_at(page, addr)
                     txt = page.inner_text(".pgbox")
                     title = page.inner_text(".main .title") if page.locator(".main .title").count() else ""
-                    wide = page.evaluate(SIDEWAYS, ".pgbox") if size is PHONE else 0
+                    wide = page.evaluate(SIDEWAYS, ".pgbox") if size is PHONE else [0, ""]
                     hue, got = colours(page, theme, ".pgbox > .pg")
-                    good = not page.errors and "could not be" not in txt and title == heading and wide <= 1 and hue
-                    check(f"{heading} opens ({look})", good, "" if good else f"heading {title!r}, sideways {wide}px, colours {got}, console {page.errors[:3]}, text {txt[:100]!r}")
+                    good = not page.errors and "could not be" not in txt and title == heading and wide[0] <= 1 and hue
+                    check(f"{heading} opens ({look})", good, "" if good else f"heading {title!r}, sideways {wide}, colours {got}, console {page.errors[:3]}, text {txt[:100]!r}")
                     page.context.close()
                 for tab_id, label in POPUP_TABS:
                     page = tab(theme, size)
@@ -212,19 +283,21 @@ def main():
                     if tab_id == "pack" and txt.startswith("The list is empty"):
                         # with nothing in the list the server refuses a pack (400) and the page says why: that refusal is expected
                         page.errors = [e for e in page.errors if "status of 400" not in e]
-                    wide = page.evaluate(SIDEWAYS, ".popup .pgbox") if size is PHONE else 0
+                    wide = page.evaluate(SIDEWAYS, ".popup .pgbox") if size is PHONE else [0, ""]
                     hue, got = colours(page, theme, ".popup .pgbox > .pg")
-                    good = not page.errors and on == label and "could not be" not in txt and wide <= 1 and hue
-                    check(f"New cost > {label} opens ({look})", good, "" if good else f"tab {on!r}, sideways {wide}px, colours {got}, console {page.errors[:3]}, text {txt[:100]!r}")
+                    good = not page.errors and on == label and "could not be" not in txt and wide[0] <= 1 and hue
+                    check(f"New cost > {label} opens ({look})", good, "" if good else f"tab {on!r}, sideways {wide}, colours {got}, console {page.errors[:3]}, text {txt[:100]!r}")
                     page.context.close()
                 page = tab(theme, size)
                 open_at(page, "rightcost", None)
                 page.wait_for_selector(".grid tbody tr td .code")
                 page.wait_for_timeout(500)
-                check(f"Right cost lists the costings ({look})", not page.errors and page.locator(".grid tbody tr").count() >= 50 and page.evaluate(SIDEWAYS, ".main") <= 1, str(page.errors[:3]))
+                wide = page.evaluate(SIDEWAYS, ".main")
+                check(f"Right cost lists the costings ({look})", not page.errors and page.locator(".grid tbody tr").count() >= 50 and wide[0] <= 1, f"{wide} {page.errors[:3]}")
                 page.locator(".grid tbody tr td .code").first.click()
                 page.wait_for_selector(".dhead h1")
-                check(f"A fabric's page opens ({look})", not page.errors and page.locator(".main .tabs .tab").count() == 4 and page.evaluate(SIDEWAYS, ".main") <= 1, str(page.errors[:3]))
+                wide = page.evaluate(SIDEWAYS, ".main")
+                check(f"A fabric's page opens ({look})", not page.errors and page.locator(".main .tabs .tab").count() == 4 and wide[0] <= 1, f"{wide} {page.errors[:3]}")
                 page.context.close()
                 page = tab(theme, size)
                 open_at(page, "lib/Payment terms", None)
@@ -233,8 +306,8 @@ def main():
                 page.context.close()
 
             # ---------------------------------------------------------------- 2. the main paths, each in a fresh tab
-            # Create cost: the example; a chart's tooltip and Escape; Print
-            page = tab()
+            # Create cost: the example and the rates it is on; a chart's tooltip and Escape; Print (in dark: only the cost turns light)
+            page = tab("dark")
             open_at(page, "dashboard")
             page.click(".fab")
             page.wait_for_selector(".popup .step")
@@ -243,6 +316,8 @@ def main():
             page.wait_for_selector(".popup .hero .big")
             big = page.inner_text(".popup .hero .big")
             check("Create cost: the example (Qlty-1) costs Rs 181.40 a metre", big.strip() == "Rs 181.40 / m", big)
+            rates_of = page.inner_text(".popup .hero .rates-of") if page.locator(".popup .hero .rates-of").count() else ""
+            check("Create cost: under the figure, the rates it is on (stage 5)", rates_of.startswith("Today's rates"), repr(rates_of))
             page.click(".popup .seg button:has-text('Waterfall')")
             page.click(".popup .seg button:has-text('All sub-costs')")
             check("Create cost: the waterfall opens into every sub-cost", page.locator(".popup .wf .wf-label.step").count() >= 10)
@@ -254,14 +329,17 @@ def main():
             page.mouse.move(5, 5)
             page.click(".popup .hero button:has-text('Print')")
             page.wait_for_function("() => window.__printed === 1")
-            during = page.evaluate("""() => [document.body.classList.contains('printing'), document.documentElement.dataset.theme,
-                !!document.querySelector('.cost-out .print-stamp'), [...document.querySelectorAll('style')].some(s => /@page \\{ margin: 14mm/.test(s.textContent))]""")
+            look = """() => [document.documentElement.dataset.theme, getComputedStyle(document.body).backgroundColor,
+                getComputedStyle(document.querySelector('.popup .pgbox > .pg')).color]"""
+            during = page.evaluate("""() => [document.body.classList.contains('printing'), !!document.querySelector('.cost-out .print-stamp'),
+                [...document.querySelectorAll('style')].some(s => /@page \\{ margin: 14mm/.test(s.textContent))]""") + page.evaluate(look)
             count, _, text = pdf_text(page.pdf())
             page.evaluate("dispatchEvent(new Event('afterprint'))")
-            after = page.evaluate("""() => [document.body.classList.contains('printing'), [...document.querySelectorAll('style')].some(s => /@page/.test(s.textContent))]""")
-            check("Create cost: Print lays out the cost alone (light, stamped, every table open), then puts the page back",
-                  during == [True, "light", True, True] and "Rs 181.40" in text and "printed" in text and "Load the example" not in text
-                  and "Settings and account" not in text and "Table of every line" in text and after == [False, False], f"{during} {count} pages {after}")
+            after = page.evaluate("""() => [document.body.classList.contains('printing'), [...document.querySelectorAll('style')].some(s => /@page/.test(s.textContent))]""") + page.evaluate(look)
+            check("Create cost: Print lays out the cost alone (stamped, every table open), the cost light and the shell left dark, then puts the page back",
+                  during == [True, True, True, "dark", THEME["dark"][0], THEME["light"][1]] and "Rs 181.40" in text and "printed" in text and "Load the example" not in text
+                  and "Settings and account" not in text and "Table of every line" in text and after == [False, False, "dark", THEME["dark"][0], THEME["dark"][1]],
+                  f"{during} {count} pages {after}")
             check("No error in the console in Create cost", not page.errors, str(page.errors[:3]))
             page.context.close()
 
@@ -277,8 +355,8 @@ def main():
                   and any((r["inputs"] or {}).get("Fabric code") == "Qlty-1" for r in rows))
             page.context.close()
 
-            # Bulk upload: a mill sheet, its rows, its alert and the rail's count
-            page = tab()
+            # Bulk upload: a mill sheet, its rows, its alert and the rail's count (in dark: the pack prints light, the shell stays dark)
+            page = tab("dark")
             open_at(page, "dashboard?new=bulk", ".popup .pgbox > .pg")
             page.set_input_files(".popup #bulk-file", files["sheet"])
             page.wait_for_selector(".popup .notice.info:has-text('added from a mill sheet')", timeout=60000)
@@ -322,11 +400,14 @@ def main():
                   and pack_codes == ["B-1", "B-2"] and "negotiation pack" in page.inner_text(".popup .pack-title"), str(pack_codes))
             page.click(".popup .pack-tools .btn.primary")
             page.wait_for_function("() => window.__printed === 1")
-            during = page.evaluate("""() => [document.body.classList.contains('printing-pack'), [...document.querySelectorAll('style')].some(s => /A4 landscape/.test(s.textContent))]""")
+            during = page.evaluate("""() => [document.body.classList.contains('printing-pack'), [...document.querySelectorAll('style')].some(s => /A4 landscape/.test(s.textContent))]""") + page.evaluate(look)
             count, landscape, text = pdf_text(page.pdf(prefer_css_page_size=True))
             page.evaluate("dispatchEvent(new Event('afterprint'))")
-            check("Negotiation pack: Print gives the pack alone on A4 landscape, then puts the page back", during == [True, True] and landscape and "negotiation pack" in text
-                  and "Back to the list" not in text and "Settings and account" not in text and not page.evaluate("document.body.classList.contains('printing-pack')"), f"{during} {count} pages")
+            after = [page.evaluate("document.body.classList.contains('printing-pack')")] + page.evaluate(look)
+            check("Negotiation pack: Print gives the pack alone on A4 landscape, the pack light and the shell left dark, then puts the page back",
+                  during == [True, True, "dark", THEME["dark"][0], THEME["light"][1]] and landscape and "negotiation pack" in text
+                  and "Back to the list" not in text and "Settings and account" not in text and after == [False, "dark", THEME["dark"][0], THEME["dark"][1]],
+                  f"{during} {count} pages {after}")
             page.click(".popup a:has-text('Back to the list')")
             page.wait_for_selector(".popup table.list")
             check("Negotiation pack: Back to the list", page.get_attribute(".scrim[data-popup]", "data-tab") == "bulk")
@@ -343,6 +424,7 @@ def main():
             page.locator(".grid tbody tr td .code").first.click()
             page.wait_for_selector(".dhead h1")
             fabric_page = page.url
+            where["item"] = fabric_page.split("#", 1)[1]
             should = float(page.locator(".form2 .f", has_text="Should-cost Rs/m").locator("span").nth(1).inner_text().replace(",", ""))
             page.click(".dicons button[aria-label='Open in Create cost']")
             page.wait_for_selector(".popup .hero .big")
@@ -393,17 +475,25 @@ def main():
                 check(f"Ctrl+F on {addr}: the browser's own find", page.evaluate("window.__ctrlF") is False)
                 page.context.close()
 
-            # the Dashboard's mill names, and the supplier page on paper
+            # the Dashboard's mill names, and the supplier page and a Prices page on paper
             page = tab()
             open_at(page, "dashboard")
             page.wait_for_selector(".pg .alert-head .linkish")
             page.locator(".pg .alert-head .linkish").first.click()
             page.wait_for_selector(".dhead h1")
             page.wait_for_timeout(500)
+            where["supplier"] = page.url.split("#", 1)[1]
             count, _, text = pdf_text(page.pdf())
             check("Dashboard: a mill's name opens its supplier page", "#supplier/" in page.url and "Questions for the next meeting" in page.inner_text(".main"))
             check("The supplier page prints with no page's print rules but its own (no @page set anywhere)", not page.evaluate(PAGE_RULES)
                   and "Questions for the next meeting" in text and count >= 1, f"{count} pages")
+            off = type_on_paper(page, [".dhead h1", ".stile .sb"])
+            check("The supplier page prints its type at the size it has on screen (nothing zooms or scales it in print)", not off, "; ".join(off))
+            page.context.close()
+            page = tab()
+            open_at(page, "yarn")
+            off = type_on_paper(page, [".main .title", ".pg .card-head h2", ".pg .sub"])
+            check("Yarn prices prints its type at the size it has on screen", not off, "; ".join(off))
             page.context.close()
 
             # a rate table saved (a note, so no rate changes), prices brought in, a cotton price added with Enter
@@ -417,17 +507,21 @@ def main():
             check("Rate tables: an edited table is saved to the rate master", "Saved to the rate master" in page.inner_text("#toast")
                   and terms["rows"][0][terms["columns"].index("Note")] == "Checked in the browser" and not page.errors, str(page.errors[:3]))
             page.context.close()
+
+            def bring_in(page):
+                """Bring in prices: the yarn prices file read and its rows sent to review."""
+                open_at(page, "intake")
+                page.set_input_files("#in-file", files["prices"])
+                page.wait_for_selector(".pg table.edit tbody tr, #map-count")
+                if page.locator("#map-count").count():          # a table was read: say which column is which, then review
+                    page.select_option("#map-count", "Count")
+                    page.select_option("#map-low", "Rate")
+                    page.select_option("#map-yarn", "Yarn")
+                    page.click(".pg button:has-text('Send to review')")
+                    page.wait_for_selector(".pg table.edit tbody tr")
             page = tab()
-            open_at(page, "intake")
             market = len(app.api("/api/table/Market_Yarn")["rows"])
-            page.set_input_files("#in-file", files["prices"])
-            page.wait_for_selector(".pg table.edit tbody tr, #map-count")
-            if page.locator("#map-count").count():          # a table was read: say which column is which, then review
-                page.select_option("#map-count", "Count")
-                page.select_option("#map-low", "Rate")
-                page.select_option("#map-yarn", "Yarn")
-                page.click(".pg button:has-text('Send to review')")
-                page.wait_for_selector(".pg table.edit tbody tr")
+            bring_in(page)
             page.click(".pg button:has-text('Add to market reference')")
             page.wait_for_function("() => location.hash === '#yarn'")
             check("Bring in prices: the reviewed rows reach the market reference, and Yarn prices opens",
@@ -459,6 +553,100 @@ def main():
                   and not page.errors, f"{asked!r} {page.errors[:3]}")
             page.context.close()
 
+            # the rate master's lists are read afresh for each popup: a yarn added since (by someone else) shows without a reload
+            page = tab()
+            open_at(page, "dashboard")
+
+            def warp_yarns():
+                page.click(".fab")
+                page.wait_for_selector(".popup .step")
+                page.click(".popup button:has-text('Load the example')")
+                page.wait_for_selector(".popup .hero .big")
+                page.click(".popup .step-head[data-step=yarn]")
+                page.wait_for_selector(".popup #f-warp-yarn")
+                got = page.locator(".popup #f-warp-yarn option").all_inner_texts()
+                page.keyboard.press("Escape")
+                page.wait_for_function("() => !document.querySelector('.scrim[data-popup]')")
+                return got
+            first = warp_yarns()
+            yarn_table = app.api("/api/table/Yarn_Rates")
+            app.api("/api/table/Yarn_Rates", {"columns": yarn_table["columns"], "rows": yarn_table["rows"] + [["Cotton 99S", "Cotton", "99S", 99, 500, time.strftime("%Y-%m-%d"), "Browser check"]]}, method="PUT")
+            second = warp_yarns()
+            app.api("/api/table/Yarn_Rates", {"columns": yarn_table["columns"], "rows": yarn_table["rows"]}, method="PUT")     # as it was
+            check("Create cost reads the rate master's lists afresh each time the popup opens: a yarn added since shows without a reload",
+                  not any("Cotton 99S" in o for o in first) and any("Cotton 99S" in o for o in second) and not page.errors, f"{len(first)} then {len(second)} yarns, {page.errors[:3]}")
+            page.context.close()
+
+            # stage 5: a dated yarn rate entered on Yarn prices shows in its card and moves the purchase orders of that month
+            rows = app.costs()
+            pos = [r for r in rows if r["source"] == "Purchase orders" and (r.get("rates") or {}).get("month") and r["warp"] == r["weft"]]
+            po = pos[0]
+            yarn, month, label = po["warp"], po["rates"]["month"], po["rates"]["label"]
+            other = next((r for r in rows if r["source"] == "Purchase orders" and yarn in (r["warp"], r["weft"])
+                          and (r.get("rates") or {}).get("month") not in (None, month)), None)
+            rate = round(next(y["rate"] for y in app.api("/api/meta")["yarns"] if y["key"] == yarn) * 1.2, 2)
+            page = tab()
+            open_at(page, "yarn")
+            page.wait_for_selector(".pg .dr-card #dr-yarn", timeout=120000)
+            month_box = page.locator(".pg .dr-card .dr-month", has_text=label)
+            before = month_box.inner_text()
+            page.select_option("#dr-yarn", yarn)
+            page.fill("#dr-month", month)
+            page.fill("#dr-rate", str(rate))
+            page.select_option("#dr-rests", "circular")
+            page.fill("#dr-note", "browser check")
+            page.click(".pg .dr-card button:has-text('Save the dated rate')")
+            page.wait_for_selector(".pg .dr-card h3:has-text('In force (1)')")
+            shown = page.locator(".pg .dr-card tr", has_text=yarn).filter(has_text=label).filter(has_text=f"{rate:,.2f}").count()
+            after = month_box.inner_text()
+            check("Yarn prices: a dated rate entered shows in the dated yarn rates card, and its month's orders say they have one",
+                  shown == 1 and "no dated yarn rate yet" in before
+                  and "no dated yarn rate yet" not in after and not page.errors, f"{shown} rows; {before!r} then {after!r}; {page.errors[:3]}")
+            page.context.close()
+            moved = None
+            for _ in range(120):
+                rows = app.costs()
+                moved = next(r for r in rows if r["source"] == "Purchase orders" and r["code"] == po["code"])
+                if moved["rates"].get("dated"):
+                    break
+                time.sleep(1)
+            still = other and next(r for r in rows if r["source"] == "Purchase orders" and r["code"] == other["code"])
+            check("The dated rate moves the purchase orders of that month (on the dated rate, at a higher should-cost), and no other month's",
+                  moved["rates"].get("dated") and moved["should"] > po["should"] and (not other or abs(still["should"] - other["should"]) < 0.005),
+                  f"{po['code']} {po['should']} -> {moved['should']} ({moved['rates_of']}); other month {other and other['should']} -> {still and still['should']}")
+
+            # stage 5: Bring in prices adds the reviewed rows as dated yarn rates, after asking the month and whether GST is in
+            month2 = next(o["month"] for o in app.api("/api/dated-rates")["orders"] if o["month"] != month)
+            page = tab()
+            bring_in(page)
+            page.click(".pg button:has-text('Add as dated yarn rates')")
+            page.wait_for_selector(".pg .dr-card .dr-months")
+            say = lambda: page.inner_text(".pg .dr-card [aria-live]")
+            unasked = page.locator(".pg .dr-card .dr-months").all_inner_texts()
+            for row, key in ((1, "Cotton 40S"), (2, "Cotton 60S")):
+                page.select_option(f".pg .dr-card select[aria-label='Yarn of the yarn master for row {row}']", key)
+            add = page.locator(".pg .dr-card button:has-text('Add the dated rates')")
+            add.click()
+            page.wait_for_function("() => /Choose the month/.test(document.querySelector('.pg .dr-card [aria-live]').textContent)")
+            no_month = say()
+            page.fill("#dr-in-month", month2)
+            page.dispatch_event("#dr-in-month", "change")
+            label2 = next(o["label"] for o in app.api("/api/dated-rates")["orders"] if o["month"] == month2)
+            page.wait_for_function("l => [...document.querySelectorAll('.pg .dr-card .dr-months')].every(td => td.textContent === l)", arg=label2)
+            add.click()
+            page.wait_for_function("() => /include GST/.test(document.querySelector('.pg .dr-card [aria-live]').textContent)")
+            no_gst = say()
+            page.check("#dr-in-gst-no")
+            add.click()
+            page.wait_for_function("() => /dated rates added/.test(document.querySelector('.pg .dr-card [aria-live]').textContent)")
+            added = say()
+            entries = {(e["yarn_key"], e["month"], e["rate"]) for e in app.api("/api/dated-rates")["entries"]}
+            check("Bring in prices: Add as dated yarn rates asks the month, then whether the prices include GST",
+                  set(unasked) == {"choose the month above"} and "Choose the month" in no_month and "include GST" in no_gst, f"{unasked} {no_month!r} {no_gst!r}")
+            check("Bring in prices: the rows are added as dated yarn rates of the month chosen", added.startswith("2 dated rates added from 2 rows")
+                  and {("Cotton 40S", month2, 352), ("Cotton 60S", month2, 430)} <= entries and not page.errors, f"{added!r} {page.errors[:3]}")
+            page.context.close()
+
             # a bookmark of the retired earlier screens
             page = tab()
             page.goto(f"{app.base}/classic/")
@@ -471,20 +659,32 @@ def main():
 
         # ---------------------------------------------------------------- 3. users and roles on (stage 3)
         app = App(data, {"RIGHTPRICE_ADMINS": "gp@example.com"})
-        for email, role in (("v@example.com", "Viewer"), ("b@example.com", "Buyer")):
+        people = (("v@example.com", "Viewer"), ("b@example.com", "Buyer"), ("r@example.com", "Rates editor"), ("gp@example.com", "Admin"))
+        for email, role in people[:3]:
             app.api("/api/users/add", {"email": email, "role": role, "name": role}, who="gp@example.com")
+        app.costs(who="gp@example.com")         # the server's work after a start done, so a page's wait is the page's own
         with sync_playwright() as p:
             browser = p.chromium.launch()
 
-            def offered(who):
-                """What a person sees offered on each page that has something to change."""
+            def person(who):
+                """A tab as this person, with every refusal of the server and every script error kept."""
                 ctx = browser.new_context(viewport=DESK, extra_http_headers={"X-MS-CLIENT-PRINCIPAL-NAME": who})
                 ctx.add_init_script(INIT)
                 page = ctx.new_page()
                 page.set_default_timeout(30000)
-                errors = []
-                page.on("console", lambda m: errors.append(m.text) if m.type == "error" and not any(x in (m.text + str(m.location)) for x in IGNORE) else None)
-                page.on("pageerror", lambda e: errors.append(str(e)))
+                page.refused, page.errors = [], []
+                page.on("response", lambda r: page.refused.append(f"{r.status} {r.request.method} {r.url.split(app.base)[-1]}") if r.status in (401, 403) else None)
+                page.on("pageerror", lambda e: page.errors.append(str(e)))
+                return page
+
+            # a page has drawn, or says it is not open to the role
+            shut = """sel => /not open to your role/.test((document.querySelector('.main .ua-nopage') || {}).textContent || '')
+                || (sel === '.pgbox > .pg' ? (r => !!r && r.textContent.trim() !== 'Loading...' && r.children.length > 0)(document.querySelector(sel)) : !!document.querySelector(sel))"""
+            popup_drawn = """() => document.querySelector('.popup .ptab.on') && (r => !!r && r.textContent.trim() !== 'Loading...' && r.children.length > 0)(document.querySelector('.popup .pgbox > .pg'))"""
+
+            def offered(who):
+                """What a person sees offered on each page that has something to change."""
+                page = person(who)
                 seen = {}
 
                 def at(address, where=".pgbox > .pg"):
@@ -494,8 +694,10 @@ def main():
                     return page.locator(where)
 
                 box = at("yarn")
+                page.wait_for_selector(".pg .dr-card h3:has-text('In force')", timeout=120000)
                 seen["edit rates"] = box.locator("button:has-text('Edit'):visible").count() > 0
                 seen["bring in prices"] = box.locator("a:has-text('Bring in prices')").count() > 0 or page.locator(".main .tab:has-text('Bring in prices')").count() > 0
+                seen["dated rate entry"] = box.locator("#dr-yarn").count() > 0
                 seen["rate tables edit"] = at("rates").locator("button:has-text('Edit this table')").is_visible()
                 seen["add cotton"] = at("cotton").locator("#cot-price").count() > 0
                 box = at("costsheets")
@@ -510,22 +712,77 @@ def main():
                 page.click(".popup button:has-text('Load the example')")
                 page.wait_for_selector(".popup .hero .big")
                 seen["add to list"] = page.locator(".popup .hero .btn.primary").count() > 0
-                intake = at("intake", ".main")
-                seen["intake page"] = "not open to your role" not in intake.inner_text()
-                ctx.close()
-                return seen, [e for e in errors if "403" in e or "401" in e]
+                page.goto(f"{app.base}/?at={time.time()}#intake")
+                page.wait_for_function(shut, arg=".pgbox > .pg", timeout=60000)
+                seen["intake page"] = page.locator(".main .ua-nopage", has_text="not open to your role").count() == 0
+                page.context.close()
+                return seen, page.refused + page.errors
 
-            want = {"Viewer": set(), "Buyer": {"mark seen", "list upload", "list remove", "add to list", "cost sheet upload"},
-                    "Admin": {"edit rates", "bring in prices", "rate tables edit", "add cotton", "cost sheet upload", "apply drafts", "mark seen",
-                              "list upload", "list remove", "add to list", "intake page"}}
-            for who, role in (("v@example.com", "Viewer"), ("b@example.com", "Buyer"), ("gp@example.com", "Admin")):
+            # every address the shell has: how to reach it, and what shows once it has drawn
+            addresses = [(a, a, ".pgbox > .pg") for a, _ in PAGES] + [("rightcost", "rightcost", ".grid tbody tr td .code"),
+                         ("item", where["item"], ".dhead h1"), ("supplier", where["supplier"], ".dhead h1"), (None, "lib/Payment terms", ".main .title"),
+                         ("users", "users", ".main .ua-card")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
+
+            def walk(who):
+                """Every address as this person, each from a fresh load: what the role may open draws, what it may not says so
+                (a popup tab is not offered), the menus offer exactly what it may open, and the server refuses nothing asked."""
+                allowed = set(app.api("/api/me", who=who)["allowed"])
+
+                def may(addr):
+                    return addr not in NEEDS or NEEDS[addr] in allowed
+                page, wrong = person(who), []
+                for addr, hsh, sel in addresses:
+                    page.goto(f"{app.base}/?at={time.time()}#{hsh}")
+                    try:
+                        if sel:
+                            page.wait_for_function(shut, arg=sel, timeout=60000)
+                            said = page.locator(".main .ua-nopage", has_text="not open to your role").count() > 0
+                            if said == may(addr):
+                                wrong.append(f"{hsh}: {'says not open' if said else 'opens'}")
+                        else:
+                            page.wait_for_function(popup_drawn, timeout=60000)
+                            tabs = page.locator(".popup .ptab").all_inner_texts()
+                            label = dict(POPUP_TABS)[addr]
+                            if (label in tabs) != may(addr) or (may(addr) and page.inner_text(".popup .ptab.on") != label):
+                                wrong.append(f"{hsh}: tabs {tabs}")
+                        page.wait_for_timeout(400)
+                    except Exception as e:  # noqa: BLE001 - a page that never draws is reported like any other fault
+                        wrong.append(f"{hsh}: never drew ({str(e).splitlines()[0]})")
+                    if addr == "dashboard":
+                        page.wait_for_function("() => typeof RPA !== 'undefined' && !!RPA.me")
+                        menus = set(page.evaluate(OFFERED))
+                        want = {a for a in ["dashboard", "pilot", "yarn", "cotton", "intake", "rates", "ratecard", "costsheets", "settings", "cost", "bulk", "compare", "pack"] if may(a)}
+                        if menus != want:
+                            wrong.append(f"the menus offer {sorted(menus - want)} too, and not {sorted(want - menus)}")
+                page.context.close()
+                return wrong + page.refused + page.errors
+
+            want = {"Viewer": set(), "Buyer": {"mark seen", "list upload", "list remove", "add to list", "cost sheet upload"}}
+            want["Rates editor"] = want["Admin"] = {"edit rates", "bring in prices", "dated rate entry", "rate tables edit", "add cotton", "cost sheet upload",
+                                                    "apply drafts", "mark seen", "list upload", "list remove", "add to list", "intake page"}
+            for who, role in people:
                 seen, refused = offered(who)
                 got = {k for k, v in seen.items() if v}
-                check(f"Roles: {'an' if role[0] in 'AEIOU' else 'a'} {role} is offered exactly what the role may do, and no page asks the server for what it refuses",
+                an = "an" if role[0] in "AEIOU" else "a"
+                check(f"Roles: {an} {role} is offered exactly what the role may do, and no page asks the server for what it refuses",
                       got == want[role] and not refused, f"offered {sorted(got)}, refused {refused[:3]}")
+                wrong = walk(who)
+                check(f"Roles: {an} {role} walks every address ({len(addresses)}): each opens or says it is not open as the role says, the menus agree, nothing refused",
+                      not wrong, "; ".join(wrong[:4]))
+            # each page unticked in turn, for a Buyer: that page goes, every other still works, and nothing is refused
+            for perm in [k for k in sorted(set(NEEDS.values())) if k.startswith("page:") and k != "page:users"]:
+                app.api("/api/users/permissions", {"changes": [{"role": "Buyer", "permission": perm, "allowed": False}]}, who="gp@example.com")
+                wrong = walk("b@example.com")
+                app.api("/api/users/permissions", {"changes": [{"role": "Buyer", "permission": perm, "allowed": True}]}, who="gp@example.com")
+                check(f"Roles: a Buyer with {perm} unticked walks every address as the role now says, nothing refused", not wrong, "; ".join(wrong[:4]))
             browser.close()
+    except BaseException:           # a crash fails the run like any check, and keeps what it needs to be looked into
+        ok = False
+        print("CRASHED:")
+        traceback.print_exc()
     finally:
-        app.stop()
+        if app:
+            app.stop()
         if ok:
             shutil.rmtree(data, ignore_errors=True)
         else:

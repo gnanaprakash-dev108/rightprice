@@ -79,10 +79,11 @@
   addEventListener("beforeprint", () => { if (packOpen() && !document.body.classList.contains("printing-pack")) { packPrintOn(); addEventListener("afterprint", packPrintOff, { once: true }); } });
   let packPrintOff = () => {};
   function packPrintOn() {
-    const root = document.documentElement, theme = root.dataset.theme;
+    const pg = document.querySelector(".scrim[data-popup] .pgbox > .pg");           // only the pack turns light, not the shell
     const page = h("style", {}, "@page { size: A4 landscape; margin: 8mm; }"); document.head.append(page);
-    root.dataset.theme = "light"; document.body.classList.add("printing-pack");
-    packPrintOff = () => { root.dataset.theme = theme; document.body.classList.remove("printing-pack"); page.remove(); };
+    if (pg) pg.classList.add("paper");
+    document.body.classList.add("printing-pack");
+    packPrintOff = () => { if (pg) pg.classList.remove("paper"); document.body.classList.remove("printing-pack"); page.remove(); };
   }
   function printPack() {
     packPrintOn();

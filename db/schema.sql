@@ -148,6 +148,9 @@ CREATE TABLE rate_sheet (                                  -- each sheet of the 
     rows        jsonb NOT NULL,                           -- the rows, each with its Basis ('Placeholder' included)
     PRIMARY KEY (version_id, sheet)
 );
+-- stage 5 AS BUILT: db/005_dated_rates.sql. One rate per yarn per month (valid_from is the first of the month, not carried
+-- into the next), with its source (typed | brought in | market history), the prices behind it, and replaced or removed
+-- rows kept, marked. The draft below was its starting point.
 CREATE TABLE yarn_rate_dated (                             -- stage 5: a yarn's rate from a date, so an order is costed on the rate of its month
     yarn_key    text NOT NULL,
     valid_from  date NOT NULL,

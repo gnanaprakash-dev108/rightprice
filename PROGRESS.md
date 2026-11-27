@@ -128,7 +128,89 @@ Found while measuring on 27 Nov, and told to GP:
 - Most fabric codes were ordered once (378 of 4,495 priced codes have three or more orders), so a per-code price chart is
   thin until more months are loaded; the Fab group chart is where the history shows.
 
+### Stage 5 as built (27 Nov, branch claude/sleepy-dirac-dknzrp-stage5, pull request 27)
+
+GP's decision: purchase orders on the rates of their order month; quotes and Cost a fabric on today's rates; each costing
+says which. **Built so; no rate in the rate master changed, no calibration proposal applied.** A cold review found seven
+faults; all were fixed the same day (below, "After the cold review").
+- **Dated yarn rates** (`db/005_dated_rates.sql`, `data_dated.py`, `rules/dated.py`): one rate per yarn per month, in the
+  database only (on the files every dated endpoint answers 503 saying it needs a database, and every costing falls back).
+  Three ways in, each kept with its source: typed on Prices > Yarn prices (saying what it rests on: a circular, a price
+  list, a quote, an invoice, another document, or no source, which keeps it a Placeholder); "Add as dated yarn rates" on
+  Bring in prices; "Load" of the market history in hand. A replaced or removed rate is kept, marked. The rule for the
+  rate of a month is on the Yarn prices page and in `rules/dated.py` (RULE).
+- **The market history** (`inputs/Yarn_Inteliigence_Master.xlsx`, Yarn_Master, 5,275 prices, every date read; the Year
+  column is wrong on 227 rows and the date text is used): only Raymond 100% linen 40 and 60 lea, standard (June 2026)
+  surely match a yarn of the master (fibre, blend, count, kind and spinner checked, rupees a kilo, Rs 50 to 5,000). Left
+  out with the reason shown: raw cotton 3,312, polyester filament 806, semi-combed cotton 613 (the master does not say
+  semi-combed: question S5-1), viscose and modal 463, cotton/viscose 78, linen 44 lea 1. **Nothing is loaded until
+  someone presses Load** (the live database has none yet).
+- **Costing on a date**: `masters.cost(sel, m, on=<date>)`; without `on` nothing changes (check_engine.py proves it,
+  with the seven V1 qualities). With it each yarn is on its month's dated rate, else today's, and `rates_of` says so per
+  yarn. Right cost's 1,696 purchase-order verdicts, the supplier page's purchase questions and the MCP brief use the
+  order month (the month holding most of a code's metres, from the purchase file; the earlier on a tie, which 60 codes
+  have, said on the row); `/api/cost` takes `_rates_on` only from a purchase order's Negotiation tab. Cost a fabric shows
+  "Today's rates: the rate master in use". The negotiation pack holds fabric-list rows only (quotes), on today's rates.
+- **What shows a different figure: nothing today.** There is no dated rate for Aug to Nov 2026, so all 1,696
+  purchase-order costings (Aug 200, Sep 1,047, Oct 336, Nov 113 by order month) fall back to today's rates, equal to the
+  paisa, line by line (check_server.py proves all 1,696 on files). What is new on screen: each purchase order says its
+  order month and that today's rate was used ("Rates of" column in Right cost and its spreadsheet, the detail page); the
+  supplier page says which rates its purchases are on. Once a dated rate with a source is entered, the purchase orders of
+  that month on that yarn follow it (should-cost, gap, verdict, placeholder column), and say so.
+- **After the cold review** (27 Nov): (1) a dated rate entered with no source stays a Placeholder: on Cotton Slub 20S at
+  today's figure it had flipped 117 verdicts; now none moves (checked on all 1,696 rows). (2) Bring in prices reads the
+  document's own date (its name or its text) and says where from; with no date read, "Add as dated yarn rates" makes the
+  person choose the month, and asks once whether the prices include GST. (3) The brief says when its usual range is on
+  today's rates and its should-cost on a dated month; the dashboard says panels 1, 2 and 4 are on today's rates and how
+  many orders Right cost costs on a dated rate. (4) The split test was re-run (below). (5) A market rate a person
+  removed is not brought back by Load, and a Load that changes nothing writes nothing (no verdicts worked out again).
+  (6) The market match checks blend, material, kind and spinner, the unit and the Rs 50 to 5,000 range. (7) A typed
+  range is its midpoint (a different rate typed with it is refused); ties are said; Right cost's help, list and spreadsheet name the rates.
+- **The calibration test re-run** (`calibrate_splits.py`, `pilot/Held_Back_Splits.xlsx`, `docs/HELD_BACK_SPLITS.md`):
+  by construction (a stand-in for stage 2's Fab groups, `construction.py`) and by time with each order line on the side of
+  its own date. **No measurable gain from the draft on any fair split**: on unseen constructions 29 fabrics come within
+  10% and 23 drop out (+1.1 points, 95% interval −4.7 to +8.4); by time +1.3 (−2.1 to +4.9). Within 5% falls on the
+  construction split; piece-dyed satin gets clearly worse; the printing and order-size proposals change with the split.
+  Today's rates fit later months worse (median gap −4.8% in Aug to +3.9% in Nov).
+- Left as they are: the tracker card on a purchase order still says "today's should-cost" (true until a dated rate
+  exists for its month); `python store.py export` does not write dated rates (the files have no place for them); the
+  usual ranges stay on today's rates (said on the brief and the dashboard, not worked out again on dated rates); dashboard
+  panel 3 is still cotton only; Right cost's purchase-order rows not on a dated rate show the pilot's stored figures, which
+  predate any later rate edit (as before stage 5); a side-panel entry was not added (question S5-6).
+
 ### Where things stand
+
+- **27 Nov, evening (latest): where every track stands.** GP agreed (27 Nov) to keep building stages 2 to 5 in parallel
+  and to resume automatically after usage limits: a scheduled task "RightPrice stages 2-5: check every 5 hours" wakes this
+  session and resumes stopped builders; it deletes itself once stages 2 to 5 are merged and deployed.
+  - **Stage 3 (users and roles) merged: pull request 26, merge 7c402f4, deployed green 15:45 UTC.** Permissions stay off
+    until GP adds `RIGHTPRICE_ADMINS` (first open `/api/me`: own e-mail and `sign_in: on`; steps in docs/AZURE_DEPLOY.md).
+    Cold review (no way in or around roles; 10 behaviour faults), second reviewer (confirmed; 9 more): all fixed; the last
+    round checked by `check_server.py` (729 checks), not by a third reviewer.
+  - **Stage 2** (pull request 28, branch `claude/sleepy-dirac-dknzrp-stage2`): built; cold review done; builder fixing its
+    findings and **GP's decisions (27 Nov): ZLOI order lines (letters of intent; 402 at a placeholder Rs 550) are left out of
+    every calculation everywhere, Right cost included, and shown as "Outliers (ZLOI)" beside the item and the supplier;
+    widths within half an inch are one Fab group; a usual range needs 5 separate purchase orders.** Then merge main and map
+    its addresses in `rules/access.py`. Second reviewer still to run.
+  - **Stage 5** (pull request 27, `...-stage5`): built; cold review and second reviewer done; builder fixing the second
+    reviewer's faults (Bring in prices dates and GST) and merging main. Re-run held-back test: the calibration draft shows
+    **no measurable gain on any fair split** (docs/HELD_BACK_SPLITS.md); recommend GP does not apply it (question S5-8).
+  - **Stage 4** (pull request 29, `...-stage4`): every page moved into the shell, frame and Streamlit retired,
+    `check_browser.py`; cold review found 2 regressions (Open in Create cost on a fresh tab; Ctrl+F) and weak browser
+    checks; builder fixing and merging main. **Merge it last**, after carrying stages 2, 3 and 5's screen hooks into its
+    pages; GP then confirms each moved page by eye.
+  - **New track, GP's decision (27 Nov): the AI assistant (MCP token) may do everything an Admin can.** Builder on
+    `claude/sleepy-dirac-dknzrp-mcp-admin`: tools for every Admin action, the assistant's fixed role = Admin, every change
+    recorded as "AI assistant", changing tools marked so a client asks first. Reviews still to run.
+  - Merge order: 2 and 5 (each after its second review), then the MCP-admin track, then 4.
+- **The build session can now reach the live app (27 Nov).** GP added `RIGHTPRICE_MCP_TOKEN`, let `/mcp` and `/mcp/health`
+  through sign-in (`az rest` on `authsettingsV2`, because `az webapp auth update --excluded-paths` mangles paths; the commands
+  are in this session's record and docs/AZURE_DEPLOY.md should be updated to them), and saved the token as a network secret
+  of the cloud environment "rightprice" for the site's host, path prefix `/mcp` (the credential form refuses hostnames over
+  64 characters). `curl https://<site>/mcp/health` and JSON-RPC `tools/call` on `/mcp` then work from a build session; first
+  check: ok, store postgres, code 15:38 UTC, 10 tools, the live list's 2 rows read. Use only reading tools unless GP asks.
+- GP may add `ANTHROPIC_API_KEY` to the web app (told not to paste it anywhere else); then read the first real drafts against
+  the rules through the live site.
 
 - **27 Nov, second session: stage 1 merged (pull request 24, merge commit 98756be) and deployed: the deploy run was green
   (finished 11:38 UTC).** Without `DATABASE_URL` the site runs on the files as before. The build session cannot sign in:
@@ -446,8 +528,14 @@ record_tracker_step (marked "AI assistant"; the tracker's refusals apply, plus: 
   leads to the app. With users and roles (stage 3) a page offers only what the role may do (`RP.kit.can`), and
   `web/access.js` `PAGE_NEEDS` / `TAB_NEEDS` must name every page (check_server.py checks it, and reads each page's
   calls from `web/pages/*.js` for `PAGE_USES`). The rate master's lists are read afresh for each page and each popup.
-- `check_browser.py` opens every page in Chromium (Playwright) and walks the main paths; it runs in the
-  checks job.
+  Stage 5's screen parts live in the pages too: the dated yarn rates card on Yarn prices (`RPDated.card`, without its
+  form for a role that may not edit rates), "Add as dated yarn rates…" on Bring in prices, and the "rates of" line
+  under Create cost's figure; the shell loads `web/dated.js` and `dated.css` (a few of its rules are restated in
+  `common.css` so they still win inside a page). Printing Create cost or the pack turns only the printed page light
+  (`.pg.paper`), not the shell.
+- `check_browser.py` opens every page in Chromium (Playwright) and walks the main paths, stage 5's dated rates, the
+  printed type size, and every address for each role (and for a Buyer with each page unticked); it runs in the
+  checks job. A crash fails it and keeps the data folder and the servers' logs.
 - Lessons that cost time: `replaceChildren` turns arrays and nulls into text (use `fill()` in
   rightcost.js and `RP.kit.fill` in the pages); moving an iframe in the DOM reloads it; numpy numbers break
   JSON responses (convert); edit scripts must match the file's real characters (· — −), not escapes;
@@ -713,7 +801,7 @@ yarn-dyed oxford −2.7%, 46%; piece-dyed satin 3.1%, 57%; piece-dyed twill 4.3%
 10. **Dollar purchases, per-kg purchases and knits** are not covered.
 11. **Cotton price history stops at 24 June 2026.**
 12. **Pictures are not read automatically** in the price intake; rates are typed beside the image.
-13. **Yarn rates are one date.** Orders span August to November, costed on November rates.
+13. **Yarn rates are one date.** Orders span August to November, costed on November rates. (Stage 5: dated yarn rates can now be entered and orders are costed on their month where one exists; none exists yet for August to November 2026.)
 
 ## Mill rate card, built in 24 Nov 2026
 

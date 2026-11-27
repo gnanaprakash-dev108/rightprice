@@ -77,8 +77,8 @@ share.
 | Negotiation pack | One printable page for a whole mill sheet (or the rows ticked on the list): totals, the rows to lead with, every row with its stance and money at stake, the mill's sums that are off and what its own sums give, the questions to ask, and the rows not costed |
 | Compare | Two costings side by side on today's rates: every group and sub-cost, the difference, and the choices that differ |
 | Bulk upload and list | Upload a mill's price sheet as it comes, or the RightPrice template. One list of every fabric costed, in the mill sheet's headings, with should-cost, the gap and a check of the mill's sums; tick rows to open, compare or remove; move a yarn price across the whole list |
-| Yarn prices | Yarn master and market reference, both editable; master against market |
-| Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference |
+| Yarn prices | Yarn master and market reference, both editable; master against market; dated yarn rates (each yarn by month, gaps left as gaps, entered, brought in or loaded from the market history; database only) |
+| Bring in prices | Yarn prices from Excel, CSV, PDF, a picture, a web page or a price service, into a review table and then the market reference, or as dated yarn rates |
 | Cotton prices | Shankar-6 history and chart |
 | Rate tables | Weaving, sizing, dyeing, finishing, print method, dobby, weft, rate card quantity, defaults, weave list, content groups |
 | Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |
@@ -122,7 +122,7 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
 | `draft.py` | E-mail and WhatsApp drafts to a mill, written by Claude (app setting `ANTHROPIC_API_KEY`), with a fixed template when there is no key |
 | `mcp_server.py` | RightPrice as an MCP server for an AI assistant: at `/mcp` on the web app behind the token `RIGHTPRICE_MCP_TOKEN`, or `python mcp_server.py` on a laptop. See [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md) |
-| `check_browser.py` | Opens every page of the shell in a browser (Chromium, through Playwright) on a temporary data folder and database, in light and dark and at phone width, and walks the main paths: cost a fabric (Qlty-1 = Rs 181.40), upload a mill sheet, open a Right cost row, the popup's tabs. Must print `ALL OK` |
+| `check_browser.py` | Opens every page of the shell in a browser (Chromium, through Playwright) on a temporary data folder and database, in light and dark and at phone width, and walks the main paths: cost a fabric (Qlty-1 = Rs 181.40), upload a mill sheet, open a Right cost row, the popup's tabs, print, the dated yarn rates; with users and roles on, walks every address as each role. Must print `ALL OK` |
 | `rules/access.py`, `data_users.py` | Users and roles: who is signed in (Azure's sign-in headers), the four roles and their default permissions, which permission each address needs, the admin page's changes and their record (the SQL is in `data_users.py`) |
 | `web/access.js`, `web/access.css` | The Users and roles page, and what the shell hides from a role that may not use it |
 | `check_server.py` | Checks the server gives the engine's numbers and refuses bad input, on the files, SQLite and PostgreSQL (`RIGHTPRICE_TEST_DATABASE_URL`, never `DATABASE_URL`), and proves the move from files to a database changes no answer. Must print `ALL OK` |
@@ -136,6 +136,9 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `refresh_groups.py` | Adds content groups and PLM weave types to the rate master |
 | `pilot.py` | Costs purchase-order fabrics and compares with the price paid |
 | `calibrate.py` | Drafts rate changes from the pilot with a held-back test; applies nothing |
+| `calibrate_splits.py` | The draft's held-back test again, split by construction and by order month (stage 5); writes `pilot/Held_Back_Splits.xlsx`, applies nothing |
+| `construction.py` | A fabric's construction as one text (the nine fields of a Fab group); stands in for stage 2's Fab groups |
+| `rules/dated.py`, `data_dated.py` | Dated yarn rates (stage 5): the rate of a month, the purchase orders' months, the market history in hand; the table `yarn_rate_dated` (`db/005_dated_rates.sql`) |
 | `apply_proposals.py` | Applies the draft to the rate master, after saving a dated backup |
 | `data/Rate_Master.xlsx` | **The source of truth for every rate.** Edited through the app or in Excel. |
 | `data/plm_specs_for_po.csv` | PLM specs for the 19,669 purchase-order codes (output of `plm_extract.py`) |
@@ -150,6 +153,7 @@ python plm_extract.py     # needs the two large workbooks; about 90 seconds
 python refresh_groups.py  # needs the master data workbook
 python pilot.py           # needs inputs/Fabric _ 3Months_4746.xlsx and data/plm_specs_for_po.csv
 python calibrate.py       # same inputs as pilot.py; writes a draft only
+python calibrate_splits.py  # the draft's held-back test by construction and by time; writes pilot/Held_Back_Splits.xlsx
 ```
 
 See [docs/INPUT_FILES.md](docs/INPUT_FILES.md) for what each source file is and which script reads it.
@@ -159,3 +163,25 @@ See [docs/INPUT_FILES.md](docs/INPUT_FILES.md) for what each source file is and 
 Every rate carries a Basis: `V1 workbook`, `Pilot calibration <date>`, `Pilot-checked`,
 `Market circular`, `Mill rate card <date>`, `Placeholder` (a starting guess with no data behind it) or `Not set`.
 The app warns whenever a costing uses a placeholder.
+
+## Dated yarn rates (stage 5)
+
+GP's decision (27 Nov 2026): a purchase order is costed on the yarn rates of its order month; quotes and Cost a fabric
+on today's rates (the yarn master); every costing says which rates it used. A dated rate is a yarn's rate for one month,
+kept in the database only (`yarn_rate_dated`); the rate master's Yarn_Rates are never changed by it. It comes in three
+ways, each kept with its source: typed on Yarn prices, brought in through Bring in prices ("Add as dated yarn rates"),
+or loaded from the market history in hand (`inputs/Yarn_Inteliigence_Master.xlsx`), only where the yarn surely is one
+of the yarn master (today: Linen 40 and 60 lea, June 2026; the rest is listed with why it is left out).
+
+The rule for the rate of a month (also on the Yarn prices page, `rules/dated.py` RULE): one rate per yarn per month,
+not carried into the next month; a month without one uses today's rate and says so for that yarn; a rate says what it
+rests on, and one typed with no source is a Placeholder (rule 4); a range counts as its midpoint, typed or brought in;
+several prices in a month as their average, never mixing prices with and without GST (each price says which), and a
+rate with GST never replaces one without; the month comes from the document's own date where the server can read it
+(a month in words before a day; not a phone's file name; asked when the dates disagree), otherwise the person chooses
+it, never today's; a person's rate
+takes the place of an earlier one for that yarn and month (kept, marked replaced); the market history never replaces a
+person's rate, never brings back a rate a person removed, and a load that changes nothing writes nothing; a fabric code
+ordered in several months is costed on the month holding most of its metres (the earlier on a tie, said). Only yarn
+rates are dated; the usual ranges are on today's rates and the brief says so. `masters.cost(sel, m, on=<date>)` costs
+on a date; without `on` nothing changes.

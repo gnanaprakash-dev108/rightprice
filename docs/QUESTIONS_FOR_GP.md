@@ -12,6 +12,34 @@
 - Dark mode: added, following RightPrice's switch. Avatar: initials from the Microsoft sign-in
   (read from Azure's /.auth/me; off Azure it shows RP).
 
+## Asked 27 Nov 2026, stage 5 (dated yarn rates): built one way meanwhile, each can be changed
+
+S5-1. **Which kind are the yarn master's cotton yarns (Cotton 16S to 40S)?** The market history in hand has two years of
+      KPR and SSM *semi-combed* prices for 16s, 20s, 24s, 30s, 34s and 40s (613 prices, July 2022 to June 2026). The yarn
+      master does not say combed, combed compact or semi-combed, so they were **not** loaded (only a sure match is).
+      1. Semi-combed: load them as dated rates. 2. Combed or combed compact: leave them out (as now). 3. Not sure: leave them out.
+S5-2. **A price given as a range** (Rs 1,600 to 1,650): built as **the midpoint**. 1. Midpoint (as now). 2. The low end
+      (what a mill buying well pays). 3. The high end.
+S5-3. **Prices that include GST.** The only market prices loaded (Raymond linen 40 and 60 lea, June 2026) include GST and
+      freight, as the file says; they are kept as they are, and the basis says so. 1. Keep as they are (as now).
+      2. Take 5% GST out. 3. Leave GST-inclusive prices out.
+S5-4. **A month with no dated rate** uses today's rate (the yarn master), and the costing says so per yarn. 1. Today's
+      rate (as now). 2. The nearest earlier month's dated rate, if there is one within, say, two months.
+S5-5. **Viscose 40/2 in the yarn master**: 2/40s TFO doubled or ring doubled? The market file has both; neither was
+      loaded. 1. TFO doubled. 2. Ring doubled. 3. Leave it out.
+S5-6. **A place in the side panel?** Dated yarn rates sit on Prices > Yarn prices (under the yarn master), and Bring in
+      prices has "Add as dated yarn rates". Nothing was added to the side panel. 1. Fine where it is. 2. Wanted in the panel.
+S5-7. **The linen placeholders look far too low.** Raymond's June 2026 linen is Rs 1,600 to 1,650 a kilo (40 lea) and
+      Rs 2,200 to 2,250 (60 lea), with GST and freight; the yarn master has placeholders of Rs 900 and Rs 1,200. Nothing
+      was changed (rule 2). A real linen quote would settle it.
+S5-8. **The calibration draft, tested fairly.** On cloth it was not fitted on, and on later months, the draft shows no
+      measurable gain (about +1 point within 10%, with a 95% interval from about −5 to +8; November alone +5.9, but from
+      −1.7 to +16.7 on 135 fabrics), and it makes piece-dyed satin
+      clearly worse (docs/HELD_BACK_SPLITS.md). 1. Do not apply it (recommended). 2. Apply only the piece-dyed twill
+      weaving rate. 3. Wait for the July to November yarn prices and test again on dated rates.
+S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rate of the rate master with no data behind
+      it: the brief and the verdicts treat it as unsure. 1. As now. 2. Refuse a typed rate with no source.
+
 ## Answered 27 Nov 2026 (for stages 2, 3 and 5)
 
 - Stage 2, "priced well above its group": **the same rule as the brief**: above the group's usual range (the middle half

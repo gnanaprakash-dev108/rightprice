@@ -11,7 +11,7 @@
     const COLS = ["Date", "Yarn", "Count", "Low Rs/kg", "High Rs/kg", "Source"];
     const review = (data) => {            // every source ends here: rows a person checks before they are added
       const body = h("tbody");
-      const addRow = r => { const tr = h("tr", {}, COLS.map((c, i) => h("td", {}, h("input", { class: "cell" + (i === 3 || i === 4 ? " n" : ""), type: i === 3 || i === 4 ? "number" : "text", step: "any", value: r ? (r[i] ?? "") : (i === 0 ? new Date().toISOString().slice(0, 10) : ""), "aria-label": c }))), h("td", {}, h("button", { class: "icon-btn sm", type: "button", "aria-label": "Remove this row", onclick: () => tr.remove() }, "×"))); body.append(tr); return tr; };
+      const addRow = r => { const tr = h("tr", {}, COLS.map((c, i) => h("td", {}, h("input", { class: "cell" + (i === 3 || i === 4 ? " n" : ""), type: i === 3 || i === 4 ? "number" : "text", step: "any", value: r ? (r[i] ?? "") : (i === 0 ? (data.date_read ? data.date_found || "" : new Date().toISOString().slice(0, 10)) : ""), "aria-label": c }))), h("td", {}, h("button", { class: "icon-btn sm", type: "button", "aria-label": "Remove this row", onclick: () => tr.remove() }, "×"))); body.append(tr); return tr; };
       data.rows.forEach(addRow);
       const msg = h("div");
       work.replaceChildren(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Review before adding")),
@@ -23,9 +23,13 @@
             try { const r = await (await postJSON("/api/intake/add", { rows, source: data.source })).json(); RP.state.dash = null; toast(`${r.added} rows added to the market reference`); location.hash = "#yarn"; }
             catch (e) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
           } }, "Add to market reference"),
+          window.RPDated ? h("button", { class: "btn", type: "button", onclick: () => {          // stage 5: the same rows as dated yarn rates
+            const rows = [...body.rows].map(tr => [...tr.querySelectorAll("input")].map(i => i.value.trim() === "" ? null : i.value.trim()));
+            const box = h("div"); msg.replaceChildren(box); RPDated.fromIntake(rows, data.source, box, data);      // with what the server read of the document's date
+          } }, "Add as dated yarn rates…") : null,
           h("button", { class: "btn", type: "button", onclick: () => addRow(null).querySelector("input").focus() }, "Add a row"),
           h("button", { class: "btn", type: "button", onclick: () => work.replaceChildren() }, "Discard")),
-        h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here.")));
+        h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here." + (window.RPDated ? " Add as dated yarn rates keeps the rows instead as the rates of their month, for the purchase orders of that month (each row is given a yarn of the yarn master first)." : ""))));
     };
     const mapper = (data) => {            // a table was read: say which column is which
       const names = Object.keys(data.sheets);

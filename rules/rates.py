@@ -1,5 +1,6 @@
 """Editing the rate master from the screens, the bulk costing template, and the yarn price intake."""
 import datetime as dt
+import os
 import io
 import pandas as pd
 from rules import common
@@ -117,8 +118,66 @@ def add_cotton(payload: dict, who: str = ""):
     return {"saved": True}
 
 
-def _stage(df, note=""):
-    return {"kind": "rows", "note": note, **common.records(df[pi.STAGE_COLS])}
+# What the server read from each document brought in (stage 5): read token -> the dates found in it and the month it
+# decided on. "Add as dated yarn rates" trusts only these, never a flag the page sends (rules/dated.py intake_add).
+_reads = {}
+
+
+def _months_apart(a, b):
+    return abs((int(a[:4]) * 12 + int(a[5:7])) - (int(b[:4]) * 12 + int(b[5:7])))
+
+
+def _decide(*where):
+    """The document's own date from (text or dates already read, what it is) pairs: a month named in words ("Oct 2026")
+    before a day ("sent 03.11.2026"); a phone's or a screen's file name is not read. Sure only when every date of that
+    kind falls in one month, none found is more than a year from it, and it is within a year of today; otherwise what was
+    found is shown and the person is asked for the month."""
+    found = []
+    for got, what in where:
+        if what == "the file name" and pi.PHONE_NAME.search(os.path.basename(str(got or ""))):
+            continue
+        for c in (got if isinstance(got, list) else pi.read_dates(got)):
+            found.append(dict(c, where=what))
+    if not found:
+        return None
+    pool = [c for c in found if c["kind"] == "month"] or found
+    pick = pool[0]
+    month = pick["value"][:7]
+    sure = (len({c["value"][:7] for c in pool}) == 1 and all(_months_apart(c["value"], month) <= 12 for c in found)
+            and _months_apart(month, dt.date.today().isoformat()) <= 12)
+    return {"sure": sure, "value": pick["value"], "month": month, "from": pick["where"], "suggest": max(c["value"][:7] for c in pool),
+            "found": [f"{c['text']} ({c['where']})" for c in found]}
+
+
+def _stage(df, note="", decided=None, column=None):
+    """Rows for the review table, and what the server read of the document's date, kept under a read token.
+    column: the file's own date column (each row its date, read day first; a blank one has none). decided: the document's
+    date from its name or text (_decide). With neither, or when not sure, the rows carry today's date for the market
+    reference only, and a dated yarn rate needs the month chosen (stage 5: never today's)."""
+    df = df.copy()
+    info = {"dates": set(), "month": None, "from": None}
+    if column:
+        days = [pi.read_date(d) for d in df["Date"]]                # a blank cell (NaN) is no date
+        df["Date"] = days
+        info.update(dates={d for d in days if d}, **{"from": f"the file's column {column}"})
+        blank = sum(1 for d in days if not d)
+        note = (note + " " if note else "") + f"Dates read from the file's column {column}" + (
+            f"; {blank} {'row has' if blank == 1 else 'rows have'} none." if blank else ".")
+    elif decided and decided["sure"]:
+        df["Date"] = decided["value"]
+        info.update(dates={decided["value"]}, month=decided["month"], **{"from": decided["from"]})
+        note = (note + " " if note else "") + f"Dated {decided['value']}, read from {decided['from']}."
+    elif decided:
+        note = (note + " " if note else "") + (f"Dates found: {'; '.join(decided['found'])}. Which is the date of these prices is not sure, "
+                                               "so the month is asked before they are added as dated rates.")
+    token = f"r{len(_reads) + 1}-{dt.datetime.now():%H%M%S%f}"
+    _reads[token] = info
+    while len(_reads) > 40:
+        _reads.pop(next(iter(_reads)))
+    read = bool(column) or bool(decided and decided["sure"])
+    return {"kind": "rows", "note": note, **common.records(df[pi.STAGE_COLS]), "read_token": token,
+            "date_read": read, "date_from": info["from"], "date_found": decided["value"] if decided and decided["sure"] else None,
+            "dates_found": decided["found"] if decided else [], "month_suggested": (decided["month"] if decided["sure"] else decided["suggest"]) if decided else None}
 
 
 def _tables(named, source):
@@ -139,7 +198,7 @@ def _pdf(data, source):
         note = f"Read {len(rows)} price lines from {info['pages']} pages. Check them before adding."
         if info["image_pages"]:
             note += f" {info['image_pages']} pages are pictures with no readable text; their rates need typing in."
-    return _stage(rows if len(rows) else pi.empty_stage(), note)
+    return _stage(rows if len(rows) else pi.empty_stage(), note, _decide((source, "the file name"), (info.get("dates") or [], "the document's text")))
 
 
 def intake_file(filename, data):
@@ -154,7 +213,7 @@ def intake_file(filename, data):
         if ext in ("png", "jpg", "jpeg", "webp"):
             pi.keep_file(name, data)
             return _stage(pi.empty_stage(), "Pictures cannot be read here. The picture is kept as the source; type its "
-                                            "rates into the table.") | {"source": name}
+                                            "rates into the table.", _decide((name, "the file name"))) | {"source": name}
     except common.Refused:
         raise
     except Exception as e:
@@ -174,7 +233,8 @@ def intake_link(payload: dict):
         if tables:
             return _tables({f"Table {i + 1} ({len(t)} rows)": t for i, t in enumerate(tables)}, url)
         rows = pi.rows_from_text(text, url)
-        return _stage(rows if len(rows) else pi.empty_stage(), f"No tables on the page; {len(rows)} price-like lines found in its text.")
+        return _stage(rows if len(rows) else pi.empty_stage(), f"No tables on the page; {len(rows)} price-like lines found in its text.",
+                      _decide((url, "the page address"), (text[:4000], "the page's text")))
     except Exception as e:
         raise common.Refused(400, f"Could not read this page: {e}. Pages behind a login cannot be read.")
 
@@ -200,7 +260,10 @@ def intake_map(payload: dict):
                               payload.get("yarn") or None, payload.get("date") or None, hit[1])
     except Exception as e:
         raise common.Refused(400, f"Those columns could not be read: {e}")
-    return _stage(rows, f"{len(rows)} rows with a rate were read. Check them before adding.")
+    note = f"{len(rows)} rows with a rate were read. Check them before adding."
+    if payload.get("date"):         # the file's own date column
+        return _stage(rows, note, column=payload["date"])
+    return _stage(rows, note, _decide((hit[1], "the file name"), (payload.get("sheet"), "the sheet's name")))
 
 
 def intake_add(payload: dict, who: str = ""):

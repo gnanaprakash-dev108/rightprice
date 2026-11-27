@@ -57,7 +57,7 @@
   RP.page("dashboard", { title: "Dashboard", section: "Home" }, async () => {
     const [ins, list] = await Promise.all([getJSON("/api/insights"), (await postJSON("/api/list", {})).json()]);
     state.list = list;
-    const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders costed on your rate master; panel 3 is the cotton price history; panel 5 is from published accounts.")];
+    const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (every usual range comes from them); panel 3 is the cotton price history; panel 5 is from published accounts." + (ins.pilot_rates ? " " + ins.pilot_rates.replace(/^Panels 1, 2 and 4 are[^.]*\. */, "") : ""))];          // stage 5: and beside Right cost's rates
     // first: newly quoted fabrics that need a look before their price is accepted
     try {
       const box = h("div", { class: "card alerts", hidden: true });

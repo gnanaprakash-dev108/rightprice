@@ -313,6 +313,7 @@
           h("button", { class: "btn", onclick: printSheet }, "Print"))),
       h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} × ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
       h("div", { class: "facts num" }, h("span", {}, `${rs(res.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(res.gsm, 0)} g/m²`), h("span", {}, `${fmt(res.finished_g_per_m, 0)} g per running metre`)),
+      res.rates_of ? h("div", { class: "facts rates-of" }, h("span", {}, res.rates_of.text + (res.rates_of.notes && res.rates_of.notes.length ? ". " + res.rates_of.notes.join("; ") : ""))) : null,      // stage 5: which rates
       quote, h("div", { class: "notice info hero-moved", hidden: true, style: "margin:10px 0 0" }));
 
     const box = h("div"), note = h("div", { class: "sub", style: "margin:2px 0 0" });
@@ -363,16 +364,17 @@
   const costOpen = () => { const pop = document.querySelector(".scrim[data-popup]"); return !!pop && pop.dataset.tab === "cost" && !!document.querySelector(".cost-out"); };
   // printed from the browser's own menu: open the tables too, so nothing prints as an empty heading
   addEventListener("beforeprint", () => { if (document.body.classList.contains("printing") || !costOpen()) return; const closed = [...document.querySelectorAll(".cost-out details:not([open])")]; closed.forEach(d => { d.open = true; }); const st = pageMargin(); addEventListener("afterprint", () => { closed.forEach(d => { d.open = false; }); st.remove(); }, { once: true }); });
-  /* Print the cost on paper or to PDF: the result pane only, in light colours, with every table opened. */
+  /* Print the cost on paper or to PDF: the result pane only, in light colours, with every table opened. Only the page
+     printed turns light (.paper, web/pages/common.css), not the shell around it. */
   function printSheet() {
-    const root = document.documentElement, theme = root.dataset.theme;
+    const page = $(".cost-out").closest(".pg");
     const closed = [...document.querySelectorAll(".cost-out details:not([open])")];
     closed.forEach(d => { d.open = true; });
-    root.dataset.theme = "light"; document.body.classList.add("printing");
+    page.classList.add("paper"); document.body.classList.add("printing");
     const margin = pageMargin();
     const stamp = h("p", { class: "print-stamp" }, `RightPrice ex-mill should-cost · printed ${day(new Date())} · on the rates in the rate master that day`);
     $(".cost-out").prepend(stamp);
-    const done = () => { root.dataset.theme = theme; document.body.classList.remove("printing"); closed.forEach(d => { d.open = false; }); stamp.remove(); margin.remove(); removeEventListener("afterprint", done); };
+    const done = () => { page.classList.remove("paper"); document.body.classList.remove("printing"); closed.forEach(d => { d.open = false; }); stamp.remove(); margin.remove(); removeEventListener("afterprint", done); };
     addEventListener("afterprint", done);
     setTimeout(() => print(), 60);
   }
