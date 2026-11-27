@@ -1,12 +1,58 @@
 # RightPrice: progress and handover
 
-As of 26 November 2026. **Start with "Handover, 26 November 2026" below.** The earlier handover
+As of 27 November 2026. **Start with "Handover, 26 November 2026" below; its first section is the rebuild agreed on 27 November.** The earlier handover
 (25 November) and the sections after it are the record of how the tool got here, oldest first.
 
 ## Handover, 26 November 2026
 
 **The aim of the tool is a better negotiation with the vendor.** Every screen is judged by whether it
 helps a fabric buyer walk into a meeting with a mill better prepared. The owner is GP.
+
+### NEXT: the rebuild in six stages (agreed with GP on 27 Nov; stage 1 is starting)
+
+GP asked what should have been done differently, then asked for it to be done. The agreed plan is a new foundation
+under the existing app, stage by stage, each one live before the next; **not** a new app from zero (the engine and
+rules carry about 135 reviewed fixes). GP said "go ahead", including for several agents working at once.
+
+| Stage | What | GP's part |
+|---|---|---|
+| 1 | Database (PostgreSQL) and the back end split into three layers (costing engine, business rules, web requests). Costings stored with their rate version. Files copied in, never altered; figures equal to the paisa before and after; a setting to go back | Create the Azure database, add the app setting `DATABASE_URL` |
+| 2 | Purchase history with dates; **Fab groups** (same construction, any colour: column "Fab group name", codes Fab-0001 onward, permanent); a popup with price over time per fabric code; a Fab group page with summary and analysis; an admin upload for purchase files (background job) | Send the 10,000 invoices and the PLM specifications for their codes; look over the first group names |
+| 3 | Users, roles and page-wise permissions with an admin page (default: no access until added; enforced on the server) | The 10 names and roles; invite them to Microsoft sign-in |
+| 4 | One front end: the earlier screens moved into the shell page by page, the framed screens and Streamlit retired, browser tests in the checks. Stays plain JavaScript with no build step (GP edits it himself; his side panel stays) | Confirm each moved page by eye |
+| 5 | Dated rates (an order costed on the rates of its month); the calibration test re-run split by Fab group and by time | Yarn prices July to November, mill cost sheets, as they come |
+| 6 | A learned benchmark of "what we usually pay", switched on per fabric type only where it beats the Fab-group-median baseline; never changes a rate or a verdict | Read the first disagreement report |
+
+Decisions and ground rules GP agreed:
+- **Where:** GitHub (code, checks, deploy); the Azure web app (Python and the one front end, behind Microsoft sign-in); Azure
+  Database for PostgreSQL (all shared data). Hostinger is not used (GP had asked about a PHP login there; advised against).
+- **Fab groups span mills** (the mill is a breakdown inside a group); matching is exact after tidying, with an admin merge.
+- **Data does not hold up the build.** GP will enter data through the app (price tab, upload screens). Build on the real
+  data in hand (the yarn file has dated prices to June 2026; the purchase file has a date on every line, 1 Aug to 23 Nov).
+  Made-up sample data stays on the test server or is marked Placeholder; no accuracy claims from samples.
+- **Secrets stay in Azure app settings** (`ANTHROPIC_API_KEY`, `RIGHTPRICE_MCP_TOKEN`, and now `DATABASE_URL`), never in the app.
+- **Parallel agents:** stage 1 by one builder (reviewers alongside); stages 2 to 5 in parallel tracks on their own branches,
+  merged one at a time with all checks re-run; stage 6 last. Estimate given to GP: one to two weeks this way.
+- Decisions to bring to GP as select-an-option questions when their stage starts: the threshold for "priced well above
+  its group" (stage 2); the roles and what each may do (stage 3); today's rates or order-date rates by default (stage 5).
+
+Stage 1, where it stands:
+- `db/schema.sql` is the table design (21 tables), a draft for GP to look over. PostgreSQL 16 accepts it. Nothing reads or
+  writes it yet and no data has moved.
+- Intended build: `psycopg` 3 and plain SQL (numbered files applied at start, no migration framework); the app uses the
+  database when `DATABASE_URL` is set and the files otherwise, so the code can be merged before GP creates the database and
+  switching back is one setting. The checks should run against a real PostgreSQL (a service container in the "checks" job).
+- A test PostgreSQL runs in the build container: `initdb` and `pg_ctl` are in `/usr/lib/postgresql/16/bin`; the data folder
+  must be one the `postgres` user can reach (`/var/lib/postgresql/...`, not the scratchpad), run with `su postgres -c`.
+- GP was given the steps to create the Azure database (27 Nov). He has not yet said it exists.
+
+Found while measuring on 27 Nov, and told to GP:
+- **The calibration's "held-back third" is not a fair test.** It splits by fabric code (`pilot.held_back`), and the 1,696
+  costed fabrics are only 455 distinct constructions per mill (433 across mills): 193 constructions (1,296 fabrics) sit on
+  both sides. The reported held-back improvement is optimistic. No rate changed because of this. Stage 5 fixes the split.
+- 1,482 of the 1,696 rest on at least one placeholder rate; 8 of 19 fabric types have under 30 fabrics; the pilot keeps no dates.
+- Most fabric codes were ordered once (378 of 4,495 priced codes have three or more orders), so a per-code price chart is
+  thin until more months are loaded; the Fab group chart is where the history shows.
 
 ### Where things stand
 
