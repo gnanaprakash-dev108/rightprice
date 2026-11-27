@@ -518,6 +518,7 @@ function suppliersTab(rows) {
 
 // ------------------------------------------------------------------ supplier page: one mill, for the meeting with it
 async function loadSupplier() {
+  await RPA.ready; if (!can("page:rightcost")) return;            // who may see it is known first (web/access.js)
   const sp = state.supplier; if (!sp) return;
   try {
     const res = await fetch("/api/supplier?mill=" + encodeURIComponent(sp.key));
@@ -855,6 +856,7 @@ function paintBadge() {
   if (n) b.append(h("span", { class: "badge", title: `${n} newly quoted ${n === 1 ? "fabric needs" : "fabrics need"} a look: above the usual range, sums off, a repeated order, or far below should-cost` }, n > 99 ? "99+" : String(n)));
 }
 async function loadAlerts() {
+  await RPA.ready; if (!canAny("page:rightcost", "page:dashboard")) return;
   try {
     const a = await (await fetch("/api/alerts")).json(), wasAll = JSON.stringify(state.alerts.all);
     state.alerts = a; paintBadge();
@@ -869,6 +871,7 @@ async function markSeen(ids, undo) {
   } catch (e) { toast(e.message, false); }
 }
 async function loadNegos(always) {
+  await RPA.ready; if (!can("page:rightcost")) return;
   try {
     const ng = await (await fetch("/api/negotiations")).json(), was = JSON.stringify(state.negos);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || state.negoKinds;
@@ -1135,7 +1138,7 @@ addEventListener("focus", catchUp); document.addEventListener("visibilitychange"
 addEventListener("beforeunload", e => { if (Object.keys(state.pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
 async function load() {
-  if (!can("page:rightcost")) return;           // a role without Right cost has no costings to load
+  await RPA.ready; if (!can("page:rightcost")) return;           // a role without Right cost has no costings to load
   try {
     const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];

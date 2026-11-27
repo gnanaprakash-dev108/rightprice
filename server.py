@@ -177,17 +177,19 @@ def route_keys():
 def _refusal_page(status, words):
     """What a browser is shown when RightPrice will not open for this person: plain words, in RightPrice's colours."""
     import html
-    title = {400: "RightPrice cannot tell who is asking", 401: "Sign in first",
-             503: "RightPrice cannot let you in just now"}.get(status, "You have not been given access yet")
+    title = {400: "RightPrice cannot tell who is asking", 401: "Sign in first", 503: "RightPrice cannot let you in just now"}.get(
+        status, "Not open to your role" if words.startswith("Your role") else "Your access is switched off"
+        if "switched off" in words else "You have not been given access yet")
+    # signing out helps only when the refusal is about who the person is (with sign-in off, /.auth/logout leads nowhere)
     link = ('<a href="/.auth/login/aad?post_login_redirect_uri=/">Sign in</a>' if status == 401
-            else '<a href="/.auth/logout">Sign out, to sign in with another account</a>')
+            else '<a href="/.auth/logout">Sign out, to sign in with another account</a>' if status == 403 else "")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             f'<title>RightPrice</title><style>body{{margin:0;font:15px/1.5 Manrope,"Segoe UI",system-ui,sans-serif;background:#F6F4EE;color:#1D2521}}'
             f'main{{max-width:34rem;margin:12vh auto;padding:0 16px}}h1{{font-size:22px;color:#1B4D3E;margin:0 0 12px}}'
             f'a{{color:#1B4D3E}}.mark{{display:inline-block;width:36px;height:36px;border-radius:10px;background:#1B4D3E;margin-bottom:16px}}'
             f'@media (prefers-color-scheme: dark){{body{{background:#0F1513;color:#E8EDE9}}h1,a{{color:#F2B23E}}}}</style></head>'
             f'<body><main><div class="mark" aria-hidden="true"></div><h1>{html.escape(title)}</h1><p>{html.escape(words)}</p>'
-            f'<p>{link}</p></main></body></html>')
+            f'{f"<p>{link}</p>" if link else ""}</main></body></html>')
 
 
 class AccessGate:
@@ -256,8 +258,9 @@ def rightcost_page():
 
 
 def _who(request):
-    """The signed-in person, from Azure's sign-in header; nothing off Azure."""
-    return (request.headers.get("x-ms-client-principal-name") or "")[:120] if request is not None else ""
+    """The signed-in person, as the permission check reads them (rules/access.py identity: the sign-in's name, lower case,
+    without live.com#, or its claims when the name is absent); nothing off Azure."""
+    return access.identity(request.headers)["email"][:120] if request is not None else ""
 
 
 # ------------------------------------------------------------------ quote alerts

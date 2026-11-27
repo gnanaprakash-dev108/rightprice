@@ -646,6 +646,68 @@ def main():
 
 
 # ===================================================================== stage 3: users, roles and permissions
+def front_end_calls(routes):
+    """Every address each page's own code calls, read from the front-end files: {permission of the page: {"METHOD /path"}}.
+    web/app.js: each earlier screen (PAGES.<id>), with the functions it uses, and the drop-down lists the screens load
+    first; web/rightcost.js: Right cost (the list, fabric and supplier pages, and the rail's alert count); web/access.js:
+    Users and roles. Left out on purpose: the earlier front end's own header search (setupSearch), which the shell hides."""
+    app_pages = {"dashboard": "page:dashboard", "pilot": "page:pilot", "cost": "page:cost", "compare": "page:cost", "bulk": "page:list",
+                 "pack": "page:pack", "yarn": "page:prices", "cotton": "page:prices", "rates": "page:prices", "ratecard": "page:prices",
+                 "settings": "page:prices", "costsheets": "page:costsheets", "intake": "do:edit_rates"}
+    templates = sorted({k.split(" ", 1)[1] for k in routes if " /api/" in k}, key=len, reverse=True)
+
+    def address(literal):
+        for t in templates:
+            if literal == t or ("{" in t and literal == t.split("{")[0]):
+                return t
+        return literal
+
+    def calls(text):
+        out = set()
+        for m in re.finditer(r"""["'`](/api/[A-Za-z0-9_/-]*)""", text):
+            before = text[max(0, m.start() - 40):m.start()]
+            rest = re.split(r"[;\n]", text[m.end():m.end() + 200], maxsplit=1)[0]      # the rest of the call, on its line
+            method = re.search(r"""method:\s*["'](\w+)["']""", rest)
+            if re.search(r"getJSON\(\s*$", before):
+                verb = "GET"
+            elif re.search(r"(postJSON|download|uaChange|uaPost|send)\(\s*$", before):
+                verb = "POST"
+            else:
+                verb = method.group(1).upper() if method else "GET"
+            out.add(f"{verb} {address(m.group(1))}")
+        return out
+
+    def blocks(src):
+        """The file's top-level definitions (function, const, PAGES.<id>, the start-up function) and their text."""
+        pat = re.compile(r"^(?:async\s+)?function\s+(\w+)|^const\s+(\w+)\s*=|^PAGES\.(\w+)\s*=|^\(async function (\w+)\(", re.M)
+        found = [(m.start(), m.group(1) or m.group(2) or ("PAGES." + m.group(3) if m.group(3) else None) or m.group(4)) for m in pat.finditer(src)]
+        out = {}
+        for i, (pos, name) in enumerate(found):
+            out[name] = out.get(name, "") + src[pos:found[i + 1][0] if i + 1 < len(found) else len(src)]
+        return out
+
+    def reach(name, defs, skip):
+        seen, todo = set(), [name]
+        while todo:
+            n = todo.pop()
+            if n in seen or n in skip:
+                continue
+            seen.add(n)
+            todo += [w for w in set(re.findall(r"\b(\w+)\b", defs[n])) if w in defs and w != n]
+        return set().union(*(calls(defs[n]) for n in seen))
+
+    read = lambda name: open(os.path.join(HERE, "web", name), encoding="utf8").read()
+    app = blocks(read("app.js"))
+    skip = {"setupSearch", "start", "route", "PAGES"}
+    boot = calls(app["start"])                                 # what every earlier screen loads first
+    per = {}
+    for pid, perm in app_pages.items():
+        per.setdefault(perm, set()).update(reach("PAGES." + pid, app, skip) | boot)
+    per.setdefault("page:rightcost", set()).update(calls(read("rightcost.js")))
+    per.setdefault("page:users", set()).update(calls(read("access.js")) - {"GET /api/me"})
+    return per
+
+
 def access_checks():
     """Users, roles and page-wise permissions (rules/access.py, server.py AccessGate) on this store: every address has a
     permission, and every address is tried with and without them; the switch (the app setting RIGHTPRICE_ADMINS) and how
@@ -660,6 +722,7 @@ def access_checks():
     from fastapi.routing import APIRoute
     from starlette.websockets import WebSocketDisconnect
     from websockets.sync.server import serve
+    import data_users
     from rules import access
     ok = True
 
@@ -727,6 +790,20 @@ def access_checks():
                   for p in sorted(D[role] - {q}) if p in access.PAGE_USES for a in access.PAGE_USES[p] if not access.opens(access.ROUTES.get(a), D[role] - {q})]
         check(tag + "Each page opens every address it reads (access.PAGE_USES), so unticking any one page, for any role, leaves every other page working",
               not broken and all(a in access.ROUTES for uses in access.PAGE_USES.values() for a in uses) and set(access.PAGE_USES) >= pages, "; ".join(broken[:5]))
+        called = front_end_calls(access.ROUTES)
+        is_read = lambda a: access.ROUTES.get(a) == access.MEMBER or all(str(n).startswith("page:") for n in access._needs(access.ROUTES.get(a)))
+        differs = {perm: (sorted(set(access.PAGE_USES.get(perm, [])) - {a for a in got if is_read(a)}), sorted({a for a in got if is_read(a)} - set(access.PAGE_USES.get(perm, []))))
+                   for perm, got in called.items() if perm.startswith("page:")}
+        unknown = sorted({a for got in called.values() for a in got if a not in access.ROUTES})
+        # and no address opens for a page that does not read it: its pages are exactly the pages whose lists name it
+        loose = {a: (sorted(access._needs(need)), sorted(users)) for a, need in access.ROUTES.items() if need not in (access.PUBLIC, access.SHELL, access.MEMBER)
+                 and is_read(a) for users in [{perm for perm, uses in access.PAGE_USES.items() if a in uses}] if users and set(access._needs(need)) != users}
+        check(tag + "access.PAGE_USES is what each page's code calls (read from web/app.js, rightcost.js and access.js), both ways; every "
+                    "address the screens call is in ROUTES; an address read by pages opens for exactly those pages; Bring in prices "
+                    "reads nothing beyond the drop-down lists",
+              all(not a and not b for a, b in differs.values()) and set(called) >= pages | {"page:users"} and not unknown
+              and {a for a in called["do:edit_rates"] if is_read(a)} == {"GET /api/meta"} and not loose,
+              str({k: v for k, v in differs.items() if v[0] or v[1]}) + str(unknown) + str(loose))
 
         # the AI assistant: each tool goes through the permission of the address it mirrors
         if server.mcp_server is not None:
@@ -742,11 +819,12 @@ def access_checks():
         # the setting off: everything as before
         r = c.get("/api/me").json()
         off = sweep({})
-        bad = {k: v for k, v in off.items() if v in (401, 403, 500)}
+        bad = {k: v for k, v in off.items() if v in (401, 500) or (v == 403 and k != "GET /api/users")}
         check(tag + f"Setting off: /api/me says permissions are off; every one of the {len(off)} addresses answers without a sign-in, "
-                    "none refused for a role, none failing",
+                    "none refused for a role, none failing (Users and roles alone is not shown: it lists people's addresses)",
               r["permissions_on"] is False and "off" in r["why"] and set(r["allowed"]) == set(access.ALL) and not bad
-              and c.get("/rightcost.js").status_code == 200 and socket_answer(None) == "echo", str(bad))
+              and off["GET /api/users"] == 403 and "Permissions are off" in c.get("/api/users", headers=H("x@example.com")).json()["detail"]
+              and c.get("/rightcost.js").status_code == 200 and socket_answer(None) == "echo" and r["sign_in"] == "not on Azure", str(bad))
         refused = c.post("/api/users/add", json={"email": "x@example.com", "role": "Admin"}, headers=H("x@example.com"))
         check(tag + "Setting off: nobody can change users (anyone signed in could make themselves an admin)",
               refused.status_code == 409 and "Permissions are off" in refused.json()["detail"])
@@ -757,9 +835,12 @@ def access_checks():
             return access.admins_setting()
         forms = {'"gp@example.com"': ["gp@example.com"], "GP <GP@Example.com>": ["gp@example.com"], "mailto:gp@example.com": ["gp@example.com"],
                  "gp@example.com.": ["gp@example.com"], "'gp@example.com' ; Asha Rao <asha@example.com>": ["gp@example.com", "asha@example.com"],
-                 "gp@example.com b@example.com": ["gp@example.com", "b@example.com"]}
+                 "gp@example.com b@example.com": ["gp@example.com", "b@example.com"], "live.com#GP@Example.com": ["gp@example.com"],
+                 "GP<gp@example.com> Asha<asha@example.com>": ["gp@example.com", "asha@example.com"],
+                 '"Gnana Prakash" <gp@example.com> b@example.com': ["gp@example.com", "b@example.com"]}
         read = {raw: admins_for(raw)[0] for raw in forms}
-        check(tag + "The setting is read as people type an address: in quotes, as Name <address>, with mailto:, with a full stop after it, several at once",
+        check(tag + "The setting is read as people type an address: in quotes, as Name <address> (several without commas too), with "
+                    "mailto:, with live.com# in front, with a full stop after it, several at once",
               read == forms, str(read))
         rejects = admins_for("gp@example, @example.com, gp@@example.com, gp at example.com, gp@example.c")
         check(tag + "What is still not an e-mail address is not taken as one", rejects[0] == [] and len(rejects[1]) == 7, str(rejects))
@@ -817,13 +898,17 @@ def access_checks():
         os.environ["WEBSITE_SITE_NAME"] = "rightprice"
         untrusted = c.get("/api/meta", headers=gp)
         untrusted_page = c.get("/", headers=gp)
+        seen = [c.get("/api/me", headers=gp).json()["sign_in"]]
         os.environ["WEBSITE_AUTH_ENABLED"] = "True"
         trusted_again = c.get("/api/meta", headers=gp).status_code
+        seen.append(c.get("/api/me", headers=gp).json()["sign_in"])
         os.environ.pop("WEBSITE_SITE_NAME", None)
         os.environ.pop("WEBSITE_AUTH_ENABLED", None)
-        check(tag + "On Azure with App Service sign-in off, no one is let in, not even an admin named in the setting, and the page says why",
+        check(tag + "On Azure with App Service sign-in off, no one is let in, not even an admin named in the setting, and the page says why "
+                    "(with no sign-out link, which would lead nowhere); /api/me shows how the app sees sign-in",
               untrusted.status_code == 503 and "sign-in (Authentication) is off" in untrusted.json()["detail"] and untrusted_page.status_code == 503
-              and "Authentication" in untrusted_page.text and trusted_again == 200)
+              and "Authentication" in untrusted_page.text and "/.auth/logout" not in untrusted_page.text and trusted_again == 200
+              and seen == ["off", "on"], str(seen))
 
         tok = "t" * 40
         os.environ["RIGHTPRICE_MCP_TOKEN"] = tok
@@ -837,6 +922,7 @@ def access_checks():
             check("[files] Setting on, no database: anyone not named in the setting is refused, saying a database is needed (the home page too); "
                   "the admins named get in",
                   no.status_code == 503 and "DATABASE_URL" in no.json()["detail"] and page.status_code == 503 and "DATABASE_URL" in page.text
+                  and "/.auth/logout" not in page.text and c.get("/api/me", headers=H("asha@example.com")).json()["why_kind"] == "setup"
                   and c.get("/api/meta", headers=gp).status_code == 200 and c.post("/api/cost", json=masters.EXAMPLE_ROW, headers=gp).status_code == 200)
             u = c.get("/api/users", headers=gp)
             check("[files] The admin page says users need the database", u.status_code == 503 and "database" in u.json()["detail"]
@@ -893,10 +979,23 @@ def access_checks():
         sockets = {role: socket_answer(email) for role, email in people.items()}
         check(tag + "The earlier screens' web socket opens through to the roles that may edit rates, and is closed (1008) to the others",
               sockets == {"Admin": "echo", "Rates editor": "echo", "Buyer": 1008, "Viewer": 1008}, str(sockets))
+        classic = c.get("/classic", headers=H("v@example.com"))
+        nosign = c.get("/")
+        check(tag + "A refused page offers to sign out only when the refusal is about the person (their role here), and to sign in when no one is signed in",
+              classic.status_code == 403 and "Not open to your role" in classic.text and "/.auth/logout" in classic.text
+              and nosign.status_code == 401 and "/.auth/login/aad" in nosign.text and "/.auth/logout" not in nosign.text)
         refusal = c.put("/api/table/Settings", json={}, headers=H("b@example.com")).json()["detail"]
         check(tag + "A refusal says plainly what the role may not do", refusal == "Your role (Buyer) may not edit rates. Ask an admin if you need to.", refusal)
         check(tag + "A personal Microsoft account written live.com#address is found by its address",
               c.get("/api/me", headers=H("live.com#V@example.com")).json()["role"] == "Viewer")
+        row = c.get("/api/costs", headers=gp).json()["rows"][1]
+        step = lambda headers, n: c.post("/api/negotiations/event", headers=headers, json={"key": f"Purchase orders|{row['code']}", "kind": "Mill's quote" if n == 0 else "Our counter",
+                                                                                      "price": row["price"] - n, "date": _dt.date.today().isoformat(), "code": row["code"], "seen": n})
+        by = [step(H("Live.com#B@Example.COM"), 0), step(P([{"typ": "preferred_username", "val": "B@Example.com"}]), 1)]
+        check(tag + "A step is recorded as the person the permission check read (lower case, without live.com#, from the claims when "
+                    "the name is absent)",
+              [x.status_code for x in by] == [200, 200] and [e["by"] for e in by[1].json()["events"]] == ["b@example.com", "b@example.com"],
+              str([x.text[:200] for x in by]))
 
         # each role's permissions changed on the admin page
         perm = lambda changes, by=gp: c.post("/api/users/permissions", json={"changes": changes}, headers=by)
@@ -1025,11 +1124,13 @@ def access_checks():
             home = c.get("/", headers=H("b@example.com"))
             quick = time.time() - t0
             busy = c.get("/api/meta", headers=H("b@example.com"))
+            busy_me = c.get("/api/me", headers=H("b@example.com")).json()
         finally:
             release.set()
             kept.WAIT = wait_was
         check(tag + "A hung database: the shell page is served at once, without it; a call for data is refused with 503 saying so, never let in on a guess",
-              home.status_code == 200 and quick < 0.9 and busy.status_code == 503 and "cannot be read just now" in busy.json()["detail"], f"{quick:.2f} s")
+              home.status_code == 200 and quick < 0.9 and busy.status_code == 503 and "cannot be read just now" in busy.json()["detail"]
+              and busy_me["why_kind"] == "database" and c.get("/api/me", headers=H("b@example.com")).json()["let_in"] is True, f"{quick:.2f} s")
         dead = store.SqlStore("postgresql://x:y@127.0.0.1:9/postgres?connect_timeout=3", folder=tempfile.mkdtemp(prefix="rightprice-dead-"))
         store._store = dead
         try:
@@ -1043,7 +1144,7 @@ def access_checks():
         os.environ.pop("RIGHTPRICE_ADMINS", None)
         check(tag + "Setting taken off again: everything open as before, the list of people kept",
               c.get("/api/meta").status_code == 200 and c.get("/api/meta", headers=H("stranger@example.com")).status_code == 200
-              and len(c.get("/api/users").json()["people"]) == 5)
+              and len(store.get()._read(data_users.people)) == 5 and c.get("/api/users", headers=gp).status_code == 403)
     stand_in.shutdown()
     txt = open(os.path.join(HERE, "web", "access.css"), encoding="utf8").read()
     check(tag + "web/access.css: every brace closed", txt.count("{") == txt.count("}"))

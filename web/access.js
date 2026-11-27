@@ -6,8 +6,11 @@
    Loaded before rightcost.js; it uses that file's helpers (h, fill, toast, svg, state, render) only when called. */
 "use strict";
 
-const RPA = { me: null, view: null, error: null, pending: {}, msg: "" };
+const RPA = { me: null, retrying: false, view: null, error: null, pending: {}, msg: "", orig: null };
+let meKnown;
+RPA.ready = new Promise(resolve => { meKnown = resolve; });       // the shell's own data waits for this: no call a role may not make
 const can = perm => !RPA.me || (RPA.me.allowed || []).includes(perm);
+const canAny = (...perms) => perms.some(can);
 // which permission each page of the shell, and each costing screen of the "New cost" popup, needs
 const PAGE_NEEDS = { dashboard: "page:dashboard", pilot: "page:pilot", yarn: "page:prices", cotton: "page:prices", rates: "page:prices", ratecard: "page:prices",
   settings: "page:prices", costsheets: "page:costsheets", intake: "do:edit_rates", rightcost: "page:rightcost", item: "page:rightcost", supplier: "page:rightcost", users: "page:users" };
@@ -15,20 +18,24 @@ const TAB_NEEDS = { cost: "page:cost", compare: "page:cost", bulk: "page:list", 
 const ACTION_TABS = { "Create cost": "cost", "Compare": "compare", "Bulk upload": "bulk", "Negotiation pack": "pack" };
 
 async function loadMe() {
-  try {
-    const r = await fetch("/api/me");
-    if (!r.ok) return;
-    RPA.me = await r.json();
-    // the menus offer only what this person may use: the Prices links, the popup's screens, the list's ⋮ actions
-    const linkOk = href => !href.startsWith("#") || !PAGE_NEEDS[href.slice(1)] || can(PAGE_NEEDS[href.slice(1)]);
-    const fly = CONFIG.flyouts.prices;
-    fly.groups = fly.groups.map(([g, links]) => [g, links.filter(([, href]) => linkOk(href))]).filter(([, links]) => links.length);
-    CONFIG.popupTabs = CONFIG.popupTabs.filter(([id]) => can(TAB_NEEDS[id]));
-    for (const sec of Object.keys(CONFIG.sections)) CONFIG.sections[sec] = CONFIG.sections[sec].filter(id => !PAGE_NEEDS[id] || can(PAGE_NEEDS[id]));   // the tabs above a page
-    const mod = CONFIG.modules.costs;
-    mod.moreActions = mod.moreActions.filter(a => !ACTION_TABS[a] || can(TAB_NEEDS[ACTION_TABS[a]]));
-    render();
-  } catch (e) { /* the server still refuses what this person may not do */ }
+  let me = null;
+  try { const r = await fetch("/api/me"); if (r.ok) me = await r.json(); } catch (e) { /* asked again below */ }
+  // the database slow or unreachable (or no answer at all): say so and ask again; never take it for "not let in"
+  if (!me || (me.permissions_on && !me.let_in && me.why_kind === "database")) {
+    RPA.retrying = true; render(); setTimeout(loadMe, 5000); return;
+  }
+  RPA.retrying = false; RPA.me = me;
+  applyMenus(); render(); meKnown();
+}
+function applyMenus() {
+  // the menus offer only what this person may use: the Prices links, the tabs above a page, the popup's screens, the list's ⋮ actions
+  const mod = CONFIG.modules.costs, fly = CONFIG.flyouts.prices;
+  if (!RPA.orig) RPA.orig = { groups: fly.groups, popupTabs: CONFIG.popupTabs, sections: Object.assign({}, CONFIG.sections), moreActions: mod.moreActions };
+  const o = RPA.orig, pageOkFor = id => !PAGE_NEEDS[id] || can(PAGE_NEEDS[id]);
+  fly.groups = o.groups.map(([g, links]) => [g, links.filter(([, href]) => !href.startsWith("#") || pageOkFor(href.slice(1)))]).filter(([, links]) => links.length);
+  CONFIG.popupTabs = o.popupTabs.filter(([id]) => can(TAB_NEEDS[id]));
+  for (const sec of Object.keys(o.sections)) CONFIG.sections[sec] = o.sections[sec].filter(pageOkFor);
+  mod.moreActions = o.moreActions.filter(a => !ACTION_TABS[a] || can(TAB_NEEDS[ACTION_TABS[a]]));
 }
 function pageNeed() {
   const id = state.users ? "users" : state.frame ? state.frame.split("/")[0] : state.library ? null : state.supplier ? "supplier" : state.detail ? "item" : "rightcost";
@@ -37,12 +44,21 @@ function pageNeed() {
 // not let in at all (the server serves the shell without asking the database, then refuses every call for data):
 // every page says why, in the server's words
 const shutOut = () => !!(RPA.me && RPA.me.permissions_on && !RPA.me.let_in);
-function pageOk() { if (shutOut()) return false; const need = pageNeed(); return !need || can(need); }
+function pageOk() { if (!RPA.me || shutOut()) return false; const need = pageNeed(); return !need || can(need); }
 function noPage(main) {
   $("#selbar").hidden = true;
-  if (shutOut()) return fill(main, h("div", { class: "empty ua-nopage" }, h("b", {}, RPA.me.signed_in ? "You have not been given access yet" : "Sign in first"),
-    h("p", {}, RPA.me.why || "Ask an admin to add you."), h("p", {}, h("a", { href: RPA.me.signed_in ? "/.auth/logout" : "/.auth/login/aad?post_login_redirect_uri=/" },
-      RPA.me.signed_in ? "Sign out, to sign in with another account" : "Sign in"))));
+  if (!RPA.me) return fill(main, h("div", { class: "empty ua-nopage" }, RPA.retrying
+    ? [h("b", {}, "The database is slow or unreachable"), h("p", {}, "RightPrice is trying again every few seconds; this page opens by itself when it answers.")]
+    : "Loading…"));
+  if (shutOut()) {
+    const me = RPA.me, k = me.why_kind;
+    const title = k === "sign_in" ? "Sign in first" : k === "person" ? (/switched off/.test(me.why || "") ? "Your access is switched off" : "You have not been given access yet")
+      : "RightPrice cannot let you in just now";
+    // a way out only when the refusal is about who the person is
+    const link = k === "sign_in" ? h("a", { href: "/.auth/login/aad?post_login_redirect_uri=/" }, "Sign in")
+      : k === "person" ? h("a", { href: "/.auth/logout" }, "Sign out, to sign in with another account") : null;
+    return fill(main, h("div", { class: "empty ua-nopage" }, h("b", {}, title), h("p", {}, me.why || ""), link ? h("p", {}, link) : null));
+  }
   fill(main, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') })),
     h("div", { class: "empty ua-nopage" }, h("b", {}, "This page is not open to your role"), h("p", {},
       `Your role (${(RPA.me && RPA.me.role) || "none"}) may not use it. Ask an admin if you need to.`)));
@@ -63,6 +79,7 @@ async function uaPost(path, body) {
   return d;
 }
 async function loadUsers() {
+  await RPA.ready; if (!can("page:users")) return;
   try {
     const r = await fetch("/api/users"), d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || r.statusText);

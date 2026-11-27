@@ -58,25 +58,31 @@ MEMBER = "anyone let in"                    # the lists for the drop-downs, wher
 # (key, what it is, what a refusal says the role may not do, for a page: what unticking it hides and what still shows)
 PERMISSIONS = [
     ("page:dashboard", "Home: Dashboard", "see the Dashboard",
-     "Unticked, the Dashboard is not offered (it is the home page, so the role sees a notice there). Its panels show the "
-     "fabric list, quote alerts and the tracker, which Right cost and Bulk upload also show."),
+     "Unticked, the Dashboard (the home page) shows a notice instead. Its figures still reach the role elsewhere: the "
+     "fabric list and quote alerts in Right cost and Bulk upload, the tracker in Right cost, the pilot results on Pilot "
+     "results, the cotton prices and the mill rate card on the Prices pages."),
     ("page:pilot", "Home: Pilot results", "see the pilot results",
-     "Unticked, Pilot results is not offered. No other page shows it."),
+     "Unticked, Pilot results is not offered. The Dashboard still shows the pilot's summary (should-cost against the "
+     "price paid by fabric type and by supplier, and the overall fit) to a role that has the Dashboard."),
     ("page:rightcost", "Right cost: the list, each fabric's page, supplier pages, the tracker's steps and quote alerts (to look at)", "see Right cost",
      "Unticked, Right cost, the fabric pages and the supplier pages are not offered. Quote alerts still show on the "
-     "Dashboard, and fabric-list rows in Bulk upload, Compare and the negotiation pack."),
+     "Dashboard; fabric-list rows in Bulk upload, Compare and the negotiation pack; purchase orders summed by fabric "
+     "type and by supplier on the Dashboard."),
     ("page:cost", "Create cost and Compare (cost a fabric; download its cost sheet)", "cost a fabric",
-     "Unticked, Create cost and Compare are not offered. Right cost's fabric pages still cost a fabric."),
+     "Unticked, Create cost and Compare are not offered. Right cost's fabric pages still cost a fabric (with the rates it "
+     "uses), and the drop-down lists every screen loads still carry the yarn rates."),
     ("page:list", "Bulk upload: the fabric list (to look at), costing a filled template, downloads", "see the fabric list",
      "Unticked, Bulk upload is not offered. The list's rows still show on the Dashboard, in Compare, in the negotiation "
      "pack and in Right cost."),
     ("page:pack", "Negotiation pack", "make a negotiation pack",
      "Unticked, the negotiation pack is not offered. Its rows still show in Right cost and Bulk upload."),
     ("page:prices", "Prices: yarn and cotton prices, rate tables, mill rate card, calculation settings (to look at)", "see the rate tables and prices",
-     "Unticked, these pages are not offered. The yarn rates still reach every role let in, in the drop-down lists every "
-     "screen loads, and on the Dashboard."),
+     "Unticked, the price and rate pages are not offered. The yarn master with its rates still reaches every role let in "
+     "(the drop-down lists every screen loads); the Dashboard shows the cotton price by year, the mill rate card's print "
+     "and quantity terms and the order size slabs; Create cost and Right cost show every rate a costing uses."),
     ("page:costsheets", "Prices: mill cost sheets (to look at)", "see the mill cost sheets",
-     "Unticked, Mill cost sheets is not offered. No other page shows them."),
+     "Unticked, Mill cost sheets is not offered. No other page shows the mills' sheets; a draft that was applied shows "
+     "in the rate tables' Basis."),
     ("page:users", "Users and roles (this page)", "see who may use RightPrice", ""),
     ("do:edit_rates", "Edit rates: rate tables, yarn and cotton prices, Bring in prices, and the earlier screens (classic)", "edit rates", ""),
     ("do:apply_drafts", "Apply mill cost sheet drafts to the rate master", "apply mill cost sheet drafts", ""),
@@ -114,7 +120,7 @@ ROUTES = {
     "GET /openapi.json": MEMBER,
     "GET /api/store": MEMBER,
     "GET /api/meta": MEMBER,                 # the drop-down lists every screen loads first (the yarn master with its rates)
-    "GET /api/dashboard": ("page:dashboard", "page:prices"),         # Yarn prices sets the master against the market from it
+    "GET /api/dashboard": "page:prices",     # Yarn prices sets the master against the market from it (the Dashboard page reads /api/insights)
     "GET /api/insights": "page:dashboard",
     "GET /api/negotiations/summary": "page:dashboard",
     "GET /api/pilot": "page:pilot",
@@ -164,13 +170,15 @@ ROUTES = {
     "POST /api/users/permissions": "do:manage_users",
 }
 
-# what each page reads, from the screens' own code (web/app.js, web/rightcost.js; 27 Nov 2026). check_server.py checks
-# that each page's permission opens every address on its list, so unticking another page cannot break it.
+# what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/app.js (each
+# earlier screen, with the drop-down lists it loads first), web/rightcost.js (Right cost), web/access.js (this page).
+# check_server.py compares this with the addresses each page's code calls, both ways, and checks that each page's
+# permission opens every address on its list, so unticking another page cannot break it.
 PAGE_USES = {
     "page:dashboard": ["GET /api/meta", "GET /api/insights", "POST /api/list", "GET /api/alerts", "GET /api/negotiations/summary"],
     "page:pilot": ["GET /api/meta", "GET /api/pilot"],
-    "page:rightcost": ["GET /api/meta", "GET /api/costs", "GET /api/negotiations", "GET /api/alerts", "POST /api/cost",
-                       "GET /api/supplier", "GET /api/suppliers", "POST /api/costs/download"],
+    "page:rightcost": ["GET /api/costs", "GET /api/negotiations", "GET /api/alerts", "POST /api/cost", "GET /api/supplier",
+                       "POST /api/costs/download"],
     "page:cost": ["GET /api/meta", "POST /api/cost", "POST /api/cost-sheet", "POST /api/list"],     # Create cost and Compare
     "page:list": ["GET /api/meta", "POST /api/list", "POST /api/list/download", "GET /api/template"],
     "page:pack": ["GET /api/meta", "POST /api/pack"],
@@ -215,7 +223,8 @@ def valid_email(text):
 
 
 def setting_entry(text):
-    """One address as people write it: "gp@x.com" (quoted), GP <gp@x.com>, mailto:gp@x.com, gp@x.com. (a full stop)."""
+    """One address as people write it: "gp@x.com" (quoted), GP <gp@x.com>, mailto:gp@x.com, gp@x.com. (a full stop),
+    live.com#gp@outlook.com (how a personal Microsoft account can arrive; the sign-in's value has that dropped too)."""
     s = str(text or "").strip()
     inside = re.search(r"<([^<>]*)>", s)
     if inside:
@@ -223,7 +232,19 @@ def setting_entry(text):
     s = s.strip().strip("\"'`").strip()
     if s.lower().startswith("mailto:"):
         s = s[7:]
+    if s.lower().startswith("live.com#"):
+        s = s[len("live.com#"):]
     return s.strip().rstrip(".").strip("\"'`").strip()
+
+
+def _setting_words(part):
+    """The entries in one comma-separated part: each <address>, and outside the brackets each word with an @ in it (a
+    word without one beside a bracketed address is the person's name). Without brackets, each word is an entry."""
+    if "<" not in part:
+        return part.split()
+    inside = re.findall(r"<[^<>]*>", part)
+    rest = re.sub(r"<[^<>]*>|\"[^\"]*\"", " ", part).split()
+    return inside + [w for w in rest if "@" in w or "<" in w or ">" in w]
 
 
 _logged = {}
@@ -239,7 +260,7 @@ def admins_setting():
     for part in re.split(r"[,;\n]+", raw):
         if not part.strip():
             continue
-        for word in ([part] if "<" in part else part.split()):     # "GP <gp@x.com>" is one entry; "a@x.com b@y.com" two
+        for word in _setting_words(part):
             addr = valid_email(setting_entry(word))
             if addr:
                 good.append(addr)
@@ -330,13 +351,13 @@ def _before_database(me, setting):
     admins, _ = setting
     hint = "" if admins else " " + NO_ADMIN_WORDS
     if not trusted():
-        return 503, UNTRUSTED_WORDS
+        return 503, UNTRUSTED_WORDS, "setup"
     if not me["signed_in"]:
-        return 401, NO_SIGN_IN_WORDS + hint
+        return 401, NO_SIGN_IN_WORDS + hint, "sign_in"
     if me["email"] in admins:
         return "admin"
     if store.get().kind == "files":
-        return 503, FILES_WORDS + hint
+        return 503, FILES_WORDS + hint, "setup"
     return None
 
 
@@ -344,7 +365,8 @@ def person(headers):
     """The person asking and what they may do. let_in False comes with the status and the words of the refusal."""
     setting = admins_setting()
     me = identity(headers)
-    out = dict(me, on=setting is not None, role=None, from_setting=False, let_in=False, allowed=[], status=None, why=None)
+    out = dict(me, on=setting is not None, role=None, from_setting=False, let_in=False, allowed=[], status=None, why=None,
+               why_kind=None)          # sign_in | person (not added, switched off) | database (try again) | setup
     if setting is None:
         return dict(out, let_in=True, allowed=list(ALL), why=OFF_WORDS)
     hint = "" if setting[0] else " " + NO_ADMIN_WORDS
@@ -352,20 +374,22 @@ def person(headers):
     if first == "admin":
         return dict(out, role=ADMIN, from_setting=True, let_in=True, allowed=list(ALL))
     if first is not None:
-        return dict(out, status=first[0], why=first[1])
+        return dict(out, status=first[0], why=first[1], why_kind=first[2])
     try:
         found, changed = store.get()._read(lambda c: (data_users.find(c, [me["email"]]), data_users.overrides(c)))
-    except store.StoreUnavailable:
-        return dict(out, status=503, why=DB_DOWN_WORDS + hint)
+    except Exception:           # unreachable, busy, or a SQLite file locked by another process: never let in on a guess
+        return dict(out, status=503, why=DB_DOWN_WORDS + hint, why_kind="database")
     if not found:
         return dict(out, status=403, why=f"You have not been given access to RightPrice yet. Ask an admin to add you: you are "
-                                         f"signed in as {me['email']}." + hint)
+                                         f"signed in as {me['email']}." + hint, why_kind="person")
     rec = found[0]
     out.update(name=rec["name"] or me["name"], role=rec["role"])
     if not rec["active"]:
-        return dict(out, status=403, why="Your access to RightPrice has been switched off. Ask an admin if this is a mistake." + hint)
+        return dict(out, status=403, why="Your access to RightPrice has been switched off. Ask an admin if this is a mistake." + hint,
+                    why_kind="person")
     if rec["role"] not in ROLES:
-        return dict(out, status=403, why=f"Your role ({rec['role']}) is not one RightPrice knows. Ask an admin to set it again.")
+        return dict(out, status=403, why=f"Your role ({rec['role']}) is not one RightPrice knows. Ask an admin to set it again.",
+                    why_kind="person")
     return dict(out, let_in=True, allowed=sorted(effective(rec["role"], changed), key=ALL.index))
 
 
@@ -393,7 +417,7 @@ def check(headers, need):
     if need == SHELL:           # the shell carries no data: decided without the database; the page then asks /api/me
         setting = admins_setting()
         first = _before_database(identity(headers), setting) if setting is not None else None
-        return first if isinstance(first, tuple) else None
+        return first[:2] if isinstance(first, tuple) else None
     p = person(headers)
     if not p["let_in"]:
         return p["status"], p["why"]
@@ -419,7 +443,16 @@ def me(headers):
     setting = admins_setting()
     return {"permissions_on": p["on"], "signed_in": p["signed_in"], "email": p["email"], "name": p["name"], "role": p["role"],
             "from_setting": p["from_setting"], "let_in": p["let_in"], "allowed": p["allowed"], "why": p["why"],
-            "setting_ignored": setting[1] if admin and setting else [], "marks_note": MARKS_NOTE}
+            "why_kind": p["why_kind"], "sign_in": sign_in_seen(), "setting_ignored": setting[1] if admin and setting else [],
+            "marks_note": MARKS_NOTE}
+
+
+def sign_in_seen():
+    """What the app sees of App Service sign-in: "on", "off" (then, with permissions on, nobody is let in), or "not on
+    Azure" (a laptop or the checks: nothing to see)."""
+    if not os.environ.get("WEBSITE_SITE_NAME"):
+        return "not on Azure"
+    return "on" if trusted() else "off"
 
 
 # ------------------------------------------------------------------ the admin page
@@ -446,7 +479,14 @@ def _admin(headers):
 
 def users_view(headers=None):
     """Everything the admin page shows: the people, each role's permissions (and which differ from the defaults), what
-    unticking each page does, the AI assistant's fixed role, and the record of changes."""
+    unticking each page does, the AI assistant's fixed role, and the record of changes. Only with permissions on, and
+    only to an admin: with them off anyone signed in could read the people's addresses and the record."""
+    if not enforced():
+        raise Refused(403, f"Permissions are off, so this page is not shown: anyone signed in could read it. It opens to "
+                           f"the admins once the app setting {ADMINS_ENV} is added (docs/AZURE_DEPLOY.md, \"Users and roles\").")
+    p = person(headers or {})
+    if not p["let_in"] or "page:users" not in p["allowed"]:
+        raise Refused(403, f"Your role ({p['role'] or 'none'}) may not see who may use RightPrice.")
     st = _store_for_users()
 
     def get(c):
@@ -459,7 +499,7 @@ def users_view(headers=None):
         tools = dict(mcp_server.MIRRORS)
     except Exception:
         tools = {}
-    return {"permissions_on": setting is not None, "why_off": None if setting else OFF_WORDS,
+    return {"permissions_on": True, "why_off": None,
             "setting_admins": setting[0] if setting else [], "setting_ignored": setting[1] if setting else [],
             "roles": ROLES, "assistant": {"name": ASSISTANT, "allowed": [k for k in ALL if k in ASSISTANT_ALLOWED], "tools": tools,
                                           "note": ASSISTANT_NOTE},

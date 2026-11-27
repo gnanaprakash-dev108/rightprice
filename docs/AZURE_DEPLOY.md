@@ -201,9 +201,10 @@ What a tick does, plainly:
   strict: a role without one cannot do it anywhere, whatever a screen shows.
 - **Pages** decide which pages a role can open. They are **not** a way to keep figures secret. Data several pages read
   stays open to a role that has any of them, so unticking one page never breaks another (the Dashboard reads the fabric
-  list; Yarn prices reads the Dashboard's yarn figures; Right cost's fabric pages cost the fabric). The drop-down lists
-  every screen loads carry the yarn master with its rates, for anyone let in. The admin page says, for each page, what
-  unticking it hides and where its figures still show.
+  list and the quote alerts; Compare reads the fabric list; Right cost's fabric pages cost the fabric). Many figures
+  show on more than one page: the Dashboard shows the pilot results by fabric type and by supplier, the cotton price by
+  year and the mill rate card's terms; the drop-down lists every screen loads carry the yarn master with its rates, for
+  anyone let in. The admin page says, for each page, what unticking it hides and where its figures still show.
 - The screens shown inside the shell from the earlier front end (the Dashboard, the price pages, Bulk upload, Create
   cost, Compare, the pack, Mill cost sheets) still show their buttons to a role that may not use them; pressing one
   answers "Your role (...) may not ...". Stage 4 moves these screens into the shell and can hide them then.
@@ -225,8 +226,15 @@ Do this only with the database in use (`/api/store` says `"store": "postgres"` a
 is kept in the database. With the setting on and no database, only the addresses in the setting can use the site, and
 everyone else is told a database is needed.
 
-1. Find the exact address Microsoft gives you: open `https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/api/me`
-   (signed in). Note `"email"`.
+Going back is always one step: deleting the app setting `RIGHTPRICE_ADMINS` (and restarting) returns the site to how it
+is today, open to everyone who can sign in. The list of people and the record are kept for later.
+
+1. Before adding anything, open `https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/api/me`
+   (signed in) and check two things:
+   - `"email"` is your own address, as you sign in. That exact address goes into the setting.
+   - `"sign_in"` says `"on"`. It is how the app reads App Service's own setting `WEBSITE_AUTH_ENABLED`, which the
+     build session could not see on the live site. If it says `"off"` while Authentication is on in the portal, do not
+     add `RIGHTPRICE_ADMINS`: with it, nobody would be let in. Tell the build session what `/api/me` shows.
 2. Web app `rightprice` > **Settings** > **Environment variables** > **App settings** > **+ Add**:
 
    | Name | Value |
@@ -234,12 +242,12 @@ everyone else is told a database is needed.
    | `RIGHTPRICE_ADMINS` | that address, for example `gp@yourcompany.com` (more than one: separate them with commas) |
 
    Apply, and confirm the restart. The app also reads `"gp@yourcompany.com"`, `GP <gp@yourcompany.com>`,
-   `mailto:gp@yourcompany.com` and a full stop after the address. Anything that is still not an e-mail address is
+   `mailto:gp@yourcompany.com`, `live.com#gp@outlook.com` and a full stop after the address. Anything that is still not an e-mail address is
    ignored (an admin sees which on Users and roles). If the setting names no valid address at all, nobody is an admin
    from it: everyone refused is told "the app setting RIGHTPRICE_ADMINS names no valid e-mail address", and the Log
    stream says so too.
 3. After a minute, open the site, then the user icon > **Users and roles**. It should say "Permissions are on" and show
-   your address as always Admin. Add yourself as Admin in the list too, so you stay an admin if the setting is changed
+   your address as always Admin. (If instead you are shut out, delete `RIGHTPRICE_ADMINS` again: the site is as before.) Add yourself as Admin in the list too, so you stay an admin if the setting is changed
    later. From now on, the others see "You have not been given access yet" until you add them, so add them straight
    away (next steps).
 
@@ -265,8 +273,8 @@ switched off: make someone else Admin first.
 ### Switching it off
 
 Delete the app setting `RIGHTPRICE_ADMINS` and restart: everyone who can sign in may use everything again. The list of
-people and the record are kept for when it is added back. While it is off, nothing on Users and roles can be changed
-(the app cannot tell an admin from anyone else then).
+people and the record are kept for when it is added back. While it is off, the Users and roles page is not shown and
+nothing on it can be changed (the app cannot tell an admin from anyone else then, and the page lists people's addresses).
 
 **Do not use `RIGHTPRICE_UI=classic` while permissions are on**: it runs the earlier screens alone, without the app that
 checks permissions, so everyone signed in could change rates.
