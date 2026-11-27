@@ -130,6 +130,25 @@ Found while measuring on 27 Nov, and told to GP:
 
 ### Where things stand
 
+- **27 Nov, second session: stage 1 merged (pull request 24, merge commit 98756be) and deployed: the deploy run was green
+  (finished 11:38 UTC).** Without `DATABASE_URL` the site runs on the files as before. The build session cannot sign in:
+  **the live site has not been confirmed by eye since this deploy.** After the deploy the site answered Microsoft
+  sign-in's 401 to a request without sign-in (the front door is up; that does not show the app started).
+- **GP was told on 27 Nov he may now add `DATABASE_URL`** (steps: docs/AZURE_DEPLOY.md, "The database"). **The next
+  session should first ask GP what `/api/store` shows** (`"store": "postgres"`, `"ok": true`, and `copied_in` >
+  `checked` > `summary`; it holds no password) and whether Right cost, the list, the Dashboard and a supplier page look
+  as before. If `ok` is false, the `error` and `advice` there say what happened; nothing is lost either way.
+- This handover note is on the branch and in its own pull request, left unmerged on purpose so no redeploy restarts the
+  site while GP switches it over; merge it (or carry it in) with the next pull request.
+- **Next: stages 2 to 5**, in parallel tracks on their own branches, merged one at a time with all checks re-run (GP
+  agreed); then stage 6. Each track builds its tables as `db/00N_<stage>.sql` (the full draft is `db/schema.sql`; its
+  `quote`, `negotiation_step`, `rate_version`, `alert_seen` and `cost_sheet_row` differ from the tables in use, so a
+  track that needs them changes them with `ALTER TABLE` in its own numbered file) and its rules in `rules/`. Decisions to
+  bring to GP as select-an-option questions when each stage starts: the threshold for "priced well above its group"
+  (stage 2); the roles and what each may do (stage 3); today's rates or order-date rates by default (stage 5). What GP
+  sends: the 10,000 invoices and the PLM specifications for their codes (stage 2); the 10 names and roles (stage 3);
+  yarn prices July to November and mill cost sheets as they come (stage 5).
+
 - Merged and deployed (deploy runs green): pull requests 10 to 16.
   - 10: negotiation brief fixes (usual range per fabric type, mirror opening price, placeholders weighed).
   - 11: negotiation pack (one printable page per mill sheet).
