@@ -109,8 +109,12 @@ class McpGate:
             # one JSON answer per POST and no sessions: there is no stream to open and nothing to delete
             return await answer(405, {"detail": "The MCP endpoint takes POST requests only."}, [(b"allow", b"POST")])
         if path == "/mcp/health":
+            try:
+                version, unavailable = store.get().version("rates"), None
+            except store.StoreUnavailable as e:
+                version, unavailable = None, str(e)
             return await answer(200, {"ok": True, "app": "RightPrice", "code": _code_version(), "store": store.get().kind,
-                                      "rate_master_version": store.get().version("rates") if not getattr(store.get(), "error", None) else None,
+                                      "rate_master_version": version, "store_unavailable": unavailable,
                                       "tools": len(await mcp_server.mcp.list_tools())})
         return await _mcp_app(dict(scope, path="/mcp", raw_path=b"/mcp"), receive, send)
 

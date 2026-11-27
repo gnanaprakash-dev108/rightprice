@@ -65,6 +65,7 @@ def list_add(sel: dict, who: str = ""):
     return {"saved": True, "id": row["Id"]}
 
 
+@common.one_at_a_time
 def list_upload(filename, data, who=""):
     """Many fabrics at once: the RightPrice template, or a mill's price sheet as it comes."""
     m = common.get_masters()

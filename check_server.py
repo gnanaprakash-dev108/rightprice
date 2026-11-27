@@ -201,8 +201,13 @@ def main():
             check("Dated copy kept on the first change of the day",
                   any(f.startswith("Rate_Master backup") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
         else:       # a database keeps every version: the one before the edit is still there, and the files are not written
-            check("Dated copy kept on the first change of the day (the earlier version, in the database)",
-                  st["counts"]["rate versions"] >= 2 and st["rate_master_in_use"]["reason"].startswith("Table edited: Yarn_Rates")
+            import store as _store
+            with _store.get().tx() as tx_:
+                kept_, now_ = [pd.read_excel(io.BytesIO(bytes(r[0])), sheet_name="Yarn_Rates") for r in
+                               tx_.all("SELECT workbook FROM rate_version ORDER BY id DESC LIMIT 2")][::-1]
+            rate_ = lambda df: float(df.set_index("Yarn key").loc["Cotton 40S", "Rate Rs/kg"])
+            check("Dated copy kept on the first change of the day (the earlier version, in the database, as it was)",
+                  st["rate_master_in_use"]["reason"].startswith("Table edited: Yarn_Rates") and rate_(kept_) != 355 and rate_(now_) == 355
                   and not any(f.startswith("Rate_Master") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
         row40[ri] = "abc"
         bad = c.put("/api/table/Yarn_Rates", json={"columns": yr["columns"], "rows": rows})
@@ -744,7 +749,7 @@ def child():
                       "cost": c.post("/api/cost", json=masters.EXAMPLE_ROW).status_code, "home": c.get("/").status_code}
     if task == "export":
         import store
-        result = store.export(os.environ["RIGHTPRICE_CHECK_EXPORT"])
+        result = store.export(os.environ["RIGHTPRICE_CHECK_EXPORT"])        # as `python store.py export <folder>` does
     with open(out, "w", encoding="utf8") as f:
         json.dump(result, f, sort_keys=True, default=str)
     return 0
@@ -843,7 +848,7 @@ def _finish(p, label, show=False):
     return p.returncode == 0, stdout + stderr
 
 
-def store_checks(check, kinds):
+def store_checks(check, kinds, fresh, pg_url=None):
     """The data layer on its own, on each database: tables added once, writers waiting for each other across
     connections, steps removed in order, the list's columns kept, a dropped connection made again."""
     import store
@@ -898,9 +903,81 @@ def store_checks(check, kinds):
                   and s._read(lambda c: c.one("SELECT pg_backend_pid()")[0]) != pid)
         for x in others + [s]:
             x._drop()
+        # a step saved by an earlier version, without "by": copied in, and read back without it
+        old = tempfile.mkdtemp(prefix="rightprice-old-")
+        with open(os.path.join(old, "negotiations.json"), "w", encoding="utf8") as f:
+            json.dump({"Fabric list|1": {"key": "Fabric list|1", "events": [{"id": "e1", "at": "2026-11-26T09:00:00", "date": "2026-11-26",
+                                                                            "kind": "Mill's quote", "price": 180, "note": ""}]}}, f)
+        with open(os.path.join(old, "alerts_seen.json"), "w", encoding="utf8") as f:
+            json.dump([1, "2"], f)
+        o = store.SqlStore(fresh(kind), folder=old)
+        check(f"[{kind}] A tracker step saved before steps had a 'by' copies in and reads back as it was",
+              o.error is None and o.read_negotiations() == store.FileStore(old).read_negotiations(), str(o.error))
+        # the files' note: an empty database where these files were already moved is refused, nothing copied
+        e = store.SqlStore(fresh(kind), folder=old)
+        check(f"[{kind}] An empty database for files already moved is refused, and nothing is copied",
+              e.started is False and "already copied into a database" in (e.error or ""))
+        # files worked on after the move; then keep-database sets them aside (they are not changed)
+        with open(os.path.join(old, "alerts_seen.json"), "w", encoding="utf8") as f:
+            json.dump(["1", "2", "3"], f)
+        o2 = store.SqlStore(o.url, folder=old)
+        stopped = o2.started is False and "alerts_seen.json" in (o2.error or "")
+        before_files = _hashes(old)
+        store.SqlStore(o.url, folder=old, start=False).keep_database()
+        o3 = store.SqlStore(o.url, folder=old)
+        check(f"[{kind}] Files worked on after the move stop the start; keep-database lets it start, the files untouched",
+              stopped and o3.started and o3.read_seen() == {"1", "2"} and _hashes(old) == before_files, str(o3.error))
+        for x in (o, e, o2, o3):
+            x._drop()
+    # an outage at start passes by itself: the store tries again
+    if pg_url:
+        import socket
+        from urllib.parse import urlsplit
+        target = urlsplit(pg_url)
+        lsock = socket.socket()
+        lsock.bind(("127.0.0.1", 0))
+        port = lsock.getsockname()[1]
+        lsock.close()          # nothing listens there yet: the database "cannot be reached"
+        late = pg_url.replace(f"{target.hostname}:{target.port}", f"127.0.0.1:{port}")
+        d = store.SqlStore(late, folder=tempfile.mkdtemp(prefix="rightprice-late-"))
+        d.RETRY = 0.5
+        down = d.started is False and "could not be reached" in (d.error or "")
+
+        def relay():
+            srv = socket.socket()
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", port))
+            srv.listen(5)
+            while True:
+                a, _ = srv.accept()
+                b = socket.create_connection((target.hostname, target.port))
+                for x, y in ((a, b), (b, a)):
+                    threading.Thread(target=lambda x=x, y=y: [y.sendall(chunk) for chunk in iter(lambda: x.recv(65536), b"")], daemon=True).start()
+        threading.Thread(target=relay, daemon=True).start()
+        time.sleep(1)
+        check("[postgres] A database that was down when the app started is used once it answers, with no restart",
+              down and d.read_seen() == set() and d.started, str(d.error))
+        d._drop()
+    # passwords as people type them; a relative SQLite path
+    p = store.SqlStore("postgresql://rpadmin:Pa@ss:w/rd#1%x?y@db.example.com:5432/postgres?sslmode=require", start=False)
+    q = store.SqlStore("postgresql://rpadmin:P%40ss%23w0rd@db.example.com/postgres?sslmode=require", start=False)
+    check("A password in DATABASE_URL may be written as it is or percent-encoded; neither is shown",
+          p._pg["password"] == "Pa@ss:w/rd#1%x?y" and p._pg["host"] == "db.example.com" and p._pg["sslmode"] == "require"
+          and q._pg["password"] == "P@ss#w0rd" and "ss:w" not in p.where() + p.scrub("x Pa@ss:w/rd#1%x?y x") and q.where() == "db.example.com:5432/postgres")
+    r = store.SqlStore("sqlite:///rightprice-data/rp.db")
+    check("A SQLite file named by a relative path is refused (a deploy would replace it)", r.started is False and "full path" in (r.error or ""))
 
 
 def parent():
+    pg = _Postgres()
+    try:
+        return _parent(pg)
+    finally:            # the throwaway databases go, whatever happened
+        if not pg.why:
+            pg.drop()
+
+
+def _parent(pg):
     ok = True
 
     def check(name, good, detail=""):
@@ -908,7 +985,6 @@ def parent():
         ok &= bool(good)
         print(f"{name}: {'OK' if good else 'MISMATCH'} {detail}")
 
-    pg = _Postgres()
     if pg.why:
         need = os.environ.get("RIGHTPRICE_CHECK_REQUIRE_POSTGRES") == "1"
         print(f"PostgreSQL: {'MISMATCH' if need else 'not tried'}: {pg.why}")
@@ -958,13 +1034,15 @@ def parent():
         copied = moved.get("copied_in") or {}
         check(f"Moved into {kind}: the app copied the files in at its start and checked them",
               moved.get("store") == kind and moved.get("ok") and copied.get("checked", {}).get("equal") is True
-              and any("costings, equal to the paisa" in x for x in copied["checked"]["summary"])
+              and any("costed on both, equal to the paisa" in x for x in copied["checked"]["summary"])
               and moved["counts"]["fabric list rows"] == len(files_answers["list"]["rows"])
               and moved["counts"]["rate versions"] >= 2,          # the dated copy of the rate edit came in as an earlier version
               "; ".join(copied.get("checked", {}).get("summary", [])))
         print("   " + "; ".join(copied.get("checked", {}).get("summary", [])))
     after = _hashes(folder)
-    check("The files were only read: every file in the folder is byte for byte as before, none added", before == after)
+    note = after.pop("moved_to_database.json", None)
+    check("The files were only read: every file in the folder is byte for byte as before; the one added is the note of the move",
+          before == after and note is not None)
     # 2c. back from the database to files: the same answers again
     if moves:
         kind, url, _ = moves[-1]
@@ -993,21 +1071,38 @@ def parent():
             r = json.load(f)
         check("Files changed after the move: the app does not start on the database, says which file, and loses nothing",
               r["store"].get("ok") is False and "negotiations.json" in r["store"].get("error", "") and r["list"][0] == 503
-              and "changed after they were copied" in r["list"][1]["detail"] and r["home"] == 200)
+              and "changed after the database took them" in r["list"][1]["detail"] and "keep-database" in r["list"][1]["detail"] and r["home"] == 200)
+        gone = os.path.join(sp, "gone")
+        shutil.copytree(folder, gone)
+        for name in ("negotiations.json", "alerts_seen.json", "cost_sheets.json"):
+            os.remove(os.path.join(gone, name))
+        _finish(_run(kind, "refused", data=gone, url=url, out=os.path.join(sp, "gone.json")), "files moved away after the move")
+        with open(os.path.join(sp, "gone.json"), encoding="utf8") as f:
+            r = json.load(f)
+        check("Files moved away or deleted after the move: the app works on the database as before", r["store"].get("ok") is True and r["list"][0] == 200)
+        p = _run(kind, "export", data=changed, url=url, out=os.path.join(sp, "export2.json"), extra={"RIGHTPRICE_CHECK_EXPORT": os.path.join(sp, "exported2")})
+        good, _ = _finish(p, "export while the guard has stopped the app")
+        check("While the files' guard has stopped the app, the database can still be written out as files",
+              good and os.path.exists(os.path.join(sp, "exported2", "negotiations.json")))
     secret = "S3cret-Pa55word-x"
     p = _run("postgres", "refused", data=tempfile.mkdtemp(prefix="rightprice-none-"), out=os.path.join(sp, "down.json"),
              url=f"postgresql://rpadmin:{secret}@127.0.0.1:9/postgres?sslmode=disable&connect_timeout=3")
     _, text = _finish(p, "a database that cannot be reached")
     with open(os.path.join(sp, "down.json"), encoding="utf8") as f:
         r = json.load(f)
-    check("A database that cannot be reached: the pages answer 503 and say so; the home page still opens",
+    check("A database that cannot be reached: the pages answer 503 and say so; the home page still opens; no advice to go back to the files",
           r["list"][0] == 503 and "could not be reached" in r["list"][1]["detail"] and r["cost"] == 503 and r["home"] == 200
-          and r["store"]["ok"] is False and "Remove the app setting DATABASE_URL" in r["store"]["to_go_back"])
+          and r["store"]["ok"] is False and "tries the database again by itself" in r["store"]["advice"]
+          and "Do not remove DATABASE_URL" in r["store"]["advice"])
     check("A database that cannot be reached: the password is in no answer and no log line", secret not in json.dumps(r) and secret not in text)
     # the data layer on its own
-    store_checks(check, [("sqlite", sqlite_url("store.db"))] + ([("postgres", pg.new())] if not pg.why else []))
-    if not pg.why:
-        pg.drop()
+    n_db = [0]
+
+    def fresh(kind):
+        n_db[0] += 1
+        return pg.new() if kind == "postgres" else sqlite_url(f"store{n_db[0]}.db")
+    store_checks(check, [("sqlite", sqlite_url("store.db"))] + ([("postgres", pg.new())] if not pg.why else []), fresh,
+                 None if pg.why else pg.new())
     if os.environ.get("RIGHTPRICE_CHECK_KEEP") == "1":
         print("Kept:", sp)
     else:

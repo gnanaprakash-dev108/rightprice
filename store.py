@@ -24,6 +24,8 @@ Nothing here decides anything about fabrics or prices: that is rules/. The costi
 
     python store.py status            which store this setting gives, and what it holds
     python store.py export <folder>   the database's contents as files, in a new empty folder
+    python store.py keep-database     after the files were worked on while DATABASE_URL was off: keep the database
+                                      and set the files aside (they are not changed)
 """
 import contextlib
 import datetime as dt
@@ -33,9 +35,11 @@ import io
 import json
 import os
 import shutil
+import re
 import sqlite3
 import sys
 import threading
+import time
 
 import pandas as pd
 
@@ -51,6 +55,7 @@ QUOTE_COLUMNS = {"Saved on": "saved_on", "Fabric code": "fabric_code", "Descript
                  "Gap Rs/m": "gap_per_m", "Gap %": "gap_pct", "Id": "legacy_id", "Inputs": "choices", "Result": "costing",
                  "Mill": "sheet_row", "Problems": "problems", "Notes": "notes", "Upload": "upload"}
 KINDS = ("rates", "list", "negotiations", "seen", "sheets")
+MOVED_NOTE = "moved_to_database.json"      # left beside the files once they are copied into a database (they stay as they were)
 FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations": "negotiations.json",
          "seen": "alerts_seen.json", "sheets": "cost_sheets.json"}
 
@@ -58,6 +63,11 @@ FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations":
 class StoreUnavailable(Exception):
     """The store cannot be used: the database cannot be reached, or the copying in did not succeed. The web layer
     answers 503 with this text."""
+
+
+class Refusal(StoreUnavailable):
+    """The app will not use the database as things stand (the copying in did not check out, the files changed after the
+    move, an empty database where one was expected, a setting that cannot be read). The words say why and what to do."""
 
 
 class Conflict(Exception):
@@ -121,8 +131,15 @@ class FileStore:
         self._lock = threading.RLock()
 
     def describe(self):
-        return {"store": "files", "folder": self.folder,
-                "files": {FILES[k]: os.path.exists(p) for k, p in self.paths.items()}}
+        out = {"store": "files", "ok": True, "folder": self.folder, "files": {FILES[k]: os.path.exists(p) for k, p in self.paths.items()}}
+        try:
+            with open(os.path.join(self.folder, MOVED_NOTE), encoding="utf8") as f:
+                moved = json.load(f)
+            out["note"] = (f"These files were copied into a database on {moved.get('when')} ({moved.get('where')}). "
+                           "Anything changed there since then is not in these files.")
+        except (OSError, ValueError):
+            pass
+        return out
 
     def version(self, what):
         return _mtime(self.paths[what])
@@ -147,6 +164,16 @@ class FileStore:
                     kept = os.path.basename(copy)
             _write_atomic(path, data)
         return kept
+
+    def keep_copy(self, backup, if_absent=False):
+        """A dated copy of the rate master as it is now, beside it (' backup 20261127'). Returns its file name."""
+        path = self.paths["rates"]
+        with self._lock:
+            copy = path.replace(".xlsx", f"{backup}.xlsx")
+            if os.path.exists(path) and not (if_absent and os.path.exists(copy)):
+                shutil.copyfile(path, copy)
+                return os.path.basename(copy)
+        return None
 
     # ------------------------------------------------ fabric list
     def read_list(self):
@@ -270,49 +297,85 @@ def _in(n):
 
 class SqlStore:
     """PostgreSQL or SQLite. One connection per process, used by one request at a time; a broken connection is made
-    again at the next use."""
-    LOCK_KEY = 727274190        # PostgreSQL advisory lock: one writer of a kind at a time, across the app's processes
+    again at the next use. If the database cannot be reached when the app starts, it is tried again every RETRY seconds,
+    so an outage passes by itself."""
+    LOCK_KEY = 727274190        # PostgreSQL advisory locks: this one for adding tables and copying in, +1 ... +5 for each kind
+    RETRY, RETRY_REFUSED = 15, 300      # seconds between tries to start: while unreachable; after a refusal
+    WAIT = 45                   # seconds a request waits for another one using the database before it is told to try again
 
     def __init__(self, url, folder=None, start=True):
         self.url, self.folder = url, folder or data_dir()
-        if url.startswith(("postgresql://", "postgres://")):
-            self.kind = "postgres"
-        elif url.startswith("sqlite:///"):
-            self.kind, self.path = "sqlite", url[len("sqlite:///"):]
-        else:
-            raise StoreUnavailable("DATABASE_URL is neither postgresql://... nor sqlite:///<path>")
-        self._lock, self._conn, self.error, self.imported = threading.RLock(), None, None, None
+        self._lock, self._conn, self.imported, self._secret = threading.RLock(), None, None, ""
+        self.error, self.refused, self._tried, self._starter = None, False, 0.0, None
+        self.kind, self.path, self._pg = "postgres" if url.startswith(("postgresql://", "postgres://")) else "sqlite", None, {}
+        self.started = not start
+        try:
+            self._parse(url)
+        except Refusal as e:
+            self.started, self.error, self.refused = False, str(e), True
+            print(f"RightPrice: the database is not in use: {self.error}", file=sys.stderr)
+            return
         if start:
-            try:
-                self.migrate()
-                self.imported = self.copy_files_in()
-                self._files_unchanged()
-            except StoreUnavailable as e:
-                self.error = str(e)
-            except Exception as e:
-                self.error = f"{type(e).__name__}: {e}"
-            if self.error:
-                self.error = self.scrub(self.error)     # never the password, whatever the error says
-            if self.error:
-                print(f"RightPrice: the database is not in use: {self.error}", file=sys.stderr)
+            self._start()
+
+    def _parse(self, url):
+        """Read the setting. The password may be written as it is (P@ss#1) or percent-encoded (P%40ss%231)."""
+        if self.kind == "sqlite":
+            if not url.startswith("sqlite:///"):
+                raise Refusal("DATABASE_URL is neither postgresql://... nor sqlite:///<full path to a file>")
+            self.path = url[len("sqlite:///"):]
+            if not os.path.isabs(self.path):
+                raise Refusal("DATABASE_URL names a SQLite file by a relative path; give the full path, with four slashes: "
+                              "sqlite:////home/rightprice-data/rightprice.db (a relative one would sit in the code folder, "
+                              "which a deploy replaces)")
+            return
+        from urllib.parse import parse_qsl, unquote, urlsplit
+        rest = url.split("://", 1)[1]
+        userinfo, hostpart = rest.rsplit("@", 1) if "@" in rest else ("", rest)
+        user, _, pw = userinfo.partition(":")
+        self._secret = pw
+        encoded = re.fullmatch(r"(?:[^%@:/?#\[\]\s]|%[0-9A-Fa-f]{2})*", pw)
+        try:
+            u = urlsplit("postgresql://" + hostpart)
+            port = u.port or 5432
+        except ValueError:
+            raise Refusal("DATABASE_URL could not be read: after the password it should say <host>:5432/postgres?sslmode=require") from None
+        self._pg = dict(parse_qsl(u.query), host=u.hostname or "localhost", port=port,
+                        dbname=unquote(u.path.lstrip("/")) or "postgres", user=unquote(user),
+                        password=unquote(pw) if encoded else pw)
+
+    def _start(self):
+        """Add any new tables, copy the files in on the first start, and check the files are as they were then."""
+        self._tried, self._starter = time.monotonic(), threading.get_ident()
+        error, refused = None, False
+        try:
+            self.migrate()
+            self.imported = self.copy_files_in()
+            self._files_unchanged()
+        except Refusal as e:
+            error, refused = str(e), True
+        except StoreUnavailable as e:
+            error = str(e)
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+        finally:
+            self._starter = None
+        self.error, self.refused, self.started = (self.scrub(error) if error else None), refused, error is None
+        if error:
+            print(f"RightPrice: the database is not in use yet: {self.error}", file=sys.stderr)
 
     # ------------------------------------------------ connection and transactions
     def where(self):
         """Where the database is (host and database), never the user or the password."""
         if self.kind == "sqlite":
-            return self.path
-        rest = self.url.split("://", 1)[1]
-        return rest.rsplit("@", 1)[-1].split("?", 1)[0] or "PostgreSQL"
+            return self.path or "a SQLite file"
+        return f"{self._pg.get('host')}:{self._pg.get('port')}/{self._pg.get('dbname')}" if self._pg else "PostgreSQL"
 
     def scrub(self, text):
         """An error's words with the password, and the whole setting, taken out."""
         text = str(text).replace(self.url, "<DATABASE_URL>")
-        if self.kind == "postgres":
-            auth = self.url.split("://", 1)[1].rsplit("@", 1)
-            if len(auth) == 2 and ":" in auth[0]:
-                secret = auth[0].split(":", 1)[1]
-                for s in {secret, secret.replace("%40", "@")} - {""}:
-                    text = text.replace(s, "***")
+        for s in {self._secret, self._pg.get("password", "")} - {""}:
+            text = text.replace(s, "***")
         return text
 
     def _connect(self):
@@ -321,15 +384,22 @@ class SqlStore:
         try:
             if self.kind == "postgres":
                 import psycopg
-                self._conn = psycopg.connect(self.url, connect_timeout=15)
+                # keepalives and a user timeout: a connection a network device has dropped without a word is noticed
+                # in about a minute, not the quarter of an hour the operating system would wait
+                params = dict(connect_timeout=15, keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=3,
+                              tcp_user_timeout=30000, application_name="rightprice",
+                              options="-c statement_timeout=120000 -c lock_timeout=30000 -c idle_in_transaction_session_timeout=300000")
+                params.update(self._pg)
+                self._conn = psycopg.connect(**params)
             else:
-                os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
                 self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False, isolation_level=None)
                 self._conn.execute("PRAGMA foreign_keys = ON")
         except Exception as e:
             self._conn = None
             first = str(e).splitlines()[0] if str(e) else ""
-            raise StoreUnavailable(self.scrub(f"The database at {self.where()} could not be reached ({type(e).__name__}: {first})"))
+            raise StoreUnavailable(self.scrub(f"The database at {self.where()} could not be reached ({type(e).__name__}: {first}). "
+                                              f"The app tries again by itself; nothing is lost."))
         return self._conn
 
     def _drop(self):
@@ -346,19 +416,37 @@ class SqlStore:
             return isinstance(e, (psycopg.OperationalError, psycopg.InterfaceError))
         return False
 
+    def _ready(self):
+        """Not started yet (unreachable, or refused): try to start again once its wait is over; else say why not."""
+        if self.started or self._starter == threading.get_ident():
+            return
+        if time.monotonic() - self._tried >= (self.RETRY_REFUSED if self.refused else self.RETRY) and self._lock.acquire(timeout=self.WAIT):
+            try:
+                if not self.started:
+                    self._start()
+            finally:
+                self._lock.release()
+        if not self.started:
+            raise (Refusal if self.refused else StoreUnavailable)(
+                self.error or "The database is being made ready (tables added, or the files copied in): try again in a moment")
+
     @contextlib.contextmanager
     def tx(self, write=None):
-        """A transaction. write names the kind being changed: writers of a kind wait for each other, across processes."""
-        if self.error:
-            raise StoreUnavailable(self.error)
-        with self._lock:
+        """A transaction. write names the kind being changed: writers of a kind wait for each other, across processes.
+        A read sees one moment of the database throughout."""
+        self._ready()
+        if not self._lock.acquire(timeout=self.WAIT):
+            raise StoreUnavailable("The database is busy with another request; try again in a moment")
+        try:
             conn = self._connect()
             try:
                 cur = conn.cursor()
                 if self.kind == "sqlite":
                     cur.execute("BEGIN IMMEDIATE" if write else "BEGIN")
                 elif write:
-                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (self.LOCK_KEY + KINDS.index(write) if write in KINDS else self.LOCK_KEY,))
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (self.LOCK_KEY + 1 + KINDS.index(write) if write in KINDS else self.LOCK_KEY,))
+                else:
+                    cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
                 yield _Cursor(cur, self.kind)
                 if write and write in KINDS:
                     cur.execute("UPDATE store_state SET version = version + 1 WHERE kind = " + ("%s" if self.kind == "postgres" else "?"), (write,))
@@ -370,16 +458,21 @@ class SqlStore:
                     self._drop()
                 if self._broken(e):
                     self._drop()
-                    raise StoreUnavailable(f"The database at {self.where()} stopped answering ({type(e).__name__}); try again") from e
+                    raise StoreUnavailable(self.scrub(f"The database at {self.where()} stopped answering ({type(e).__name__}: "
+                                                      f"{str(e).splitlines()[0] if str(e) else ''}); try again")) from e
                 raise
+        finally:
+            self._lock.release()
 
     def _read(self, fn):
         """A read, tried once more on a fresh connection if the first one had gone stale."""
         try:
             with self.tx() as c:
                 return fn(c)
+        except Refusal:
+            raise
         except StoreUnavailable:
-            if self.error:
+            if not self.started:
                 raise
             with self.tx() as c:
                 return fn(c)
@@ -425,9 +518,13 @@ class SqlStore:
             migs = [r[0] for r in c.all("SELECT name FROM schema_migration ORDER BY name")]
             return counts, run, rate, migs
         out = {"store": self.kind, "where": self.where()}
-        if self.error:
-            return dict(out, ok=False, error=self.error,
-                        to_go_back="Remove the app setting DATABASE_URL and restart: the app returns to the files, which were not changed.")
+        if not self.started:
+            try:
+                self._ready()
+            except StoreUnavailable:
+                pass
+        if not self.started:
+            return dict(out, ok=False, error=self.error, advice=self._advice())
         counts, run, rate, migs = self._read(get)
         out.update(ok=True, counts=counts, tables_from=migs,
                    rate_master_in_use=None if not rate else {"version": rate[0], "saved": rate[1], "by": rate[2], "reason": rate[3]})
@@ -435,6 +532,24 @@ class SqlStore:
             out["copied_in"] = {"started": run[0], "finished": run[1], "folder": run[2],
                                 "files": json.loads(run[3]), "checked": json.loads(run[4])}
         return out
+
+    def _advice(self):
+        if not self.refused:
+            return ("The app tries the database again by itself every few seconds; nothing is lost. If this lasts, look at the "
+                    "database in the Azure portal (is it running?). Do not remove DATABASE_URL for this: the files are as they "
+                    "were when they were copied in, and work done on them would later have to be brought together by hand.")
+        if self._moved() is None:
+            return ("Nothing was copied in and the files were not changed. To go on working meanwhile, remove the app setting "
+                    "DATABASE_URL and restart: the app returns to the files.")
+        return "See the error: it says what to do."
+
+    def _moved(self):
+        """The note left in the data folder when its files were copied into a database, or None."""
+        try:
+            with open(os.path.join(self.folder, MOVED_NOTE), encoding="utf8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
 
     # ------------------------------------------------ rate master
     def _rates(self, c):
@@ -447,6 +562,10 @@ class SqlStore:
     def _insert_rates(self, c, data, reason, who="", at=None):
         c.run("INSERT INTO rate_version (created_at, created_by, reason, workbook, sha256) VALUES (%s, %s, %s, %s, %s)",
               (at or _now(), who or "", reason or "Saved", data, _sha(data)))
+
+    def keep_copy(self, backup, if_absent=False):
+        """A dated copy of the rate master as it is: in a database every version is kept anyway."""
+        return None
 
     def write_rates(self, data, reason="", who="", backup=None, backup_if_absent=False):
         """A new version. The one before is kept as it was: that is the dated copy, named in what comes back."""
@@ -515,7 +634,10 @@ class SqlStore:
 
     def _step(self, row):
         e = dict(zip(self.STEP_KEYS, row[:7]))
-        e.update(json.loads(row[7] or "{}"))
+        extra = json.loads(row[7] or "{}")
+        for k in extra.pop("_absent", []):         # a step saved by an earlier version without this field
+            e.pop(k, None)
+        e.update(extra)
         return e
 
     def _negos(self, c, only=None):
@@ -526,13 +648,15 @@ class SqlStore:
         where = "" if only is None else " AND negotiation_key = %s"
         cols = ", ".join(self.STEP) + ", extra, negotiation_key"
         for row in c.all(f"SELECT {cols} FROM negotiation_step WHERE removed_at IS NULL{where} ORDER BY id", () if only is None else (only,)):
-            recs[row[-1]]["events"].append(self._step(row))
+            if row[-1] in recs:
+                recs[row[-1]]["events"].append(self._step(row))
         removed = {}
         for row in c.all(f"SELECT {cols}, removed_at, removed_by FROM negotiation_step WHERE removed_at IS NOT NULL{where} "
                          "ORDER BY removed_seq, id", () if only is None else (only,)):
             removed.setdefault(row[8], []).append(dict(self._step(row), removed_at=row[9], removed_by=row[10]))
         for key, gone in removed.items():
-            recs[key]["removed"] = gone[-100:]
+            if key in recs:
+                recs[key]["removed"] = gone[-100:]
         return recs
 
     def read_negotiations(self):
@@ -540,6 +664,9 @@ class SqlStore:
 
     def _insert_step(self, c, key, e, removed=None):
         extra = {k: v for k, v in e.items() if k not in self.STEP_KEYS and k not in ("removed_at", "removed_by")}
+        absent = [k for k in self.STEP_KEYS if k not in e]
+        if absent:
+            extra["_absent"] = absent
         price = e.get("price")
         vals = [str(e.get("id")), e.get("at"), e.get("date"), e.get("kind"), None if price is None else float(price),
                 e.get("note"), e.get("by"), json.dumps(extra, default=str), key]
@@ -626,6 +753,12 @@ class SqlStore:
         with self.tx(write="import") as c:
             if not self._empty(c):
                 return None
+            moved = self._moved()
+            if moved is not None:
+                raise Refusal(f"The files in {self.folder} were already copied into a database on {moved.get('when')} "
+                              f"({moved.get('where')}), but the database the setting names now ({self.where()}) is empty. "
+                              "Check that DATABASE_URL names the same database. Nothing was copied, so no work is lost. "
+                              f"To copy these files into this empty database on purpose, delete {MOVED_NOTE} from that folder and restart.")
             src = self._source_files()
             fs = FileStore(self.folder)
             files = []
@@ -666,7 +799,7 @@ class SqlStore:
                 for e in rec.get("removed", []):
                     seq += 1
                     self._insert_step(c, key, e, removed=seq)
-            for i in sorted(fs.read_seen()):
+            for i in sorted({str(i) for i in fs.read_seen()}):
                 c.run("INSERT INTO alert_seen (quote_id, seen_at, seen_by) VALUES (%s, %s, %s)", (str(i), started, "copied in from alerts_seen.json"))
             self._put_sheets(c, fs.read_sheets())
             for name in (FILES["list"], FILES["negotiations"], FILES["seen"], FILES["sheets"]):
@@ -674,59 +807,71 @@ class SqlStore:
                     files.append({"name": name, "bytes": len(src[name][0]), "sha256": src[name][1]})
             checked = self._check_copy(c, fs, src)
             if self._source_files() != src:
-                raise StoreUnavailable("The files changed while they were being copied in; nothing was kept. Restart the app to try again.")
+                raise StoreUnavailable("The files changed while they were being copied in; nothing was kept. The app tries again by itself.")
             c.run("INSERT INTO import_run (started_at, finished_at, folder, files, checked) VALUES (%s, %s, %s, %s, %s)",
                   (started, _now(), self.folder, json.dumps(files), json.dumps(checked)))
             for k in KINDS:
                 c.run("UPDATE store_state SET version = version + 1 WHERE kind = %s", (k,))
+        try:        # a note beside the files (they themselves stay as they were): which database they went into
+            _write_atomic(os.path.join(self.folder, MOVED_NOTE), json.dumps(
+                {"when": started, "where": self.where(), "kind": self.kind, "files": files}, indent=1).encode("utf8"))
+        except OSError as e:
+            print(f"RightPrice: the note {MOVED_NOTE} could not be written ({e})", file=sys.stderr)
         print(f"RightPrice: the data files in {self.folder} were copied into the database at {self.where()} and checked: "
               + "; ".join(checked["summary"]), file=sys.stderr)
         return {"files": files, "checked": checked}
 
     def _check_copy(self, c, fs, src):
-        """Inside the copying-in transaction: each file read back from the database exactly as from the file, and every
-        fabric on the list costed the same to the paisa on both. Anything different and the transaction is undone."""
+        """Inside the copying-in transaction: each file read back from the database exactly as the app reads the file,
+        and every fabric on the list costed on both, as the app costs it. Anything different and nothing is kept."""
         import masters      # late: masters reads the rate master through this module
+        import mill_sheet
+        import rate_card
+        import yarn_seed
 
         def fail(what):
-            raise StoreUnavailable(f"Copying the files in was stopped and nothing was kept: {what}. "
-                                   "The app stays off the database; the files were not changed.")
+            raise Refusal(f"Copying the files in was stopped and nothing was kept: {what}. The files were not changed. "
+                          "To go on working meanwhile, remove the app setting DATABASE_URL and restart: the app returns to the files.")
+
+        def as_used(data):          # the tables as the app uses them: read, and brought up to date as masters.load() does
+            m = pd.read_excel(io.BytesIO(data), sheet_name=None)
+            m = {k: v.copy() for k, v in m.items()}
+            rate_card.apply(m)
+            yarn_seed.apply(m)
+            mill_sheet.apply(m)
+            return m
         summary = []
         rates_file = src[FILES["rates"]][0] if FILES["rates"] in src else open(SHIPPED_MASTER, "rb").read()
         if self._rates(c) != rates_file:
             fail("the rate master read back differently")
-        m = pd.read_excel(io.BytesIO(self._rates(c)), sheet_name=None)
-        m_file = pd.read_excel(io.BytesIO(rates_file), sheet_name=None)
-        if list(m) != list(m_file) or any(not m[k].equals(m_file[k]) for k in m):
-            fail("a rate master table read back differently")
-        summary.append(f"rate master: {len(m)} tables, the same")
+        summary.append("rate master: the same workbook, byte for byte")
+        m_db, m_file = as_used(self._rates(c)), as_used(rates_file)
         a, b = fs.read_list(), _list_frame(*self._list(c))
         try:
             pd.testing.assert_frame_equal(a, b, check_dtype=True)
         except AssertionError as e:
             fail(f"the fabric list read back differently ({str(e).splitlines()[0]})")
-        costed = 0
-        for raw in a.get("Inputs", pd.Series(dtype=object)).dropna():
+        costed, not_costed = 0, 0
+        for raw in b.get("Inputs", pd.Series(dtype=object)).dropna():
             try:
                 sel = json.loads(raw)
             except ValueError:
                 continue
-            try:
-                x = masters.cost(sel, m_file)["total_per_m"]
-            except Exception as e:
-                x = f"not costed: {e}"
-            try:
-                y = masters.cost(sel, m)["total_per_m"]
-            except Exception as e:
-                y = f"not costed: {e}"
-            if x != y:
-                fail(f"a fabric on the list ({sel.get('Fabric code')}) costs {x} from the file and {y} from the database")
-            costed += 1
-        summary.append(f"fabric list: {len(a)} rows, the same; {costed} costings, equal to the paisa (exactly equal)")
+            got = []
+            for m in (m_file, m_db):
+                try:
+                    got.append(masters.cost(dict(sel), m)["total_per_m"])
+                except Exception as e:
+                    got.append(f"not costed: {e}")
+            if got[0] != got[1]:
+                fail(f"a fabric on the list ({sel.get('Fabric code')}) costs {got[0]} from the file and {got[1]} from the database")
+            costed, not_costed = (costed + 1, not_costed) if isinstance(got[0], float) else (costed, not_costed + 1)
+        summary.append(f"fabric list: {len(a)} rows, the same; {costed} costed on both, equal to the paisa"
+                       + (f"; {not_costed} not costed on either, for the same reason" if not_costed else ""))
         if self._negos(c) != fs.read_negotiations():
             fail("the negotiation tracker read back differently")
         summary.append(f"tracker: {len(fs.read_negotiations())} fabrics, the same")
-        if {r[0] for r in c.all("SELECT quote_id FROM alert_seen")} != fs.read_seen():
+        if {r[0] for r in c.all("SELECT quote_id FROM alert_seen")} != {str(i) for i in fs.read_seen()}:
             fail("the alerts marked seen read back differently")
         summary.append(f"alerts seen: {len(fs.read_seen())}, the same")
         if [json.loads(r[0]) for r in c.all("SELECT row FROM cost_sheet_row ORDER BY id")] != fs.read_sheets():
@@ -734,23 +879,42 @@ class SqlStore:
         summary.append(f"mill cost sheets: {len(fs.read_sheets())} rows, the same")
         return {"summary": summary, "equal": True}
 
-    def _files_unchanged(self):
-        """The data files must be as they were when copied in. If they changed since (the setting was taken off for a
-        while and work was done on the files), the app stays off the database so neither side's changes are lost."""
-        def get(c):
-            r = c.one("SELECT finished_at, files FROM import_run ORDER BY id DESC LIMIT 1")
-            return r
-        r = self._read(get)
+    def _baseline(self, c):
+        """The files as the database last took them: at the copying in, or when keep_database() was run."""
+        kept = c.one("SELECT value FROM store_meta WHERE key = 'files_baseline'")
+        if kept:
+            b = json.loads(kept[0])
+            return b["when"], b["files"]
+        r = c.one("SELECT finished_at, files FROM import_run ORDER BY id DESC LIMIT 1")
         if r is None:
+            return None, None
+        return r[0], {f["name"]: f["sha256"] for f in json.loads(r[1]) if f.get("as") != "an earlier rate version"}
+
+    def _files_unchanged(self):
+        """After the move the database is the one to work on. If the files have been worked on since (the setting was
+        taken off for a while), the app does not start on the database, so neither side's work is lost.
+        Not counted as work: a file deleted or moved away, and a rate master that is just the one shipped with the code."""
+        when, then = self._read(self._baseline)
+        if then is None:
             return
-        then = {f["name"]: f["sha256"] for f in json.loads(r[1]) if f.get("as") != "an earlier rate version" and "(with the code)" not in f["name"]}
+        shipped = {_sha(open(SHIPPED_MASTER, "rb").read())} | {v for k, v in then.items() if "(with the code)" in k}
         now = {name: sha for name, (_, sha) in self._source_files().items()}
-        changed = sorted(n for n in set(then) | set(now) if then.get(n) != now.get(n))
+        changed = sorted(n for n, sha in now.items()
+                         if (n in then and then[n] != sha) or (n not in then and not (n == FILES["rates"] and sha in shipped)))
         if changed:
-            raise StoreUnavailable(
-                f"The data files changed after they were copied into the database on {r[0]} ({', '.join(changed)}). "
-                "So that neither the database's changes nor the files' are lost, the app does not start on the database. "
-                "Remove DATABASE_URL to keep working on the files, and ask for the two to be brought together.")
+            raise Refusal(
+                f"The data files in {self.folder} changed after the database took them on {when} ({', '.join(changed)}): "
+                "someone worked on the files while DATABASE_URL was off. So that neither side's work is lost, the app does not "
+                "start on the database. Either remove DATABASE_URL and keep working on the files, or keep the database and set "
+                "these files aside: run `python store.py keep-database` (Azure: web app > SSH) and restart.")
+
+    def keep_database(self):
+        """The database is the one to keep: the files as they are now are taken as seen, and no longer stop the start."""
+        files = {name: sha for name, (_, sha) in self._source_files().items()}
+        with self.tx(write="import") as c:
+            c.run("DELETE FROM store_meta WHERE key = 'files_baseline'")
+            c.run("INSERT INTO store_meta (key, value) VALUES ('files_baseline', %s)", (json.dumps({"when": _now(), "files": files}),))
+        return files
 
 
 # ===================================================================== which one, chosen once by the setting
@@ -777,9 +941,19 @@ def reset():
     _store = None
 
 
+def _database():
+    """The database the setting names, opened only to read or to set the files aside: no tables added, nothing copied in,
+    and the files' guard not applied (these are the ways out when it has stopped the app)."""
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        raise SystemExit("DATABASE_URL is not set: there is no database to work on")
+    return SqlStore(url, start=False)
+
+
 def export(folder, s=None):
     """What the store holds, written as the files the app reads without a database, into a new empty folder."""
-    s = s or get()
+    if s is None:
+        s = _database() if os.environ.get("DATABASE_URL", "").strip() else FileStore()
     if os.path.isdir(folder) and os.listdir(folder):
         raise SystemExit(f"{folder} is not empty: give a new folder, so nothing is overwritten")
     os.makedirs(folder, exist_ok=True)
@@ -806,6 +980,10 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args[:1] == ["export"] and len(args) == 2:
         print("Written:", ", ".join(export(args[1])))
+    elif args == ["keep-database"]:
+        kept = _database().keep_database()
+        print("The database is the one to keep. The files as they are now no longer stop the app starting on it:",
+              ", ".join(kept) or "(none)")
     elif args[:1] in (["status"], []):
         print(json.dumps(get().describe(), indent=1, default=str))
     else:

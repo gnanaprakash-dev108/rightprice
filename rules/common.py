@@ -1,10 +1,12 @@
 """What every rule shares: the rate master in use (read again only when it changes), the fabric list, the
 answers kept while nothing has changed, and the small conversions (numbers, dates, rupees) the rules use."""
 import datetime as dt
+import functools
 import json
 import math
 import os
 import re
+import threading
 import pandas as pd
 import masters
 import store
@@ -17,6 +19,19 @@ class Refused(Exception):
     def __init__(self, status_code, detail):
         super().__init__(detail)
         self.status_code, self.detail = status_code, detail
+
+
+_one = threading.RLock()
+
+
+def one_at_a_time(fn):
+    """Uploads and the mill cost sheets' read-merge-write run one at a time, as they did when they ran on the web
+    server's own loop: two at once could otherwise both pass the repeat check, or one mill's rows could be lost."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with _one:
+            return fn(*args, **kwargs)
+    return run
 
 
 class Download:

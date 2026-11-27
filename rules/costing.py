@@ -118,9 +118,12 @@ def _placeholder_share(res):
     found, amount = set(), 0.0
     for b in res["buckets"]:
         for l in b["lines"]:
-            owner = next((n for n in names if l["name"] in PLACEHOLDER_LINES.get(n, (n,))), None)
-            if owner:
-                found.add(owner)
+            # a line can rest on more than one placeholder (a finish's upcharge rests on Finishing and on Finish upcharge):
+            # it counts once, for all of them. (It used to go to whichever came first in Python's own order of a set,
+            # which changes at each start, so a few verdicts changed at a restart. GP's decision, 27 Nov 2026.)
+            owners = {n for n in names if l["name"] in PLACEHOLDER_LINES.get(n, (n,))}
+            if owners:
+                found |= owners
                 amount += abs(l["amount"]) * (1.0 if b["name"] == "Upcharges and quantity terms" else mult)
     if found != names or not total:
         return None

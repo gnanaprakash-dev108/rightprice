@@ -36,6 +36,7 @@ def costsheet_view():
     return a          # numbers read from the rate master are numpy types: the web layer writes them as plain ones
 
 
+@common.one_at_a_time
 def costsheet_upload(filename, data):
     try:
         book = pd.read_excel(io.BytesIO(data), sheet_name=None)
@@ -61,6 +62,7 @@ def costsheet_upload(filename, data):
     return {"added": len(new), "replaced": len(rows) - len(keep), "not_read": sum(1 for x in a["rows"] if x["problems"])}
 
 
+@common.one_at_a_time
 def costsheet_remove(payload: dict):
     ids, upload = {str(i) for i in payload.get("ids") or []}, payload.get("upload")
     rows = _sheets()
@@ -69,6 +71,7 @@ def costsheet_remove(payload: dict):
     return {"removed": len(rows) - len(keep)}
 
 
+@common.one_at_a_time
 def costsheet_apply(payload: dict, who: str = ""):
     """Write the drafts GP ticked into the rate master, after a dated copy of it. Nothing else changes."""
     chosen = {str(i) for i in payload.get("ids") or []}
@@ -87,6 +90,7 @@ def costsheet_apply(payload: dict, who: str = ""):
     except Exception as e:
         raise common.Refused(400, f"Not applied, nothing changed: {e}")
     # the copy is taken only once the change is known to be good, and to the second, so none is overwritten
+    store.get().keep_copy(f" backup {dt.date.today():%Y%m%d}", if_absent=True)       # the day's copy, as every rate save keeps
     kept = masters.save(m2, reason="Mill cost sheet drafts applied: " + "; ".join(map(str, log))[:500], who=who,
                         backup=f" before mill cost sheet {dt.datetime.now():%Y%m%d-%H%M%S}")
     common._cache.pop("#rates", None)
