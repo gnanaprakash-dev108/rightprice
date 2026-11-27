@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 import store
 from rules import (alerts, common, costing, costsheets, dashboard, drafts, fabric_list, pack as pack_rules, rates, rightcost,
                    supplier as supplier_rules, tracker)
+from rules import dated as dated_rules      # stage 5
 from rules import access
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -505,6 +506,37 @@ def intake_add(payload: dict = Body(...), request: Request = None):
     return rates.intake_add(payload, who=_who(request))
 
 
+# ------------------------------------------------------------------ dated yarn rates (stage 5; a database only: 503 on the files)
+@app.get("/api/dated-rates")
+def dated_rates():
+    return dated_rules.page()
+
+
+@app.post("/api/dated-rates")
+def dated_rate_add(payload: dict = Body(...), request: Request = None):
+    return dated_rules.add(payload, who=_who(request))
+
+
+@app.post("/api/dated-rates/remove")
+def dated_rate_remove(payload: dict = Body(...), request: Request = None):
+    return dated_rules.remove(payload, who=_who(request))
+
+
+@app.get("/api/dated-rates/market")
+def dated_market_preview():
+    return dated_rules.market_preview()
+
+
+@app.post("/api/dated-rates/market")
+def dated_market_load(request: Request = None):
+    return dated_rules.market_load(who=_who(request))
+
+
+@app.post("/api/intake/add-dated")
+def intake_add_dated(payload: dict = Body(...), request: Request = None):
+    return dated_rules.intake_add(payload, who=_who(request))
+
+
 # ------------------------------------------------------------------ stage 3: users, roles and permissions (rules/access.py)
 @app.get("/api/me")
 def me(request: Request):
@@ -610,7 +642,7 @@ def index(request: Request):
     """The app's shell (left rail, Right cost, the "+" popup). Every other screen is the earlier front end
     shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
     if request.query_params.get("embed") == "1":
-        return _page("index.html", ("app.css", "app.js"))
+        return _page("index.html", ("app.css", "app.js", "dated.css", "dated.js"))
     return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js"))
 
 

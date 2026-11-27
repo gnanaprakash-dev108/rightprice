@@ -284,7 +284,7 @@ function yarnWhatIf(ins, list) {
 PAGES.dashboard = async () => {
   const [ins, list] = await Promise.all([getJSON("/api/insights"), (await postJSON("/api/list", {})).json()]);
   state.list = list;
-  const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders costed on your rate master; panel 3 is the cotton price history; panel 5 is from published accounts.")];
+  const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (every usual range comes from them); panel 3 is the cotton price history; panel 5 is from published accounts." + (ins.pilot_rates ? " " + ins.pilot_rates.replace(/^Panels 1, 2 and 4 are[^.]*\. */, "") : ""))];          // stage 5: and beside Right cost's rates
   // first: newly quoted fabrics that need a look before their price is accepted
   try {
     const box = h("div", { class: "card alerts", hidden: true });
@@ -708,6 +708,7 @@ function costView(res, sel) {
         h("button", { class: "btn", onclick: printSheet }, "Print"))),
     h("div", { class: "facts" }, h("span", {}, [sel.Content, sel.Route, sel.Weave, `${yarnText(sel, "Warp")} \u00D7 ${yarnText(sel, "Weft")}`, `${sel.EPI} × ${sel.PPI}`, `${sel["Finished width (in)"]} in wide`].filter(Boolean).join(" · "))),
     h("div", { class: "facts num" }, h("span", {}, `${rs(res.per_kg, 0)} / kg`), h("span", {}, `about ${fmt(res.gsm, 0)} g/m²`), h("span", {}, `${fmt(res.finished_g_per_m, 0)} g per running metre`)),
+    res.rates_of ? h("div", { class: "facts rates-of" }, h("span", {}, res.rates_of.text + (res.rates_of.notes && res.rates_of.notes.length ? ". " + res.rates_of.notes.join("; ") : ""))) : null,      // stage 5: which rates
     quote, h("div", { class: "notice info hero-moved", hidden: true, style: "margin:10px 0 0" }));
 
   const box = h("div"), note = h("div", { class: "sub", style: "margin:2px 0 0" });
@@ -1300,6 +1301,7 @@ PAGES.yarn = async (query) => {
     rows: d.yarns.filter(y => y.position).map(y => [y.key, y.rate, y.market_low, y.market_high, { inside: "Inside range", above: "Above market", below: "Below market" }[y.position]]) };
   return [...pageHead("Yarn prices", "The yarn master is used in every costing; edit a rate and its date, then save. The market reference is for comparison only and is never used in a costing."),
     yrCard,
+    window.RPDated ? RPDated.card() : null,          // stage 5: dated yarn rates (web/dated.js)
     h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Master against market, combed compact cotton")), dataTable(cmp, { label: "Master against market", empty: "No yarn in the master has a market reference yet." })),
     mkCard];
 };
@@ -1374,7 +1376,7 @@ PAGES.intake = async () => {
   const COLS = ["Date", "Yarn", "Count", "Low Rs/kg", "High Rs/kg", "Source"];
   const review = (data) => {            // every source ends here: rows a person checks before they are added
     const body = h("tbody");
-    const addRow = r => { const tr = h("tr", {}, COLS.map((c, i) => h("td", {}, h("input", { class: "cell" + (i === 3 || i === 4 ? " n" : ""), type: i === 3 || i === 4 ? "number" : "text", step: "any", value: r ? (r[i] ?? "") : (i === 0 ? new Date().toISOString().slice(0, 10) : ""), "aria-label": c }))), h("td", {}, h("button", { class: "icon-btn sm", type: "button", "aria-label": "Remove this row", onclick: () => tr.remove() }, "\u00D7"))); body.append(tr); return tr; };
+    const addRow = r => { const tr = h("tr", {}, COLS.map((c, i) => h("td", {}, h("input", { class: "cell" + (i === 3 || i === 4 ? " n" : ""), type: i === 3 || i === 4 ? "number" : "text", step: "any", value: r ? (r[i] ?? "") : (i === 0 ? (data.date_read ? data.date_found || "" : new Date().toISOString().slice(0, 10)) : ""), "aria-label": c }))), h("td", {}, h("button", { class: "icon-btn sm", type: "button", "aria-label": "Remove this row", onclick: () => tr.remove() }, "\u00D7"))); body.append(tr); return tr; };
     data.rows.forEach(addRow);
     const msg = h("div");
     work.replaceChildren(h("div", { class: "card" }, h("div", { class: "card-head" }, h("h2", {}, "Review before adding")),
@@ -1386,9 +1388,13 @@ PAGES.intake = async () => {
           try { const r = await (await postJSON("/api/intake/add", { rows, source: data.source })).json(); state.dash = null; toast(`${r.added} rows added to the market reference`); location.hash = "#yarn"; }
           catch (e) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, e.message)); }
         } }, "Add to market reference"),
+        window.RPDated ? h("button", { class: "btn", type: "button", onclick: () => {          // stage 5: the same rows as dated yarn rates
+          const rows = [...body.rows].map(tr => [...tr.querySelectorAll("input")].map(i => i.value.trim() === "" ? null : i.value.trim()));
+          const box = h("div"); msg.replaceChildren(box); RPDated.fromIntake(rows, data.source, box, data);      // with what the server read of the document's date
+        } }, "Add as dated yarn rates…") : null,
         h("button", { class: "btn", type: "button", onclick: () => addRow(null).querySelector("input").focus() }, "Add a row"),
         h("button", { class: "btn", type: "button", onclick: () => work.replaceChildren() }, "Discard")),
-      h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here.")));
+      h("p", { class: "sub", style: "margin:12px 0 0" }, "Each row needs a count and a rate. Nothing reaches the market reference until you press Add, and the yarn master is never changed from here." + (window.RPDated ? " Add as dated yarn rates keeps the rows instead as the rates of their month, for the purchase orders of that month (each row is given a yarn of the yarn master first)." : ""))));
   };
   const mapper = (data) => {            // a table was read: say which column is which
     const names = Object.keys(data.sheets);
