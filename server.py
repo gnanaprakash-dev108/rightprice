@@ -30,6 +30,7 @@ import masters
 import mill_sheet
 import price_import as pi
 import rate_card
+import store
 import yarn_seed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,8 +40,7 @@ DRAFT = os.path.join(HERE, "pilot", "Proposed_Rate_Changes.xlsx")
 CLASSIC_PORT = int(os.environ.get("RIGHTPRICE_CLASSIC_PORT", "8501"))
 CLASSIC = f"127.0.0.1:{CLASSIC_PORT}"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-LOG_COLS = ["Saved on", "Fabric code", "Description", "Supplier", "Should-cost Rs/m", "Should-cost Rs/kg",
-            "Quoted Rs/m", "Gap Rs/m", "Gap %"]
+LOG_COLS = store.LOG_COLS
 # sheet -> (label, group) for the read-only table pages
 TABLES = {
     "Yarn_Rates": "Yarn master", "Market_Yarn": "Market reference", "Cotton_Prices": "Cotton prices",
@@ -61,6 +61,7 @@ _cache = {}
 @asynccontextmanager
 async def lifespan(_app):
     global _classic
+    store.get()             # with DATABASE_URL set: connect, add any new tables, and copy the files in on the first start
     if os.environ.get("RIGHTPRICE_NO_CLASSIC") != "1":
         _classic = subprocess.Popen(
             [sys.executable, "-m", "streamlit", "run", os.path.join(HERE, "app.py"),
@@ -119,7 +120,8 @@ class McpGate:
             # one JSON answer per POST and no sessions: there is no stream to open and nothing to delete
             return await answer(405, {"detail": "The MCP endpoint takes POST requests only."}, [(b"allow", b"POST")])
         if path == "/mcp/health":
-            return await answer(200, {"ok": True, "app": "RightPrice", "code": _code_version(), "rate_master_changed": _mtime(masters.MASTER_PATH),
+            return await answer(200, {"ok": True, "app": "RightPrice", "code": _code_version(), "store": store.get().kind,
+                                      "rate_master_version": store.get().version("rates") if not getattr(store.get(), "error", None) else None,
                                       "tools": len(await mcp_server.mcp.list_tools())})
         return await _mcp_app(dict(scope, path="/mcp", raw_path=b"/mcp"), receive, send)
 
@@ -136,6 +138,18 @@ def _code_version():
 app.add_middleware(McpGate)
 
 
+@app.exception_handler(store.StoreUnavailable)
+async def _store_unavailable(_request, e):
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": str(e)}, status_code=503)
+
+
+@app.get("/api/store")
+def store_status():
+    """Where the app keeps its data now (files or a database) and what it holds; never a password."""
+    return store.get().describe()
+
+
 # ------------------------------------------------------------------ helpers
 def cached(path, loader):
     """Reload a workbook only when the file on disk has changed (the classic screens can edit it)."""
@@ -147,9 +161,16 @@ def cached(path, loader):
 
 
 def get_masters():
-    if not os.path.exists(masters.MASTER_PATH):
+    """The rate master in use, read again only when it has changed (the classic screens can change it too)."""
+    st = store.get()
+    key = st.version("rates")
+    if key is None:                 # no rate master yet: the first load makes one
         masters.load()
-    return cached(masters.MASTER_PATH, masters.load)
+        key = st.version("rates")
+    hit = _cache.get("#rates")
+    if not hit or hit[0] != key:
+        _cache["#rates"] = (key, masters.load())
+    return _cache["#rates"][1]
 
 
 def clean(v):
@@ -172,9 +193,7 @@ def records(df, limit=None):
 
 
 def read_log():
-    if os.path.exists(masters.LOG_PATH):
-        return pd.read_csv(masters.LOG_PATH, dtype={"Id": str})
-    return pd.DataFrame(columns=LOG_COLS)
+    return store.get().read_list()
 
 
 def placeholder_count(m):
@@ -562,11 +581,6 @@ def _qty(v):
     return n
 
 
-def _write_list(df):
-    os.makedirs(os.path.dirname(masters.LOG_PATH), exist_ok=True)
-    df.to_csv(masters.LOG_PATH, index=False)
-
-
 def _loads(v, default):
     try:
         return json.loads(v) if isinstance(v, str) and v else default
@@ -576,25 +590,27 @@ def _loads(v, default):
 
 @app.post("/api/save")
 @app.post("/api/list/add")
-def list_add(sel: dict = Body(...)):
+def list_add(sel: dict = Body(...), who: str = ""):
     """Add the fabric on Cost a fabric to the list. With '_id' it takes the place of that row (its mill columns stay)."""
     sel = dict(sel)
     replace = str(sel.pop("_id", "") or "")
     m = get_masters()
     cost_or_400(sel, m)                      # a fabric typed on screen must cost before it is listed
     log = read_log()
-    mill = None
+    mill, old_id = None, None
     if replace and "Id" in log.columns and (log["Id"].astype(str) == replace).any():
         old = log[log["Id"].astype(str) == replace].iloc[0]
-        mill = _loads(old.get("Mill"), None)
-        log = log[log["Id"].astype(str) != replace]
+        mill, old_id = _loads(old.get("Mill"), None), replace
     row = _list_row(sel, m, mill=mill)
-    _write_list(pd.concat([log, pd.DataFrame([row])], ignore_index=True))
+    if old_id is not None:
+        store.get().replace_list_row(old_id, row, who=who)
+    else:
+        store.get().append_list([row], who=who)
     return {"saved": True, "id": row["Id"]}
 
 
 @app.post("/api/list/upload")
-async def list_upload(file: UploadFile = File(...)):
+async def list_upload(file: UploadFile = File(...), who: str = ""):
     """Many fabrics at once: the RightPrice template, or a mill's price sheet as it comes."""
     m = get_masters()
     data = await file.read()
@@ -634,7 +650,7 @@ async def list_upload(file: UploadFile = File(...)):
     for r in fresh:
         r["Upload"] = upload            # which file a row came in with, for the pack's choice of rows
     if fresh:
-        _write_list(pd.concat([log, pd.DataFrame(fresh)], ignore_index=True))
+        store.get().append_list(fresh, who=who)
     out = {"added": len(fresh), "already": len(rows) - len(fresh), "kind": kind, "not_costed": sum(1 for r in fresh if r["Problems"]), "alerts": []}
     if fresh:
         try:        # flagged at once: the rows of this upload that need a look before the price is accepted
@@ -660,7 +676,8 @@ def _state_key():
     """What the list and Right cost are worked out from: the fabric list, the rate master, and the purchase history.
     While none of them changes, the answer is kept (the pages ask every half minute)."""
     ins = _cache.get(PILOT + "#insights")
-    return (_mtime(masters.LOG_PATH), _mtime(getattr(masters, "MASTER_PATH", "")), bool(ins and ins[1]), _mtime(PILOT))
+    st = store.get()
+    return (st.version("list"), st.version("rates"), bool(ins and ins[1]), _mtime(PILOT))
 
 
 @app.post("/api/list")
@@ -724,14 +741,12 @@ def list_view(options: dict = Body(default={})):
 
 
 @app.post("/api/list/remove")
-def list_remove(payload: dict = Body(...)):
+def list_remove(payload: dict = Body(...), who: str = ""):
     ids = {str(i) for i in payload.get("ids", [])}
     log = read_log()
     if "Id" not in log.columns or not ids:
         raise HTTPException(400, "Choose the rows to remove")
-    keep = log[~log["Id"].astype(str).isin(ids)]
-    _write_list(keep)
-    return {"removed": len(log) - len(keep)}
+    return {"removed": store.get().remove_list(ids, who=who)}
 
 
 # ------------------------------------------------------------------ negotiation pack
@@ -979,8 +994,8 @@ def costs():
                 "placeholders": r["Placeholder rates used"], "held_back": bool(r["Held back"]), "band": band,
                 "range": [lo, hi], "buckets": {b: r.get(f"{b} Rs/m") for b in BUCKETS},
                 "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS))})
-    mtime = os.path.getmtime(masters.MASTER_PATH) if hasattr(masters, "MASTER_PATH") and os.path.exists(masters.MASTER_PATH) else None
-    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (mtime, len(out), bool(cats))) if out else {}
+    version = store.get().version("rates")
+    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, len(out), bool(cats))) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
         if v:
@@ -1071,21 +1086,12 @@ def rightcost_page():
 # ------------------------------------------------------------------ mill cost sheets
 import costsheet  # noqa: E402
 
-SHEETS_PATH = os.path.join(os.path.dirname(masters.LOG_PATH), "cost_sheets.json")
-
-
 def _sheets():
-    try:
-        with open(SHEETS_PATH, encoding="utf8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return []
+    return store.get().read_sheets()
 
 
 def _save_sheets(rows):
-    os.makedirs(os.path.dirname(SHEETS_PATH), exist_ok=True)
-    with open(SHEETS_PATH, "w", encoding="utf8") as f:
-        json.dump(rows, f, default=str)
+    store.get().write_sheets(rows)
 
 
 @app.get("/api/costsheet/template")
@@ -1146,7 +1152,7 @@ def costsheet_remove(payload: dict = Body(...)):
 
 
 @app.post("/api/costsheet/apply")
-def costsheet_apply(payload: dict = Body(...)):
+def costsheet_apply(payload: dict = Body(...), who: str = ""):
     """Write the drafts GP ticked into the rate master, after a dated copy of it. Nothing else changes."""
     chosen = {str(i) for i in payload.get("ids") or []}
     if not chosen:
@@ -1157,7 +1163,6 @@ def costsheet_apply(payload: dict = Body(...)):
     picked = [d for d in drafts if d["id"] in chosen]
     if not picked:
         raise HTTPException(400, "Those drafts are no longer there; reload the page")
-    import shutil
     m2 = {k: v.copy() for k, v in m.items()}
     try:
         log = costsheet.apply(m2, picked, chosen)
@@ -1165,32 +1170,19 @@ def costsheet_apply(payload: dict = Body(...)):
     except Exception as e:
         raise HTTPException(400, f"Not applied, nothing changed: {e}")
     # the copy is taken only once the change is known to be good, and to the second, so none is overwritten
-    backup = masters.MASTER_PATH.replace(".xlsx", f" before mill cost sheet {dt.datetime.now():%Y%m%d-%H%M%S}.xlsx")
-    shutil.copyfile(masters.MASTER_PATH, backup)
-    save_masters(m2)
+    kept = masters.save(m2, reason="Mill cost sheet drafts applied: " + "; ".join(map(str, log))[:500], who=who,
+                        backup=f" before mill cost sheet {dt.datetime.now():%Y%m%d-%H%M%S}")
+    _cache.pop("#rates", None)
     _briefs.update(key=None)
-    return {"applied": log, "backup": os.path.basename(backup)}
+    return {"applied": log, "backup": kept}
 
 
 # ------------------------------------------------------------------ negotiation tracker
-NEGO_PATH = os.path.join(os.path.dirname(masters.LOG_PATH), "negotiations.json")
 NEGO_KINDS = ["Mill's quote", "Our counter", "Mill's revised quote", "Agreed"]
 
 
 def _negos():
-    try:
-        with open(NEGO_PATH, encoding="utf8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def _save_negos(d):
-    os.makedirs(os.path.dirname(NEGO_PATH), exist_ok=True)
-    tmp = NEGO_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf8") as f:
-        json.dump(d, f, default=str)
-    os.replace(tmp, NEGO_PATH)
+    return store.get().read_negotiations()
 
 
 MILL_WORDS = {"ltd", "limited", "mills", "mill", "pvt", "private", "co", "company", "the", "p"}
@@ -1358,23 +1350,20 @@ def negotiation_event(payload: dict = Body(...), request: Request = None, by: st
         dup = _list_duplicates().get(key)           # a row with steps already (agreed before a re-quote came in) keeps its negotiation
         if dup:
             raise HTTPException(400, f"This row repeats the order of {dup}: record the negotiation on {dup}, so it is counted once")
-    d = _negos()
     seen = payload.get("seen")
-    if seen is not None and int(seen) != len(d.get(key, {}).get("events", [])):
-        raise HTTPException(409, "Someone else has recorded or removed a step on this fabric since this page read it. "
-                                 "The page now shows the steps as they are: check them, then record again if it is still right.")
-    rec = d.setdefault(key, {"key": key, "events": []})
-    for f in ("code", "supplier", "description", "source"):
-        if payload.get(f):
-            rec[f] = payload[f]
+    fields = {f: payload[f] for f in ("code", "supplier", "description", "source") if payload.get(f)}
     for f in ("metres", "should", "row_price"):
         v = _num_or_none(payload.get(f))
         if v is not None:
-            rec[f] = v
-    rec["events"].append({"id": f"{dt.datetime.now():%Y%m%d%H%M%S%f}", "at": dt.datetime.now().isoformat(timespec="seconds"),
-                          "date": day_.isoformat(), "kind": kind, "price": round(price, 2), "note": str(payload.get("note") or "")[:500],
-                          "by": by if isinstance(by, str) and request is None else _who(request)})       # `by` only from the app's own code (the MCP tool), never from a web request
-    _save_negos(d)
+            fields[f] = v
+    event = {"id": f"{dt.datetime.now():%Y%m%d%H%M%S%f}", "at": dt.datetime.now().isoformat(timespec="seconds"),
+             "date": day_.isoformat(), "kind": kind, "price": round(price, 2), "note": str(payload.get("note") or "")[:500],
+             "by": by if isinstance(by, str) and request is None else _who(request)}       # `by` only from the app's own code (the MCP tool), never from a web request
+    try:
+        rec = store.get().add_step(key, fields, event, seen=seen)
+    except store.Conflict:
+        raise HTTPException(409, "Someone else has recorded or removed a step on this fabric since this page read it. "
+                                 "The page now shows the steps as they are: check them, then record again if it is still right.")
     return _nego_view(rec)
 
 
@@ -1382,14 +1371,8 @@ def negotiation_event(payload: dict = Body(...), request: Request = None, by: st
 def negotiation_remove(payload: dict = Body(...), request: Request = None):
     """Take a step out. It is kept, marked removed, so the fabric's log still shows it was there."""
     key, eid = str(payload.get("key") or ""), str(payload.get("id") or "")
-    d = _negos()
-    gone = [e for e in d.get(key, {}).get("events", []) if e["id"] == eid]
-    if not gone:
+    if not store.get().remove_step(key, eid, dt.datetime.now().isoformat(timespec="seconds"), _who(request)):
         raise HTTPException(404, "That step is no longer there: someone has already removed it")
-    d[key]["events"] = [e for e in d[key]["events"] if e["id"] != eid]
-    d[key].setdefault("removed", []).extend(dict(e, removed_at=dt.datetime.now().isoformat(timespec="seconds"), removed_by=_who(request)) for e in gone)
-    d[key]["removed"] = d[key]["removed"][-100:]
-    _save_negos(d)
     return {"removed": True}
 
 
@@ -1715,16 +1698,11 @@ Four kinds: priced above its usual range, the mill's own sums are off, the row r
 list, or the quote is far below should-cost. An alert stays until someone marks it seen, the row is removed, or
 its negotiation is agreed in the tracker (recording the mill's quote alone does not clear it). No e-mail or push: they show on the Dashboard, on the Right cost rail
 item and on the Bulk upload screen."""
-SEEN_PATH = os.path.join(os.path.dirname(masters.LOG_PATH), "alerts_seen.json")
 ALERT_KINDS = {"above": "Above its usual range", "sums": "Mill's sums off", "repeat": "Repeats an order", "low": "Far below should-cost"}
 
 
 def _seen():
-    try:
-        with open(SEEN_PATH, encoding="utf8") as f:
-            return set(json.load(f))
-    except (OSError, ValueError):
-        return set()
+    return store.get().read_seen()
 
 
 ALERT_MIN_ABOVE = 0.005        # a quote less than half a per cent of should-cost above its range is not worth an alert
@@ -1824,15 +1802,10 @@ def alerts():
 
 
 @app.post("/api/alerts/seen")
-def alerts_seen(payload: dict = Body(...)):
+def alerts_seen(payload: dict = Body(...), who: str = ""):
     """Mark alerts seen (ids), bring some back (ids with undo: true) or all back (restore: true). Shared: seen by one is seen by all."""
     ids = {str(i) for i in payload.get("ids") or []}
-    seen = set() if payload.get("restore") else (_seen() - ids if payload.get("undo") else _seen() | ids)
-    os.makedirs(os.path.dirname(SEEN_PATH), exist_ok=True)
-    tmp = SEEN_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf8") as f:
-        json.dump(sorted(seen), f)
-    os.replace(tmp, SEEN_PATH)
+    store.get().change_seen(ids, undo=bool(payload.get("undo")), restore=bool(payload.get("restore")), who=who)
     return alerts()
 
 
@@ -2149,18 +2122,15 @@ EDITABLE = set(TABLES) - {"Cotton_Prices", "Content_Groups"}
 _stash = {}       # tables read by the price intake, waiting for their columns to be chosen
 
 
-def save_masters(m):
-    """Write the rate master. The first change of each day keeps a dated copy of what was there."""
-    import shutil
-    backup = masters.MASTER_PATH.replace(".xlsx", f" backup {dt.date.today():%Y%m%d}.xlsx")
-    if os.path.exists(masters.MASTER_PATH) and not os.path.exists(backup):
-        shutil.copyfile(masters.MASTER_PATH, backup)
-    masters.save(m)
-    _cache.pop(masters.MASTER_PATH, None)
+def save_masters(m, reason="Rate master edited", who=""):
+    """Write the rate master. The first change of each day keeps a dated copy of what was there (in a database, every
+    version is kept)."""
+    masters.save(m, reason=reason, who=who, backup=f" backup {dt.date.today():%Y%m%d}", backup_if_absent=True)
+    _cache.pop("#rates", None)
 
 
 @app.put("/api/table/{sheet}")
-def save_table(sheet: str, payload: dict = Body(...)):
+def save_table(sheet: str, payload: dict = Body(...), who: str = ""):
     m = dict(get_masters())
     if sheet not in EDITABLE or sheet not in m:
         raise HTTPException(404, "This table cannot be edited here")
@@ -2197,12 +2167,12 @@ def save_table(sheet: str, payload: dict = Body(...)):
         masters.cost(masters.EXAMPLE_ROW, m)        # the example must still cost with the edited table
     except Exception as e:
         raise HTTPException(400, f"Not saved: with this change the example fabric can no longer be costed ({e})")
-    save_masters(m)
+    save_masters(m, reason=f"Table edited: {sheet}", who=who)
     return {"saved": True, "rows": len(df)}
 
 
 @app.post("/api/cotton")
-def add_cotton(payload: dict = Body(...)):
+def add_cotton(payload: dict = Body(...), who: str = ""):
     m = dict(get_masters())
     cot = m["Cotton_Prices"]
     try:
@@ -2215,7 +2185,7 @@ def add_cotton(payload: dict = Body(...)):
     row = {"Date": date, "Variety": last["Variety"], "Price": price, "Unit": last["Unit"],
            "Source": str(payload.get("source") or "").strip() or "Typed in the tool"}
     m["Cotton_Prices"] = pd.concat([cot, pd.DataFrame([row])[cot.columns]], ignore_index=True)
-    save_masters(m)
+    save_masters(m, reason=f"Cotton price added: {date}, Rs {price:g}", who=who)
     return {"saved": True}
 
 
@@ -2311,7 +2281,7 @@ def intake_map(payload: dict = Body(...)):
 
 
 @app.post("/api/intake/add")
-def intake_add(payload: dict = Body(...)):
+def intake_add(payload: dict = Body(...), who: str = ""):
     good = pi.clean_stage(pd.DataFrame(payload.get("rows", []), columns=pi.STAGE_COLS))
     if good.empty:
         raise HTTPException(400, "No complete rows: each row needs a count and a rate")
@@ -2319,7 +2289,7 @@ def intake_add(payload: dict = Body(...)):
         good["Source"] = good["Source"].fillna(payload["source"])
     m = dict(get_masters())
     m["Market_Yarn"] = pd.concat([m["Market_Yarn"], good], ignore_index=True)
-    save_masters(m)
+    save_masters(m, reason=f"Market yarn prices brought in: {len(good)} rows", who=who)
     return {"added": len(good)}
 
 

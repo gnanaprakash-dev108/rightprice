@@ -167,8 +167,14 @@ def main():
         put = c.put("/api/table/Yarn_Rates", json={"columns": yr["columns"], "rows": rows})
         after = c.post("/api/cost", json=masters.EXAMPLE_ROW).json()["total_per_m"]
         check("Yarn rate edit saved and used", put.status_code == 200 and after > 181.41, f"{after:.2f}")
-        check("Dated copy kept on the first change of the day",
-              any(f.startswith("Rate_Master backup") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
+        st = c.get("/api/store").json()
+        if st["store"] == "files":
+            check("Dated copy kept on the first change of the day",
+                  any(f.startswith("Rate_Master backup") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
+        else:       # a database keeps every version: the one before the edit is still there, and the files are not written
+            check("Dated copy kept on the first change of the day (the earlier version, in the database)",
+                  st["counts"]["rate versions"] >= 2 and st["rate_master_in_use"]["reason"].startswith("Table edited: Yarn_Rates")
+                  and not any(f.startswith("Rate_Master") for f in os.listdir(os.environ["RIGHTPRICE_DATA"])))
         row40[ri] = "abc"
         bad = c.put("/api/table/Yarn_Rates", json={"columns": yr["columns"], "rows": rows})
         check("Text in a number column refused", bad.status_code == 400 and "needs a number" in bad.json()["detail"])
@@ -266,7 +272,9 @@ def main():
         cd = c.get("/api/table/Class_Defaults").json()
         row = next(r for r in cd["rows"] if r[0] == "Dobby/Matt" and r[1] == "Yarn Dyed")
         check("Cost sheet: an applied draft changes that rate only, with its basis and a dated backup",
-              ap.get("backup", "").startswith("Rate_Master before mill cost sheet") and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
+              (ap.get("backup", "").startswith("Rate_Master before mill cost sheet") if c.get("/api/store").json()["store"] == "files"
+               else ap.get("backup", "").startswith("rate version ") and ap["backup"].endswith("kept in the database"))
+              and abs(row[cd["columns"].index("Overhead")] - 0.07) < 1e-9
               and row[cd["columns"].index("Basis")].startswith("V1 workbook; Overhead from mill cost sheet"))
         mm = masters.load()
         half = {"id": "Sizing_Rates|Yarn Dyed|40", "table": "Sizing_Rates", "match": {"Route type": "Yarn Dyed", "Warp count up to (Ne)": 40},
