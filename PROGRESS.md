@@ -138,6 +138,14 @@ Found while measuring on 27 Nov, and told to GP:
   session should first ask GP what `/api/store` shows** (`"store": "postgres"`, `"ok": true`, and `copied_in` >
   `checked` > `summary`; it holds no password) and whether Right cost, the list, the Dashboard and a supplier page look
   as before. If `ok` is false, the `error` and `advice` there say what happened; nothing is lost either way.
+- **27 Nov, after the deploy: GP added `DATABASE_URL`; `/api/store` showed `"ok": false`, "could not be reached
+  (ConnectionTimeout: connection timeout expired)"**, "Nothing has been copied in yet and the files are unchanged".
+  A timeout (not a refused connection or a wrong password) points at the database's firewall. GP was asked to check
+  `rightprice-db` > Overview (Available) and > Networking: "Public access (allowed IP addresses)" with "Allow public access
+  from any Azure service within Azure to this server" ticked and saved; the app retries every 15 s and copies the files in
+  by itself once it gets through, no restart. Or remove `DATABASE_URL` meanwhile (the site's data pages answer 503 while
+  the database cannot be reached). If Networking says "Private access (VNet Integration)", GP should stop and say so.
+  **The next session: ask GP what `/api/store` shows now.**
 - This handover note is on the branch and in its own pull request, left unmerged on purpose so no redeploy restarts the
   site while GP switches it over; merge it (or carry it in) with the next pull request.
 - **Next: stages 2 to 5**, in parallel tracks on their own branches, merged one at a time with all checks re-run (GP
