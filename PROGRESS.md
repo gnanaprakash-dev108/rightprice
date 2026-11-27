@@ -130,6 +130,33 @@ Found while measuring on 27 Nov, and told to GP:
 
 ### Where things stand
 
+- **27 Nov, second session: stage 1 merged (pull request 24, merge commit 98756be) and deployed: the deploy run was green
+  (finished 11:38 UTC).** Without `DATABASE_URL` the site runs on the files as before. The build session cannot sign in:
+  **the live site has not been confirmed by eye since this deploy.** After the deploy the site answered Microsoft
+  sign-in's 401 to a request without sign-in (the front door is up; that does not show the app started).
+- **27 Nov, 12:13:47 UTC: the live site moved to the database.** GP added `DATABASE_URL`. The first try timed out
+  (ConnectionTimeout): on `rightprice-db` > Networking, public access was on but "Allow public access from any Azure
+  service within Azure to this server" was not ticked and there were no firewall rules. GP ticked it and saved; the app,
+  retrying every 15 s, got through with no restart and copied the files in. `/api/store` showed `"ok": true`: 4 rate
+  versions (the 3 dated copies in `/home/rightprice-data` as earlier versions, then `Rate_Master.xlsx`), 2 fabric list
+  rows ("the same; 1 costed on both, equal to the paisa"; the other row has no costing choices to cost), tracker,
+  alerts seen and mill cost sheets empty on the live site and in the database. The files were only read;
+  `moved_to_database.json` was left beside them.
+- A tighter firewall for later (GP may choose it): instead of the "any Azure service" box, one rule per outbound address
+  of the web app (web app > Networking > Outbound IPv4 addresses, about 40 of them). Never "0.0.0.0 - 255.255.255.255".
+- This handover was merged after the move (its redeploy restarted the site on the database: `/api/store` should still
+  show `copied_in` started 2026-11-27T12:13:47, so nothing was copied twice). **The next session should ask GP to confirm
+  that, and that the pages look as before; the live site has not been seen by eye on the database by the build session.**
+- **Next: stages 2 to 5**, in parallel tracks on their own branches, merged one at a time with all checks re-run (GP
+  agreed); then stage 6. Each track builds its tables as `db/00N_<stage>.sql` (the full draft is `db/schema.sql`; its
+  `quote`, `negotiation_step`, `rate_version`, `alert_seen` and `cost_sheet_row` differ from the tables in use, so a
+  track that needs them changes them with `ALTER TABLE` in its own numbered file) and its rules in `rules/`. **GP's
+  decisions for them (27 Nov, docs/QUESTIONS_FOR_GP.md):** "priced well above its group" = above the group's usual range,
+  the brief's own rule (stage 2); roles Admin, Rates editor, Buyer, Viewer (stage 3); purchase orders costed on their
+  order month's rates, quotes and Cost a fabric on today's (stage 5). What GP
+  sends: the 10,000 invoices and the PLM specifications for their codes (stage 2); the 10 names and roles (stage 3);
+  yarn prices July to November and mill cost sheets as they come (stage 5).
+
 - Merged and deployed (deploy runs green): pull requests 10 to 16.
   - 10: negotiation brief fixes (usual range per fabric type, mirror opening price, placeholders weighed).
   - 11: negotiation pack (one printable page per mill sheet).

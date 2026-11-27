@@ -12,6 +12,17 @@
 - Dark mode: added, following RightPrice's switch. Avatar: initials from the Microsoft sign-in
   (read from Azure's /.auth/me; off Azure it shows RP).
 
+## Answered 27 Nov 2026 (for stages 2, 3 and 5)
+
+- Stage 2, "priced well above its group": **the same rule as the brief**: above the group's usual range (the middle half
+  of its past prices, kept between 5% and 10% either side of the group's median).
+- Stage 3, roles: **Admin, Rates editor, Buyer, Viewer**. Admin: everything, users included. Rates editor: may edit rates
+  and apply mill cost sheet drafts, no user admin. Buyer: every page, uploads, tracker steps and drafts; no rate edits, no
+  user admin. Viewer: read only. Nobody has access until an admin adds them; enforced on the server; page-wise
+  permissions adjustable per role on the admin page. (The 10 names are still to come from GP.)
+- Stage 5, which rates a costing uses: **order date for orders**: purchase orders on the rates of their order month;
+  quotes and Cost a fabric on today's rates; each costing says which date's rates it used.
+
 ## Answered 27 Nov 2026 (stage 1 of the rebuild)
 
 - The Azure database `rightprice-db` exists (deployment completed 27 Nov). `DATABASE_URL` is added only when the build

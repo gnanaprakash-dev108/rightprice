@@ -101,7 +101,9 @@ The database: Azure Database for PostgreSQL flexible server `rightprice-db`
 (`rightprice-db.postgres.database.azure.com`, port 5432, SSL required), administrator `rpadmin`, resource group
 `rightprice-rg`, India South Central, PostgreSQL 16, Burstable B1ms, 32 GiB, backups 7 days, public access with
 "allow Azure services" on. Created by GP; the deployment completed on 27 Nov 2026. The app uses the default database,
-`postgres`.
+`postgres`. **The live site moved to it on 27 Nov 2026 at 12:13 UTC.** Its firewall: "Allow public access from any
+Azure service within Azure to this server" ticked (without it the app timed out); a tighter choice is one firewall rule
+per outbound address of the web app (web app > Networking). Never add "0.0.0.0 - 255.255.255.255".
 
 ### Switching the live site to the database
 
@@ -130,9 +132,9 @@ setting.
    marked seen, then bring it back.
 
 If something is wrong, `/api/store` says what and what to do. The pages answer "503" with the reason meanwhile.
-- **"could not be reached"**: the app tries again by itself every 15 seconds. Check that `rightprice-db` is running
-  (it can be stopped in the portal) and, under its **Networking**, that "Allow public access from any Azure service" is
-  ticked. A wrong password says "password authentication failed". Do not remove `DATABASE_URL` for an outage.
+- **"could not be reached"** (a timeout): the app tries again by itself every 15 seconds. Check that `rightprice-db` is
+  running (it can be stopped in the portal) and, under its own **Networking** (not the web app's), that "Allow public
+  access from any Azure service within Azure to this server" is ticked and saved. This was the cause on 27 Nov. A wrong password says "password authentication failed". Do not remove `DATABASE_URL` for an outage.
 - **"Copying the files in was stopped and nothing was kept"**: nothing moved. Remove `DATABASE_URL` and restart to go
   back to the files, and send the message to the build session.
 
