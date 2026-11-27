@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 import store
 from rules import (alerts, common, costing, costsheets, dashboard, drafts, fabric_list, pack as pack_rules, rates, rightcost,
                    supplier as supplier_rules, tracker)
+from rules import access
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -134,6 +135,95 @@ def _code_version():
 
 
 app.add_middleware(McpGate)
+
+
+# ------------------------------------------------------------------ stage 3: who may use what, checked here for every request
+def _route_for(scope):
+    """The route that will answer this request, found the way the router finds it (the first full match, in order)."""
+    from starlette.routing import Match
+    partial = None
+    for route in app.router.routes:
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return route
+        if match == Match.PARTIAL and partial is None:
+            partial = route
+    return partial
+
+
+def _route_key(route, method):
+    """How rules/access.py ROUTES names a route: "GET /api/costs", "WS /classic/{path:path}", "MOUNT /"."""
+    from starlette.routing import Mount, WebSocketRoute
+    if isinstance(route, Mount):
+        return f"MOUNT {route.path or '/'}"
+    if isinstance(route, WebSocketRoute):
+        return f"WS {route.path}"
+    return f"{'GET' if method == 'HEAD' else method} {route.path}"
+
+
+def route_keys():
+    """Every address the app answers, as ROUTES names them, with the permission each needs (None: none assigned)."""
+    from starlette.routing import Mount, WebSocketRoute
+    out = {}
+    for route in app.router.routes:
+        methods = [None] if isinstance(route, (Mount, WebSocketRoute)) else sorted((getattr(route, "methods", None) or {"GET"}) - {"HEAD"})
+        for m in methods:
+            key = _route_key(route, m)
+            out[key] = access.permission_for(key, getattr(route, "path", ""))
+    return out
+
+
+def _refusal_page(status, words):
+    """What a browser is shown when RightPrice will not open for this person: plain words, in RightPrice's colours."""
+    import html
+    title = {401: "Sign in first", 503: "RightPrice cannot let you in just now"}.get(status, "You have not been given access yet")
+    link = ('<a href="/.auth/login/aad?post_login_redirect_uri=/">Sign in</a>' if status == 401
+            else '<a href="/.auth/logout">Sign out, to sign in with another account</a>')
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<title>RightPrice</title><style>body{{margin:0;font:15px/1.5 Manrope,"Segoe UI",system-ui,sans-serif;background:#F6F4EE;color:#1D2521}}'
+            f'main{{max-width:34rem;margin:12vh auto;padding:0 16px}}h1{{font-size:22px;color:#1B4D3E;margin:0 0 12px}}'
+            f'a{{color:#1B4D3E}}.mark{{display:inline-block;width:36px;height:36px;border-radius:10px;background:#1B4D3E;margin-bottom:16px}}'
+            f'@media (prefers-color-scheme: dark){{body{{background:#0F1513;color:#E8EDE9}}h1,a{{color:#F2B23E}}}}</style></head>'
+            f'<body><main><div class="mark" aria-hidden="true"></div><h1>{html.escape(title)}</h1><p>{html.escape(words)}</p>'
+            f'<p>{link}</p></main></body></html>')
+
+
+class AccessGate:
+    """Every request, before it reaches its route: off unless the app setting RIGHTPRICE_ADMINS is set (then the app is
+    as it was). With it on, the address's permission (rules/access.py ROUTES) is checked against the signed-in person;
+    an address with none assigned is refused. /mcp is the AI assistant's way in, checked by McpGate and its token."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket") or not access.enforced():
+            return await self.inner(scope, receive, send)
+        path = scope.get("path", "")
+        if path == "/mcp" or path.startswith("/mcp/"):
+            return await self.inner(scope, receive, send)
+        route = _route_for(scope)
+        key = _route_key(route, scope.get("method", "")) if route is not None else f"{scope.get('method', 'WS')} {path}"
+        need = access.permission_for(key, getattr(route, "path", path))
+        if need == access.PUBLIC:
+            return await self.inner(scope, receive, send)
+        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers") or []}
+        refused = await asyncio.to_thread(access.check, headers, need)     # may read the database: not on the server's own loop
+        if refused is None:
+            return await self.inner(scope, receive, send)
+        status, words = refused
+        if scope["type"] == "websocket":
+            return await send({"type": "websocket.close", "code": 1008})
+        if path.startswith("/api/") or path == "/openapi.json":
+            body, kind = json.dumps({"detail": words}).encode(), b"application/json"
+        else:
+            body, kind = _refusal_page(status, words).encode("utf8"), b"text/html; charset=utf-8"
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", kind), (b"cache-control", b"no-store"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(AccessGate)      # outside McpGate: it sees every request first, and lets /mcp through to it
 
 
 @app.exception_handler(store.StoreUnavailable)
@@ -402,6 +492,32 @@ def intake_add(payload: dict = Body(...), request: Request = None):
     return rates.intake_add(payload, who=_who(request))
 
 
+# ------------------------------------------------------------------ stage 3: users, roles and permissions (rules/access.py)
+@app.get("/api/me")
+def me(request: Request):
+    return access.me(request.headers)
+
+
+@app.get("/api/users")
+def users_view(request: Request):
+    return access.users_view(request.headers)
+
+
+@app.post("/api/users/add")
+def users_add(payload: dict = Body(...), request: Request = None):
+    return access.add_person(payload, request.headers)
+
+
+@app.post("/api/users/change")
+def users_change(payload: dict = Body(...), request: Request = None):
+    return access.change_person(payload, request.headers)
+
+
+@app.post("/api/users/permissions")
+def users_permissions(payload: dict = Body(...), request: Request = None):
+    return access.set_permissions(payload, request.headers)
+
+
 
 # ------------------------------------------------------------------ classic screens, passed through
 HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "content-encoding", "content-length", "host"}
@@ -482,7 +598,11 @@ def index(request: Request):
     shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
     if request.query_params.get("embed") == "1":
         return _page("index.html", ("app.css", "app.js"))
-    return _page("rightcost.html", ("rightcost.css", "rightcost.js"))
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js"))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")
+
+if [k for k, need in route_keys().items() if need is None]:        # check_server.py fails on this too
+    print("RightPrice: addresses with no permission assigned (refused to everyone while permissions are on): "
+          + ", ".join(k for k, need in route_keys().items() if need is None), file=sys.stderr)
