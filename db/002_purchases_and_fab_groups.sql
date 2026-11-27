@@ -11,7 +11,11 @@
 --   - upload keeps the file itself (the background job reads it from here), when it started and last showed it was alive,
 --     and the counts of new, changed, repeated, removed and left-out lines; uploads of other kinds can use it later.
 --   - purchase_line keeps the supplier as written, and is marked (not deleted) when a later file shows it deleted in SAP.
---   - fab_group says who merged it and when; fabric says why it is not grouped.
+--   - fab_group says who merged it and when; fabric says why it is not grouped, and keeps the signature it was grouped by
+--     (so a corrected PLM specification, or a change in how the fields are tidied, regroups it at the next upload);
+--     fabric_regroup records each move, for the group pages.
+--   - each order line keeps the date of the file its figures came from: the newest file wins, whatever order the files
+--     are uploaded in (GP's review, 27 Nov 2026). ZLOI lines are kept, and left out of every calculation (GP's decision).
 
 -- the mills: one record each, however the name is written (rules/mills.py, mill_key)
 CREATE TABLE mill (
@@ -55,12 +59,28 @@ CREATE TABLE fabric (
     description   TEXT NOT NULL DEFAULT '', -- the purchase order's short text, the latest received
     fab_group_id  BIGINT REFERENCES fab_group(id),  -- empty: not grouped (why in not_grouped), never guessed
     not_grouped   TEXT,                     -- why it has no group: the PLM specification is missing or incomplete
+    signature     TEXT,                     -- the signature it was grouped by (empty when not grouped)
     spec          TEXT,                     -- JSON: its row of the PLM specification (data/plm_specs_for_po.csv), as received
+    spec_sha      TEXT,                     -- SHA-256 of that row, to see when the PLM list changes it
     choices       TEXT,                     -- JSON: the costing choices worked out from it as pilot.py does; empty: not costed
     problems      TEXT NOT NULL DEFAULT '[]',   -- JSON: why it is not costed
     updated_at    TEXT NOT NULL
 );
 CREATE INDEX fabric_group ON fabric (fab_group_id);
+
+-- a fabric code moved from one Fab group to another (or out of any): its specification was corrected or completed, or
+-- the way the fields are tidied changed. The group codes themselves never change.
+CREATE TABLE fabric_regroup (
+    id             @ID@,
+    fabric_id      BIGINT NOT NULL REFERENCES fabric(id),
+    from_group_id  BIGINT REFERENCES fab_group(id),
+    to_group_id    BIGINT REFERENCES fab_group(id),
+    why            TEXT NOT NULL,
+    at             TEXT NOT NULL,
+    upload_id      BIGINT
+);
+CREATE INDEX fabric_regroup_from ON fabric_regroup (from_group_id);
+CREATE INDEX fabric_regroup_to ON fabric_regroup (to_group_id);
 
 -- everything that comes in as a file, read in the background
 CREATE TABLE upload (
@@ -74,13 +94,19 @@ CREATE TABLE upload (
     started_at    TEXT,
     finished_at   TEXT,
     alive_at      TEXT,                     -- the job's last sign of life (a job stopped by a restart is told apart by it)
+    runner        TEXT,                     -- the machine and process reading it
+    file_date     TEXT,                     -- when the file was made: the newest file's figures win
+    file_date_from TEXT,                    -- where that date was read: the workbook's own saved date, or its latest document date
     error         TEXT,                     -- why it failed
     rows_total    BIGINT,                   -- rows in the file
     rows_loaded   BIGINT,                   -- order lines kept (new + changed + already in)
     rows_new      BIGINT,
     rows_changed  BIGINT,                   -- in an earlier file with other figures: the newer figures are kept
     rows_same     BIGINT,                   -- in an earlier file with the same figures: one line, not two
-    rows_removed  BIGINT,                   -- in an earlier file, shown deleted in SAP in this one: marked removed
+    rows_removed  BIGINT,                   -- in an earlier file; this newer one shows it deleted, blocked, not bulk, not rupees ...: marked removed
+    rows_dropped  BIGINT,                   -- in an earlier file; this newer one has the rest of its order but not it: marked removed
+    rows_older    BIGINT,                   -- a newer file already gave these lines: this file's figures are not used for them
+    rows_outliers BIGINT,                   -- ZLOI lines among those kept: left out of every calculation, shown apart
     rows_skipped  BIGINT,                   -- left out (why in skipped)
     fabrics_new   BIGINT,
     groups_new    BIGINT,
@@ -94,17 +120,20 @@ CREATE TABLE upload (
 -- what was bought: one row per purchase-order line
 CREATE TABLE purchase_line (
     id                 @ID@,
-    upload_id          BIGINT NOT NULL REFERENCES upload(id),   -- the upload its figures came from (the latest that had it)
+    upload_id          BIGINT NOT NULL REFERENCES upload(id),   -- the upload its figures came from
     po_number          TEXT NOT NULL,       -- Purchasing Document
     item               TEXT NOT NULL,       -- Item
     doc_date           TEXT NOT NULL,       -- Document Date
-    doc_type           TEXT NOT NULL,       -- Purchasing Doc. Type (BO, ZLOI, BF: bulk)
+    doc_type           TEXT NOT NULL,       -- Purchasing Doc. Type (BO, BF: bulk; ZLOI: kept, but an outlier left out of every calculation)
     fabric_id          BIGINT NOT NULL REFERENCES fabric(id),
     mill_id            BIGINT NOT NULL REFERENCES mill(id),
     supplier           TEXT NOT NULL,       -- Name of Supplier, as written
     qty_m              @REAL@ NOT NULL,     -- Order Quantity, metres
     price              @REAL@ NOT NULL,     -- Net Price, rupees per metre (ex-mill)
-    removed_upload_id  BIGINT REFERENCES upload(id),   -- a later file showed it deleted in SAP: kept, not counted
+    removed_upload_id  BIGINT REFERENCES upload(id),   -- a newer file removed it (deleted in SAP, no longer bulk ...): kept, not counted
+    removed_why        TEXT,
+    state_file_date    TEXT NOT NULL,       -- the date of the file that last set its figures or removed it,
+    state_upload_id    BIGINT NOT NULL,     -- and that upload: only a newer file (or a later upload of a file as new) changes it
     UNIQUE (po_number, item)                -- the same order line uploaded twice is one line
 );
 CREATE INDEX purchase_line_fabric ON purchase_line (fabric_id, doc_date);

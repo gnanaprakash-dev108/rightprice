@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 import httpx
@@ -53,6 +54,8 @@ async def lifespan(_app):
     import anyio.to_thread
     anyio.to_thread.current_default_thread_limiter().total_tokens = 120
     await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
+    from rules import purchases as _purchases       # stage 2: purchase files left half-read by a restart are read again
+    threading.Thread(target=_purchases.resume_at_start, daemon=True).start()
     if os.environ.get("RIGHTPRICE_NO_CLASSIC") != "1":
         _classic = subprocess.Popen(
             [sys.executable, "-m", "streamlit", "run", os.path.join(HERE, "app.py"),
@@ -152,7 +155,9 @@ def store_status():
 def rightcost_page():
     """The earlier address of Right cost: it is now a page of the shell."""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/#rightcost", status_code=307)
+    # no '#' in the address given: the browser keeps the one asked for (/rightcost#group/Fab-0001), and the shell opens
+    # Right cost when there is none
+    return RedirectResponse("/?from=rightcost", status_code=307)
 
 
 def _who(request):
@@ -419,7 +424,7 @@ def purchase_uploads():
 
 @app.post("/api/purchases/upload")
 async def purchase_upload(request: Request, file: UploadFile = File(...)):
-    data = await file.read()
+    data = await file.read(purchases.MAX_BYTES + 1)        # never more than the most that is read: a larger file is refused unread
     return await asyncio.to_thread(purchases.upload, file.filename, data, _who(request))
 
 

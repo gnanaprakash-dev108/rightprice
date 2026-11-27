@@ -271,4 +271,11 @@ def supplier(mill: str):
             "quoted": dict(q_side, rows=[slim(r) for r in sorted(fl, key=lambda r: (r.get("tracked") == "Agreed", -r["above_range"]))], not_costed=not_costed, sheets=sheets),
             "sums": sums, "hint": hint, "today": common._day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},
-            "questions": {"quoted": quoted_q, "bought": bought_q, "general": general}}
+            "questions": {"quoted": quoted_q, "bought": bought_q, "general": general},
+            "outliers": _outliers(key)}
+
+
+def _outliers(key):
+    """Stage 2: the mill's ZLOI order lines, shown apart; they are in none of the figures above (GP, 27 Nov 2026)."""
+    from rules import purchases
+    return purchases.outliers_for_mill(key)

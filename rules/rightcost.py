@@ -46,8 +46,11 @@ def _pilot_briefs(rows, key):
                 try:
                     res = masters.cost(r["choices"], m)
                     b = costing.brief(res, m, r["metres"], (), r["choices"])
-                    out[r["code"]] = None if b is None else {"stance": b["stance"], "implausible": b["implausible"],
-                                                            "lo": b["band"]["lo"] * 100, "hi": b["band"]["hi"] * 100, "weak": b["weak"]}
+                    # stage 2: the should-cost on today's rates too, so a row and the price popup always agree
+                    today = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1), "gsm": round(res["gsm"], 1),
+                             "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]}}
+                    out[r["code"]] = dict(today) if b is None else dict(today, stance=b["stance"], implausible=b["implausible"],
+                                                                         lo=b["band"]["lo"] * 100, hi=b["band"]["hi"] * 100, weak=b["weak"])
                 except Exception as e:      # a costing that no longer works on today's rates
                     out[r["code"]] = {"stance": "error", "weak": [str(e)]}
             _briefs.update(key=key, data=out)
@@ -74,18 +77,15 @@ def costs():
     dashboard._warm_pilot()
     ins = common._cache.get(common.PILOT + "#insights")
     cats = {(c["route"], c["weave"]): c for c in (ins[1]["categories"] if ins and ins[1] else [])}
-    from rules import fab_groups        # stage 2: each purchase-order fabric's Fab group (none on the files store)
+    from rules import fab_groups, purchases     # stage 2: Fab groups; the purchase-order rows worked out again, ZLOI left out
     gkey = fab_groups.version()
-    memo = (common._state_key(), _briefs["key"], _briefs["running"], gkey)
+    pkey, pilot_rows = purchases.pilot_rows()
+    memo = (common._state_key(), _briefs["key"], _briefs["running"], gkey, pkey)
     if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
         return _costs_memo["val"]
     out = []
     if os.path.exists(common.PILOT):
-        def load():
-            f = pd.read_excel(common.PILOT, sheet_name="Fabrics")
-            f = f.astype(object).where(pd.notna(f), None)
-            return f.to_dict("records")
-        for r in common.cached(common.PILOT + "#fabrics", load):
+        for r in pilot_rows:
             gap = r["PO above should-cost %"]
             cat = cats.get((r["Route"], r["Weave group"]))
             hi = costing.BAND_MIN if cat is None else min(costing.BAND_MAX, max(costing.BAND_MIN, cat["p75"]))
@@ -101,12 +101,22 @@ def costs():
                 "excess": r["Excess Rs"], "order_size": r["Order size"], "qty_band": r["Rate card quantity"],
                 "placeholders": r["Placeholder rates used"], "held_back": bool(r["Held back"]), "band": band,
                 "range": [lo, hi], "buckets": {b: r.get(f"{b} Rs/m") for b in dashboard.BUCKETS},
-                "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS))})
+                "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS)),
+                "outliers": r["Outliers (ZLOI)"], "worked_out_again": r["Worked out again"]})
     version = store.get().version("rates")
-    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, len(out), bool(cats))) if out else {}
+    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, len(out), bool(cats), pkey, ins[0] if ins else None)) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
-        if v:
+        if v and "should" in v and r["should"] is not None and abs(v["should"] - r["should"]) >= 0.005:
+            # a rate changed since the pilot: the row's should-cost follows today's rates, as its verdict does
+            r.update(should=v["should"], per_kg=v["per_kg"], gsm=v["gsm"], buckets={b: v["buckets"].get(b) for b in dashboard.BUCKETS})
+            if r["price"] is not None:
+                r["gap"] = round(r["price"] - v["should"], 2)
+                r["gap_pct"] = round((r["price"] / v["should"] - 1) * 100, 1)
+                r["excess"] = None if not r["metres"] else r["gap"] * r["metres"]
+        if r["price"] is None:
+            r["band"] = "No price"          # stage 2: bought only on ZLOI lines, left out of every figure
+        elif v and "stance" in v:
             r["band"] = "Check quote" if v.get("implausible") else STANCE_BAND[v["stance"]]
             r["why_unsure"] = v["weak"]
             if "lo" in v:
@@ -159,7 +169,7 @@ def costs():
             r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
     val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=(common._state_key(), _briefs["key"], _briefs["running"], gkey), val=val)
+    _costs_memo.update(key=(common._state_key(), _briefs["key"], _briefs["running"], gkey, pkey), val=val)
     return val
 
 

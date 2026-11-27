@@ -8,9 +8,11 @@ import masters
 
 
 def _warm_pilot():
-    if common.PILOT + "#insights" not in common._cache and os.path.exists(common.PILOT):
+    """The fit by fabric type (panel 1), which the brief's usual ranges come from, worked out if it is not yet, or if
+    what it rests on has changed (stage 2: the purchase-order rows are worked out again from what was bought)."""
+    if os.path.exists(common.PILOT):
         try:
-            insights()
+            _pilot_insights()
         except Exception:
             pass
 
@@ -73,16 +75,25 @@ BUCKETS = ["Yarn", "Yarn dyeing", "Sizing and weaving", "Dyeing and finishing", 
            "Upcharges and quantity terms"]
 
 
-def insights():
-    """The dashboard's own-data panels: what was paid and what it should cost by fabric type, where the
-    rupee goes by route, the cotton price by year, and how far a yarn price move carries into a fabric."""
-    m = common.get_masters()
+def _pilot_insights():
+    """The pilot's own panels (fit by fabric type, cost split by route, suppliers, order size), on the purchase-order
+    rows as Right cost has them: worked out again from what was bought, ZLOI left out (GP, 27 Nov 2026), the pilot
+    workbook itself never changed. Kept until those rows change; the brief's usual ranges come from it."""
+    from rules import purchases
+    key, all_rows = purchases.pilot_rows()
+    hit = common._cache.get(common.PILOT + "#insights")
+    if hit and hit[0] == key:
+        return hit[1]
+    rows = [r for r in all_rows if r["PO price Rs/m"] is not None and r["Should-cost Rs/m"] is not None]
 
     def from_pilot():
-        if not os.path.exists(common.PILOT):
+        if not rows:
             return None
-        f = pd.read_excel(common.PILOT, sheet_name="Fabrics")
+        f = pd.DataFrame(rows)
         gap = "PO above should-cost %"
+        for col in ["PO metres", "PO price Rs/m", "Should-cost Rs/m", gap] + [f"{b} Rs/m" for b in BUCKETS]:
+            if col in f:
+                f[col] = pd.to_numeric(f[col], errors="coerce")
         cats = []
         for (route, grp), d in f.groupby(["Route", "Weave group"]):
             if len(d) >= 20:
@@ -118,7 +129,16 @@ def insights():
         return {"categories": cats, "split": split, "suppliers": sup, "quantity": qty, "fabrics": len(f),
                 "median_gap": float(f[gap].median()), "within10": float((f[gap].abs() <= 10).mean())}
 
-    p = common.cached(common.PILOT + "#insights", from_pilot) if os.path.exists(common.PILOT) else None
+    p = from_pilot()
+    common._cache[common.PILOT + "#insights"] = (key, p)
+    return p
+
+
+def insights():
+    """The dashboard's own-data panels: what was paid and what it should cost by fabric type, where the
+    rupee goes by route, the cotton price by year, and how far a yarn price move carries into a fabric."""
+    m = common.get_masters()
+    p = _pilot_insights() if os.path.exists(common.PILOT) else None
     cot = m["Cotton_Prices"].copy()
     cot["Date"] = pd.to_datetime(cot["Date"], errors="coerce")
     cot = cot.dropna(subset=["Date"]).sort_values("Date")
