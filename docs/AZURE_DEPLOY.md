@@ -90,6 +90,81 @@ Set "Restrict access" to **Require authentication**. Without this, anyone with t
 - To take a copy of the live rate master, download it from the same folder (Advanced Tools > Kudu >
   file browser), or use the downloads on the Rate tables screen.
 
+## The database (stage 1 of the rebuild, from 27 Nov 2026)
+
+The app keeps its shared data (the rate master, the fabric list, the negotiation tracker, the alerts marked seen and the
+mill cost sheets) in the files in `/home/rightprice-data` until the app setting `DATABASE_URL` is added. With it, the
+data is kept in the PostgreSQL database instead. The classic screens follow the same setting. Yarn price documents
+brought in through the price intake stay as files in `/home/rightprice-data/price_sources`.
+
+The database: Azure Database for PostgreSQL flexible server `rightprice-db`
+(`rightprice-db.postgres.database.azure.com`, port 5432, SSL required), administrator `rpadmin`, resource group
+`rightprice-rg`, India South Central, PostgreSQL 16, Burstable B1ms, 32 GiB, backups 7 days, public access with
+"allow Azure services" on. Created by GP; the deployment completed on 27 Nov 2026. The app uses the default database,
+`postgres`.
+
+### Switching the live site to the database
+
+Do this only once the code of stage 1 is merged and its deploy run is green; until then the app does not read the
+setting.
+
+1. Optional but cheap: a copy of the data folder. Web app > Development Tools > SSH, then
+   `cp -r /home/rightprice-data /home/rightprice-data-before-database`. The move only reads the files; this copy is for
+   peace of mind.
+2. Web app `rightprice` > **Settings** > **Environment variables** > **App settings** > **+ Add**:
+
+   | Name | Value |
+   |---|---|
+   | `DATABASE_URL` | `postgresql://rpadmin:YOUR-PASSWORD@rightprice-db.postgres.database.azure.com:5432/postgres?sslmode=require` |
+
+   Type the password as it is, even with `@ # : / ? %` in it: the app reads the setting itself. (Only if the password
+   contains `%` followed by two letters or digits, such as `%41`, write that `%` as `%25`.) Apply, and confirm the
+   restart. The password stays in Azure; never paste it into a chat.
+3. Wait two or three minutes, then open `https://rightprice-bnf2bwbga8bga6eb.indiasouthcentral-01.azurewebsites.net/api/store`
+   (signed in). It should show `"store": "postgres"`, `"ok": true`, and under `copied_in` > `checked` > `summary`:
+   the rate master the same workbook byte for byte; the fabric list's rows the same and each costed on both, equal to
+   the paisa; the tracker, the alerts seen and the mill cost sheets the same. `counts` gives how many of each it holds.
+4. Look at the site as usual: Right cost, the fabric list, the Dashboard, a supplier page, the quote alert count, the
+   rate tables. They should be as they were before the setting was added.
+5. One change, to see it kept: mark one quote alert seen, restart the web app (Overview > Restart), check it is still
+   marked seen, then bring it back.
+
+If something is wrong, `/api/store` says what and what to do. The pages answer "503" with the reason meanwhile.
+- **"could not be reached"**: the app tries again by itself every 15 seconds. Check that `rightprice-db` is running
+  (it can be stopped in the portal) and, under its **Networking**, that "Allow public access from any Azure service" is
+  ticked. A wrong password says "password authentication failed". Do not remove `DATABASE_URL` for an outage.
+- **"Copying the files in was stopped and nothing was kept"**: nothing moved. Remove `DATABASE_URL` and restart to go
+  back to the files, and send the message to the build session.
+
+### Going back to the files
+
+Delete the app setting `DATABASE_URL` and restart. The app returns to the files in `/home/rightprice-data` **as they were
+when they were copied in**; `/api/store` then says so. Changes made on the database since stay in the database and are not
+in the files. To have them as files: `python store.py export /home/rightprice-data-from-database` in the SSH window
+with the setting still on (it writes a new folder and changes nothing else).
+
+If work is done on the files while the setting is off and the setting is then added back, the app will not start on the
+database: it says which files changed, so that neither side's work is lost. Either keep working on the files (remove the
+setting again), or keep the database and set the files aside with `python store.py keep-database` (SSH window, in
+`/home/site/wwwroot`) and restart. Deleting or moving the old files away after the move does not stop the app.
+
+**Not tried by the build session** (it has no Azure access): the two `python store.py ...` commands in the web app's SSH
+window. That window may not have the app's packages or settings loaded; if a command says a module is missing or that
+`DATABASE_URL` is not set, stop and ask the build session rather than trying other things. Everything else above was
+tried on a test PostgreSQL 16 and SQLite in the build container.
+
+The app leaves one new file beside the data files after the move, `moved_to_database.json`, saying when and into which
+database they went. With it there, an empty database (a wrong database name in the setting) is refused instead of being
+filled again from old files.
+
+### Cost
+
+The portal showed USD 22.08 a month for this server, with "Free up to 750 hours" and "Free up to 32 GB" (the free
+services of the first 12 months). Check Cost analysis for `rightprice-db` after the first week. If it is charged, the
+agreed fallback is a database file on the web app's own storage: `DATABASE_URL=sqlite:////home/rightprice-data/rightprice.db`
+(four slashes). The build session should look at that again before it is used: `/home` on App Service is a network
+share, and SQLite needs care there with two processes (the app and the classic screens).
+
 ## Letting an AI assistant in (MCP), and e-mail drafts
 
 Two app settings, both optional. Web app > **Settings** > **Environment variables** > App settings:

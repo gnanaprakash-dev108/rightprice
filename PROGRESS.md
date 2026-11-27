@@ -1,6 +1,6 @@
 # RightPrice: progress and handover
 
-As of 27 November 2026. **Start with "Handover, 26 November 2026" below; its first section is the rebuild agreed on 27 November.** The earlier handover
+As of 27 November 2026 (evening). **Start with "Handover, 26 November 2026" below; its first section is the rebuild agreed on 27 November, and stage 1 is built.** The earlier handover
 (25 November) and the sections after it are the record of how the tool got here, oldest first.
 
 ## Handover, 26 November 2026
@@ -8,7 +8,7 @@ As of 27 November 2026. **Start with "Handover, 26 November 2026" below; its fir
 **The aim of the tool is a better negotiation with the vendor.** Every screen is judged by whether it
 helps a fabric buyer walk into a meeting with a mill better prepared. The owner is GP.
 
-### NEXT: the rebuild in six stages (agreed with GP on 27 Nov; stage 1 is starting)
+### NEXT: the rebuild in six stages (agreed with GP on 27 Nov; stage 1 built, pull request 24)
 
 GP asked what should have been done differently, then asked for it to be done. The agreed plan is a new foundation
 under the existing app, stage by stage, each one live before the next; **not** a new app from zero (the engine and
@@ -36,29 +36,80 @@ Decisions and ground rules GP agreed:
 - Decisions to bring to GP as select-an-option questions when their stage starts: the threshold for "priced well above
   its group" (stage 2); the roles and what each may do (stage 3); today's rates or order-date rates by default (stage 5).
 
-Stage 1, where it stands:
-- `db/schema.sql` is the table design (21 tables), a draft for GP to look over. PostgreSQL 16 accepts it. Nothing reads or
-  writes it yet and no data has moved.
-- Intended build: `psycopg` 3 and plain SQL (numbered files applied at start, no migration framework); the app uses the
-  database when `DATABASE_URL` is set and the files otherwise, so the code can be merged before GP creates the database and
-  switching back is one setting. The checks should run against a real PostgreSQL (a service container in the "checks" job).
-- A test PostgreSQL runs in the build container: `initdb` and `pg_ctl` are in `/usr/lib/postgresql/16/bin`; the data folder
-  must be one the `postgres` user can reach (`/var/lib/postgresql/...`, not the scratchpad), run with `su postgres -c`.
-- **The Azure database: GP started creating it on 27 Nov** (the portal showed "Deployment is in progress" at 2:36 PM his time;
-  ask him whether it completed). Azure Database for PostgreSQL flexible server, name `rightprice-db`
-  (`rightprice-db.postgres.database.azure.com`, port 5432, SSL required), administrator login `rpadmin`, resource group
-  `rightprice-rg`, region India South Central, PostgreSQL 16, Dev/Test: Burstable B1ms, 32 GiB, no high availability, backups
-  7 days, public access with "allow Azure services" on. The app uses the default database, `postgres`; no other was created.
-  GP holds the password; it must never be asked for in chat. A build session cannot reach this database: build and prove on
-  the test PostgreSQL here, and let the app itself copy the files in when GP adds the setting.
-- **Cost, as GP was told:** the form showed USD 22.08 a month (compute 17.89, storage 4.19) with "Free up to 750 hours" and
-  "Free up to 32 GB"; GP's Free services page lists Azure Database for PostgreSQL among the services free for 12 months after
-  sign-up. The subscription is Azure for Students (a fixed credit, which the web app plan also draws on). GP finds USD 17 to 22
-  a month too much: if Cost analysis shows a charge for `rightprice-db`, or when the free period ends, the fallback agreed is a
-  database file (SQLite) on the web app's own storage. **So write the data layer to run on either** (PostgreSQL and SQLite),
-  chosen by the setting; keep the SQL plain enough for both.
-- **GP must not add `DATABASE_URL` until stage 1 is merged** and he is asked to, so the switch-over is deliberate. Its value:
-  `postgresql://rpadmin:PASSWORD@rightprice-db.postgres.database.azure.com:5432/postgres?sslmode=require`.
+Stage 1, where it stands (27 Nov, second session): **built, reviewed, pull request 24**. See "Stage 1 as built" below.
+- **The Azure database exists: GP said on 27 Nov that the deployment of `rightprice-db` completed.** Azure Database for
+  PostgreSQL flexible server, `rightprice-db.postgres.database.azure.com`, port 5432, SSL required, administrator login
+  `rpadmin`, resource group `rightprice-rg`, India South Central, PostgreSQL 16, Dev/Test Burstable B1ms, 32 GiB, no high
+  availability, backups 7 days, public access with "allow Azure services" on. The app uses the default database,
+  `postgres`. GP holds the password; it must never be asked for in chat. A build session cannot reach this database.
+- **`DATABASE_URL` is not set on the web app** (GP, 27 Nov: "I have not added DATABASE_URL to the web app and will not
+  until you ask"). The steps GP follows are in docs/AZURE_DEPLOY.md, "The database". Its value:
+  `postgresql://rpadmin:PASSWORD@rightprice-db.postgres.database.azure.com:5432/postgres?sslmode=require` (the password
+  may be typed as it is).
+- **Cost, as GP was told:** the form showed USD 22.08 a month (compute 17.89, storage 4.19) with "Free up to 750 hours"
+  and "Free up to 32 GB"; GP's Free services page lists Azure Database for PostgreSQL among the services free for 12
+  months. The subscription is Azure for Students (a fixed credit, which the web app plan also draws on). GP finds USD 17
+  to 22 a month too much: if Cost analysis shows a charge for `rightprice-db`, or when the free period ends, the agreed
+  fallback is a SQLite file (`DATABASE_URL=sqlite:////home/rightprice-data/rightprice.db`). The data layer runs on both
+  and the checks prove both, but SQLite on App Service's `/home` (a network share, two processes) has not been tried:
+  look at it before it is used.
+- A test PostgreSQL runs in the build container: `initdb` and `pg_ctl` are in `/usr/lib/postgresql/16/bin`; the data
+  folder must be one the `postgres` user can reach (`/var/lib/postgresql/...`), run with `su postgres -c`. This session
+  used port 54329 with trust login: `RIGHTPRICE_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres`.
+
+### Stage 1 as built (27 Nov, pull request 24)
+
+- **Three layers.** Costing engine: `engine.py`, `masters.py` (unchanged arithmetic). Business rules: `rules/`, one module
+  per area (`common`, `costing`, `fabric_list`, `pack`, `rightcost`, `costsheets`, `mills`, `tracker`, `supplier`,
+  `alerts`, `drafts`, `dashboard`, `rates`), moved out of `server.py` function by function with a script that used
+  Python's own parser, changing only references between modules (`tracker.nego_summary`); a module refers to another by
+  its name, so there are no circular-import traps. Web requests: `server.py`, one thin route per address (the same paths,
+  methods and parameters as before), `common.Refused` turned into the old `{"detail": ...}` answers, `common.Download`
+  into files, `store.StoreUnavailable` into 503. The signed-in person is read from Azure's header and passed down; it can
+  no longer come from the address. `mcp_server.py` and the checks call the rules directly.
+- **Data layer: `store.py`.** `FileStore` (the five files, exactly the reads and writes the app made before) or
+  `SqlStore` (PostgreSQL through psycopg 3, or SQLite), chosen once by `DATABASE_URL`. Tables: `db/001_files_moved_in.sql`
+  (numbered files applied once at start, recorded in `schema_migration`; `@ID@ @BLOB@ @REAL@` are the only words that
+  differ between the two). The rate master is kept whole, each save a new `rate_version` (the earlier ones are the dated
+  copies); the fabric list's cells are kept as the text the CSV held and read through the same CSV reading, so every row
+  reads back exactly; each list row's saved costing records its `rate_version_id` (empty for rows copied in). Caches key
+  on `store.version(kind)` (file times, or a counter per kind). Writers of a kind wait for each other across processes
+  (advisory locks / `BEGIN IMMEDIATE`); reads on PostgreSQL see one moment (repeatable read); keepalives, a user timeout,
+  statement and lock timeouts, and a 45 s wait limit stop a dead connection freezing the site.
+- **The move.** With `DATABASE_URL` set and the database empty, the app copies the files in at its first start, in one
+  transaction: the dated rate master copies first as earlier versions, then the one in use, the list, the tracker, the
+  alerts seen, the cost sheets. Inside the transaction it checks each reads back as the file does and costs every list
+  row on both; anything different and nothing is kept (`Refusal`). It then writes `moved_to_database.json` beside the
+  files (the only file it adds; the files themselves are only read). Afterwards: an empty database with that note
+  present is refused (a wrong database name does not silently refill from old files); if the files are worked on after
+  the move the app will not start on the database (deleted or moved-away files and a rate master that is only the shipped
+  one do not count), until `python store.py keep-database` sets them aside; a database down at start is tried again
+  every 15 s. `python store.py export <new folder>` writes the database out as files (works even when the guard stopped
+  the app). `/api/store` shows the store, its counts, the copying in and its check, or the error with advice.
+- **GP's decision, 27 Nov: the placeholder share is worked out every time.** `rules/costing.py` `_placeholder_share` gave a
+  line resting on two placeholders (a finish's upcharge: Finishing and Finish upcharge) to whichever came first in Python's
+  set order, which changes at each start: 9 of the 1,696 purchase-order verdicts flipped at restarts (Push or Fair against
+  Ask break-up). Now the line counts for both; the 9 read Push (5) and Fair (4) every time. Found while proving the move.
+- **Checks.** `check_engine.py` ALL OK. `check_server.py` ALL OK (611 checks, about 2.5 minutes): the 191 server checks
+  on files, SQLite and PostgreSQL side by side; then a data folder filled through the app on the files (two mill sheets,
+  fabrics added, a rate edit, a cotton price, negotiations with every kind of step and one removed, an alert seen, a row
+  removed, cost sheets) is copied into PostgreSQL and SQLite as the live app does it, and every page's answer must be
+  exactly equal (all 1,708 costings of Right cost and the list with and without a yarn move, the pack, alerts, tracker,
+  supplier pages, drafts, dashboard, tables, downloads); the files byte for byte unchanged; the export round trip giving
+  the same answers; the guards, an unreachable database (503, no password anywhere), a restart after an outage, the
+  data layer's locking and reconnecting. Every run uses one `PYTHONHASHSEED` so runs compare like with like. It never
+  uses `DATABASE_URL`: PostgreSQL comes from `RIGHTPRICE_TEST_DATABASE_URL` (refused if it names an azure.com host), with a
+  throwaway database per run, dropped at the end. The "checks" job brings PostgreSQL 16 and requires it
+  (`RIGHTPRICE_CHECK_REQUIRE_POSTGRES=1`).
+- **Reviews.** Two cold reviews ran side by side (one on the running app across the stores, one reading the change). They
+  found 11 and 8 faults, mostly confirmed by running them; every one listed under "Fixes" in the commit
+  "Fixes from the two cold reviews" was fixed and checked by `check_server.py`. A second reviewer then checked the fixes
+  (see the result below).
+- **Left as they are (told to GP):** two people saving rate tables at the same moment can lose one edit (as on the files);
+  on the database, an old fabric code with leading zeros keeps them ("00123"), where the files dropped them on their
+  first rewrite; offline scripts (`pilot.py`, `calibrate.py`, `rate_card.py`, `build_masters.py`) work on the files;
+  `apply_proposals.py` now keeps its copy through the store; the `python store.py` commands in Azure's SSH window have not
+  been tried.
 
 Found while measuring on 27 Nov, and told to GP:
 - **The calibration's "held-back third" is not a fair test.** It splits by fabric code (`pilot.held_back`), and the 1,696
@@ -334,6 +385,10 @@ record_tracker_step (marked "AI assistant"; the tracker's refusals apply, plus: 
   Microsoft sign-in.
 
 ### Architecture since 26 Nov (read before touching the front end)
+
+- **Since stage 1 (27 Nov), the functions the sections above and below place in `server.py` (`_questions`, `FAR`,
+  `_list_duplicates`, `mill_key`, `_state_key` ...) live in `rules/`; `grep -n "def <name>" rules/*.py` finds them.**
+  `server.py` is only the web requests.
 
 - `/` serves `web/rightcost.html` + `rightcost.js` + `rightcost.css`: the **shell** (rail, Right cost
   list and detail pages, Library lists, the popup). Hash routes: `#dashboard`, `#pilot`, `#rightcost`,
