@@ -57,7 +57,7 @@
 .pg .btn.small { min-height: 32px; padding: 0 12px; font-size: 13px; }
 .pg .btn.danger:not([disabled]) { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
 .pg .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
-.pg .chip { display: inline-block; white-space: normal; border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 7px 14px; font: inherit; font-weight: 500; cursor: pointer; min-height: 36px; }
+.pg .chip { display: inline-block; gap: normal; white-space: normal; border: 1px solid var(--border); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 7px 14px; font: inherit; font-weight: 500; cursor: pointer; min-height: 36px; }
 .pg .chip[aria-pressed="true"], .pg .chip[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .pg .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .pg .seg button { border: 0; background: var(--panel); color: var(--muted); padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; min-height: 38px; }
