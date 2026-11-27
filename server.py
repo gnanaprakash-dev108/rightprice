@@ -482,7 +482,8 @@ def index(request: Request):
     shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
     if request.query_params.get("embed") == "1":
         return _page("index.html", ("app.css", "app.js"))
-    return _page("rightcost.html", ("rightcost.css", "rightcost.js"))
+    pages = sorted("pages/" + f for f in os.listdir(os.path.join(WEB, "pages")) if f.endswith((".js", ".css")))   # the shell's pages
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js", *pages))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")

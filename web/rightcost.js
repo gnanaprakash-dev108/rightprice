@@ -354,6 +354,7 @@ function renderFrame(main) {
   const src = frameSrc(state.frame);
   const head = h("div", { class: "framehead" }, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", section, "\u00A0\u203A\u00A0", h("span", {}, title)),
     h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, title)), tabs), newCostButton()));
+  if (RP.pages[id]) return renderPage(main, head);
   const old = main.querySelector("iframe.frame");
   if (old && old.dataset.src === src && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) {
     main.firstElementChild.replaceWith(head);           // the frame stays where it is: moving an iframe reloads it
@@ -366,6 +367,23 @@ function renderFrame(main) {
 }
 function syncFrameTheme(frame) { try { frame.contentDocument.documentElement.dataset.theme = document.documentElement.dataset.theme; } catch (e) { /* not loaded */ } }
 const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
+
+// ------------------------------------------------------------------ the pages of the shell (web/pages/*.js)
+/* A page registered with RP.page() (web/pages/common.js says how) is drawn under the heading above, in its own box,
+   which scrolls while the heading stays. Asked for again at the same address, it keeps what it shows. A page that
+   names a section and is not yet among that section's tabs is added at the end of them. */
+for (const p of Object.values(RP.pages)) if (!p.popup && !CONFIG.frames[p.id]) { CONFIG.frames[p.id] = [p.section, p.title]; if (CONFIG.sections[p.section]) CONFIG.sections[p.section].push(p.id); }
+function renderPage(main, head) {
+  const [id, ...rest] = state.frame.split("/"), old = main.querySelector(":scope > .pgbox");
+  $("#selbar").hidden = true;
+  if (old && old.dataset.address === state.frame && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) { main.firstElementChild.replaceWith(head); return; }
+  const box = h("div", { class: "pgbox", "data-address": state.frame });
+  fill(main, head, box);
+  RP.show(id, rest.join("/"), box);
+  const on = main.querySelector(".tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+// what a page may ask of the shell
+RP.shell = { toast, go: hash => { location.hash = "#" + hash; }, showAlerts, alertsChanged: () => loadAlerts(), listChanged: () => { load(); loadAlerts(); }, popup: (tab, r) => openPopup(tab, r) };
 
 function render() {
   const main = $("#main");
