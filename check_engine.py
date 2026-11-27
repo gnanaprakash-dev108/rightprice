@@ -105,6 +105,64 @@ def rate_card_checks(m):
     return ok
 
 
+def dated_checks(m):
+    """Stage 5: a costing on a date. Without a date nothing changes; with one, each yarn is on the dated rate of that
+    month, or on today's rate where there is none, said yarn by yarn. The dated rates here are made up for the check."""
+    ex = masters.EXAMPLE_ROW
+    base = masters.cost(ex, m)
+    none = masters.cost(ex, m, on="2026-09-18", dated={})
+    table = {"Cotton 40S": {"2026-09": {"rate": 360.0, "basis": "made up for the check"}}}
+    sep = masters.cost(ex, m, on="2026-09-18", dated=table)
+    octo = masters.cost(ex, m, on="2026-10", dated=table)
+    typed = masters.cost(dict(ex, **{"Warp yarn price override": 360, "Weft yarn price override": 360}), m)
+    over = masters.cost(dict(ex, **{"Warp yarn price override": 350}), m, on="2026-09", dated=table)
+    same = lambda a, b: {k: v for k, v in a.items() if k != "rates_of"} == b
+    checks = [
+        ("No date: the result is as before, with nothing added", "rates_of" not in base and abs(base["total_per_m"] - 181.40) < 0.01),
+        ("A date with no dated rate: every figure equal to today's (the whole costing)", same(none, base)),
+        ("...and it says so for the yarn", none["rates_of"]["label"] == "Sep 2026" and not none["rates_of"]["dated"]
+         and none["rates_of"]["notes"] == ["No dated rate for Cotton 40S in Sep 2026: today's rate used (Rs 345)"]),
+        ("A dated rate is used for its month, as a typed price of the same figure would be",
+         sep["inputs"]["warp_rate"] == 360 and sep["inputs"]["weft_rate"] == 360 and abs(sep["total_per_m"] - typed["total_per_m"]) < 1e-9
+         and sep["rates_of"]["dated"] and "Dated rate for Sep 2026" in next(u["Basis"] for u in sep["rates_used"] if u["Item"] == "Warp yarn")),
+        ("A dated rate is not carried into the next month", same(octo, base) and "No dated rate for Cotton 40S in Oct 2026" in octo["rates_of"]["notes"][0]),
+        ("A typed price is kept over a dated rate", over["inputs"]["warp_rate"] == 350 and over["inputs"]["weft_rate"] == 360
+         and any("typed price" in n for n in over["rates_of"]["notes"])),
+        ("Without a date the dated rates are not looked at", masters.cost(ex, m, dated=table) == base),
+        ("A dated rate on a placeholder yarn, entered with no source at today's figure, changes nothing: the same figure and placeholders",
+         (lambda sl: (lambda a, b: a["placeholders"] == b["placeholders"] and a["total_per_m"] == b["total_per_m"] and "Warp yarn" in b["placeholders"])(
+             masters.cost(sl, m), masters.cost(sl, m, on="2026-09", dated={"Cotton Slub 20S": {"2026-09": {
+                 "rate": 338.0, "basis": "Placeholder: typed in the tool with no source"}}})))(
+             dict(ex, **{"Warp yarn": "Cotton Slub 20S", "Weft yarn": "Cotton Slub 20S"}))),
+        ("A dated rate entered with no source is a placeholder (rule 4) even on a yarn whose today's rate is not",
+         (lambda ph, ph_res: ph_res["placeholders"] == ["Warp yarn", "Weft yarn"] + base["placeholders"]
+          and next(u["Basis"] for u in ph_res["rates_used"] if u["Item"] == "Warp yarn").startswith("Placeholder")
+          and abs(ph_res["total_per_m"] - base["total_per_m"]) < 1e-12)(None, masters.cost(ex, m, on="2026-09", dated={"Cotton 40S": {"2026-09": {
+              "rate": 345.0, "basis": "Placeholder: typed in the tool with no source"}}}))),
+        ("A placeholder yarn given a dated rate with a source is no longer a placeholder for that month",
+         (lambda sl: "Warp yarn" in masters.cost(sl, m)["placeholders"] and "Warp yarn" not in masters.cost(sl, m, on="2026-09", dated={
+             "Cotton Slub 20S": {"2026-09": {"rate": 338.0, "basis": "Typed in the tool: Market circular"}}})["placeholders"])(
+             dict(ex, **{"Warp yarn": "Cotton Slub 20S", "Weft yarn": "Cotton Slub 20S"}))),
+        ("A month is read from a date, a day or a month; anything else is refused",
+         masters.month_of("2026-09-18") == masters.month_of("2026-09") == "2026-09" and masters.month_of(__import__("datetime").date(2026, 9, 1)) == "2026-09"
+         and all(_refused(lambda v=v: masters.month_of(v)) for v in ("Sept 2026", "2026-13", ""))),
+    ]
+    ok = True
+    for name, good in checks:
+        ok &= bool(good)
+        print(f"  {name}: {'OK' if good else 'MISMATCH'}")
+    print("Dated rates", "OK" if ok else "MISMATCH")
+    return ok
+
+
+def _refused(fn):
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+
 def main():
     ok = True
     for name, (vals, target) in CASES.items():
@@ -137,6 +195,7 @@ def main():
     ok &= good
     print("Bad value rejected", "OK" if good else "MISMATCH", "-", bad["Error"].iloc[0])
     ok &= rate_card_checks(m)
+    ok &= dated_checks(m)
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
 
