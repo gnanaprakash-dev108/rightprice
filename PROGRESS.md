@@ -180,6 +180,38 @@ faults; all were fixed the same day (below, "After the cold review").
 
 ### Where things stand
 
+- **27 Nov, evening (latest): where every track stands.** GP agreed (27 Nov) to keep building stages 2 to 5 in parallel
+  and to resume automatically after usage limits: a scheduled task "RightPrice stages 2-5: check every 5 hours" wakes this
+  session and resumes stopped builders; it deletes itself once stages 2 to 5 are merged and deployed.
+  - **Stage 3 (users and roles) merged: pull request 26, merge 7c402f4, deployed green 15:45 UTC.** Permissions stay off
+    until GP adds `RIGHTPRICE_ADMINS` (first open `/api/me`: own e-mail and `sign_in: on`; steps in docs/AZURE_DEPLOY.md).
+    Cold review (no way in or around roles; 10 behaviour faults), second reviewer (confirmed; 9 more): all fixed; the last
+    round checked by `check_server.py` (729 checks), not by a third reviewer.
+  - **Stage 2** (pull request 28, branch `claude/sleepy-dirac-dknzrp-stage2`): built; cold review done; builder fixing its
+    findings and **GP's decisions (27 Nov): ZLOI order lines (letters of intent; 402 at a placeholder Rs 550) are left out of
+    every calculation everywhere, Right cost included, and shown as "Outliers (ZLOI)" beside the item and the supplier;
+    widths within half an inch are one Fab group; a usual range needs 5 separate purchase orders.** Then merge main and map
+    its addresses in `rules/access.py`. Second reviewer still to run.
+  - **Stage 5** (pull request 27, `...-stage5`): built; cold review and second reviewer done; builder fixing the second
+    reviewer's faults (Bring in prices dates and GST) and merging main. Re-run held-back test: the calibration draft shows
+    **no measurable gain on any fair split** (docs/HELD_BACK_SPLITS.md); recommend GP does not apply it (question S5-8).
+  - **Stage 4** (pull request 29, `...-stage4`): every page moved into the shell, frame and Streamlit retired,
+    `check_browser.py`; cold review found 2 regressions (Open in Create cost on a fresh tab; Ctrl+F) and weak browser
+    checks; builder fixing and merging main. **Merge it last**, after carrying stages 2, 3 and 5's screen hooks into its
+    pages; GP then confirms each moved page by eye.
+  - **New track, GP's decision (27 Nov): the AI assistant (MCP token) may do everything an Admin can.** Builder on
+    `claude/sleepy-dirac-dknzrp-mcp-admin`: tools for every Admin action, the assistant's fixed role = Admin, every change
+    recorded as "AI assistant", changing tools marked so a client asks first. Reviews still to run.
+  - Merge order: 2 and 5 (each after its second review), then the MCP-admin track, then 4.
+- **The build session can now reach the live app (27 Nov).** GP added `RIGHTPRICE_MCP_TOKEN`, let `/mcp` and `/mcp/health`
+  through sign-in (`az rest` on `authsettingsV2`, because `az webapp auth update --excluded-paths` mangles paths; the commands
+  are in this session's record and docs/AZURE_DEPLOY.md should be updated to them), and saved the token as a network secret
+  of the cloud environment "rightprice" for the site's host, path prefix `/mcp` (the credential form refuses hostnames over
+  64 characters). `curl https://<site>/mcp/health` and JSON-RPC `tools/call` on `/mcp` then work from a build session; first
+  check: ok, store postgres, code 15:38 UTC, 10 tools, the live list's 2 rows read. Use only reading tools unless GP asks.
+- GP may add `ANTHROPIC_API_KEY` to the web app (told not to paste it anywhere else); then read the first real drafts against
+  the rules through the live site.
+
 - **27 Nov, second session: stage 1 merged (pull request 24, merge commit 98756be) and deployed: the deploy run was green
   (finished 11:38 UTC).** Without `DATABASE_URL` the site runs on the files as before. The build session cannot sign in:
   **the live site has not been confirmed by eye since this deploy.** After the deploy the site answered Microsoft
