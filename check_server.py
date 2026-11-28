@@ -2237,7 +2237,7 @@ def assistant_checks():
         exempt = lambda k: k in ms.NOT_MIRRORED or f"* {k.split(' ', 1)[1]}" in ms.NOT_MIRRORED
         missing = sorted(k for k, need in keys.items() if str(need).startswith("do:") and k not in set(mirrors.values()) and not exempt(k))
         reads_on_actions = {"intake_map_columns"}         # an action's step that keeps nothing and reaches nothing outside
-        sends_out = {"intake_page", "intake_api", "draft_message_to_mill"}      # the server fetches an address, or figures go to Anthropic
+        sends_out = {"intake_page", "draft_message_to_mill"}      # the server fetches an address, or figures go to Anthropic
         on_actions = {n for n in names if str(access.ROUTES[mirrors[n]]).startswith("do:")}
         rate_tools = {n for n in writes if access.ROUTES[mirrors[n]] in ("do:edit_rates", "do:apply_drafts") and ann[n].get("destructiveHint")}
         check(tag + "GP's decision: every action an Admin can take in the app (each address needing a do: permission) has a tool mirroring it, or "
@@ -2260,7 +2260,7 @@ def assistant_checks():
                   "pilot_results": "GET /api/pilot", "cotton_prices": "GET /api/cotton", "list_suppliers": "GET /api/suppliers",
                   "fabric_list": "POST /api/list", "mill_cost_sheets": "GET /api/costsheet", "cost_template_file": "POST /api/bulk",
                   "users_and_roles": "GET /api/users", "edit_rate_table": "PUT /api/table/{sheet}", "add_cotton_price": "POST /api/cotton",
-                  "intake_file": "POST /api/intake/file", "intake_page": "POST /api/intake/link", "intake_api": "POST /api/intake/api",
+                  "intake_file": "POST /api/intake/file", "intake_page": "POST /api/intake/link",
                   "intake_map_columns": "POST /api/intake/map", "intake_add_rows": "POST /api/intake/add", "dated_rates": "GET /api/dated-rates",
                   "dated_market_preview": "GET /api/dated-rates/market", "add_dated_rate": "POST /api/dated-rates",
                   "remove_dated_rate": "POST /api/dated-rates/remove", "load_market_dated_rates": "POST /api/dated-rates/market",
@@ -2278,6 +2278,13 @@ def assistant_checks():
         check(tag + "Each tool mirrors the route it really does the work of (pinned here, so a tool cannot quietly name a weaker address; a new "
                     "tool adds its line)", dict(mirrors) == PINNED,
               str({k: (mirrors.get(k), PINNED.get(k)) for k in set(mirrors) | set(PINNED) if mirrors.get(k) != PINNED.get(k)}))
+        gone = rpc("tools/call", {"name": "intake_api", "arguments": {"url": "https://example.com/prices.json", "header_name": "X-Api-Key",
+                                                                       "header_value": "k"}}).json()
+        check(tag + "GP's decision of 28 Nov 2026: no tool brings in prices from a price service, as its key would pass through the chat: its "
+                    "address is in mcp_server.NOT_MIRRORED (the screen keeps it), no tool takes a header, and the old tool's name is refused",
+              "POST /api/intake/api" in ms.NOT_MIRRORED and "POST /api/intake/api" not in set(mirrors.values()) and "intake_api" not in names
+              and not [n for n in names if any("header" in p for p in tools[n]["inputSchema"].get("properties", {}))]
+              and "Unknown tool" in json.dumps(gone), json.dumps(gone)[:200])
         check(tag + "Rule 2 holds for the assistant: each tool that changes the rate master says to change a rate only when the person explicitly "
                     "asks for that change, stating the old and the new figure first; so do the server's instructions",
               rate_tools >= {"edit_rate_table", "add_cotton_price", "intake_add_rows", "apply_cost_sheet_drafts", "add_dated_rate", "remove_dated_rate", "load_market_dated_rates", "intake_add_dated_rates"}
@@ -2482,8 +2489,11 @@ def assistant_checks():
                                      web("POST", "/api/intake/map", json={"token": "nope", "sheet": sheet, "count": "Count", "low": "Rate"})),
                    "no complete row": (call("intake_add_rows", rows=[[None] * 6]), web("POST", "/api/intake/add", json={"rows": [[None] * 6]})),
                    "a file of another kind": (call("intake_file", file_base64=b64(b"x"), file_name="x.exe"), upload("/api/intake/file", "x.exe", b"x")),
-                   "no page address": (call("intake_page", url=""), web("POST", "/api/intake/link", json={"url": ""})),
-                   "no endpoint": (call("intake_api", url=""), web("POST", "/api/intake/api", json={"url": ""}))}
+                   "no page address": (call("intake_page", url=""), web("POST", "/api/intake/link", json={"url": ""}))}
+        # a price service (POST /api/intake/api) has no tool since GP's decision of 28 Nov 2026 (its key would pass through the
+        # chat; mcp_server.NOT_MIRRORED): its address guard is checked on the screen's route, beside the page's
+        on_screen = {"no endpoint": web("POST", "/api/intake/api", json={"url": ""})}
+        guard_words = ("not a public address", "Only web addresses", "no backslashes", "user name or password", "could not be found", "reads differently")
         import socket
         import price_import
         trap = socket.socket()          # a listener on this machine: no address below may reach it
@@ -2497,20 +2507,21 @@ def assistant_checks():
                     f"http://user:pw@127.0.0.1:{tp}/", f"http://127.0.0.1:{tp}%5C@example.com/", "http://0x7f000001/", "http://2130706433/",
                     f"http://127.1:{tp}/", "http://[::ffff:127.0.0.1]/", "http://example.com /x"):
             refused["page " + url] = (call("intake_page", url=url), web("POST", "/api/intake/link", json={"url": url}))
-            refused["endpoint " + url] = (call("intake_api", url=url, header_name="X-Api-Key", header_value="k"),
-                                          web("POST", "/api/intake/api", json={"url": url, "header_name": "X-Api-Key", "header_value": "k"}))
-        refused["a sign-in header"] = (call("intake_api", url="https://example.com/prices.json", header_name="X-MS-CLIENT-PRINCIPAL-NAME", header_value="gp@example.com"),
-                                       web("POST", "/api/intake/api", json={"url": "https://example.com/prices.json", "header_name": "X-MS-CLIENT-PRINCIPAL-NAME",
-                                                                            "header_value": "gp@example.com"}))
+            on_screen["endpoint " + url] = web("POST", "/api/intake/api", json={"url": url, "header_name": "X-Api-Key", "header_value": "k"})
+        on_screen["a sign-in header"] = web("POST", "/api/intake/api", json={"url": "https://example.com/prices.json", "header_name": "X-MS-CLIENT-PRINCIPAL-NAME",
+                                                                             "header_value": "gp@example.com"})
         check(tag + "Bring in prices refuses what the screen refuses, in its words: no address; this machine, a private network, the cloud's "
-                    "metadata and identity address, or an address that is not http(s), for a page or an endpoint; a sign-in header; a file that "
-                    "is not base64, or without a name, is refused in words",
+                    "metadata and identity address, or an address that is not http(s), for a page; a file that is not base64, or without a name, "
+                    "is refused in words. A price service (on the screen only, since 28 Nov 2026) refuses no endpoint, each of those addresses, "
+                    "and a sign-in header",
               all(same_refusal(m, w) for m, w in refused.values()) and "not base64" in call("intake_file", file_base64="@@ not base64 @@", file_name="a.csv").get("error", "")
-              and all(any(x in m["error"] for x in ("not a public address", "Only web addresses", "no backslashes", "user name or password", "could not be found", "reads differently"))
-                      for k, (m, w) in refused.items() if k.startswith(("page ", "endpoint ")))
-              and "never passes on sign-in" in refused["a sign-in header"][0].get("error", "")
+              and all(any(x in m["error"] for x in guard_words) for k, (m, w) in refused.items() if k.startswith("page "))
+              and all(w.status_code == 400 and any(x in str(detail(w)) for x in guard_words) for k, w in on_screen.items() if k.startswith("endpoint "))
+              and "Give the endpoint address" in str(detail(on_screen["no endpoint"])) and on_screen["no endpoint"].status_code == 400
+              and "never passes on sign-in" in str(detail(on_screen["a sign-in header"])) and on_screen["a sign-in header"].status_code == 400
               and "file's name" in call("intake_file", file_base64=b64(csv), file_name="").get("error", "") and len(web("GET", "/api/table/Market_Yarn").json()["rows"]) == my0 + 4,
-              str({k: (m.get("error"), detail(w)) for k, (m, w) in refused.items() if not same_refusal(m, w)}))
+              str({k: (m.get("error"), detail(w)) for k, (m, w) in refused.items() if not same_refusal(m, w)})
+              + str({k: (w.status_code, detail(w)) for k, w in on_screen.items() if w.status_code != 400}))
 
         reached = 0
         try:
@@ -2522,8 +2533,9 @@ def assistant_checks():
             pass
         trap.close()
         check(tag + "Bring in prices: an address that hides this machine behind a backslash, a user name, an encoded character or another way of "
-                    "writing 127.0.0.1 is refused by the tool and the screen alike, and nothing reached this machine",
-              reached == 0 and all(m.get("error") for k, (m, w) in refused.items() if str(tp) in k or "0x7f" in k or "2130706433" in k), f"{reached} connections")
+                    "writing 127.0.0.1 is refused by the tool and the screen alike (a price service's on the screen), and nothing reached this machine",
+              reached == 0 and all(m.get("error") for k, (m, w) in refused.items() if str(tp) in k or "0x7f" in k or "2130706433" in k)
+              and all(w.status_code == 400 and detail(w) for k, w in on_screen.items() if str(tp) in k or "0x7f" in k or "2130706433" in k), f"{reached} connections")
         import http.server
         hits = {"127.0.0.2": [], "127.0.0.3": []}
 
@@ -2567,26 +2579,26 @@ def assistant_checks():
             pg_t, pg_tw = call("intake_page", url=base_ + "/table"), web("POST", "/api/intake/link", json={"url": base_ + "/table"}).json()
             pg_n = call("intake_page", url=base_ + "/plain")
             pg_r, pg_rw = call("intake_page", url=base_ + "/away"), web("POST", "/api/intake/link", json={"url": base_ + "/away"})
-            api_ = call("intake_api", url=base_ + "/json", header_name="X-Api-Key", header_value="k1")
-            api_r = call("intake_api", url=base_ + "/away", header_name="X-Api-Key", header_value="k2")
+            api_ = web("POST", "/api/intake/api", json={"url": base_ + "/json", "header_name": "X-Api-Key", "header_value": "k1"}).json()     # the screen's route
+            api_r = web("POST", "/api/intake/api", json={"url": base_ + "/away", "header_name": "X-Api-Key", "header_value": "k2"})
             reb = call("intake_page", url=f"http://rebind.example:{near_port}/table")
         finally:
             price_import._addresses, price_import._public_ip = real_addresses, real_public
             near.shutdown()
             far_.shutdown()
         check(tag + "Bring in prices connects to the address it checked, with the page's own name sent as its host (a host name standing for a "
-                    "public address here): a page's table is read, as on the screen; a page with no table says so plainly; an endpoint's reply "
-                    "is read, its key sent to that host only",
+                    "public address here): a page's table is read, as on the screen; a page with no table says so plainly; a price service's "
+                    "reply is read on the screen, its key sent to that host only",
               pg_t.get("kind") == "tables" and [v["first_rows"] for v in pg_t["tables"].values()] == [v["rows"] for v in pg_tw["sheets"].values()]
               and pg_n.get("kind") == "rows" and "No tables on the page" in pg_n.get("note", "") and api_.get("kind") == "tables"
               and (f"prices.example:{near_port}" in {h for _, h, _ in hits["127.0.0.2"]}) and ("/json", f"prices.example:{near_port}", "k1") in hits["127.0.0.2"],
               f"{str(pg_t)[:150]} {str(pg_n)[:150]} {str(api_)[:150]} {hits}")
         check(tag + "Bring in prices checks every address a page sends it on to: a redirect to this machine is refused (tool and screen alike), "
-                    "and so is a host name that pointed to a public address when it was first checked and to this machine at the fetch; "
-                    "nothing reached the address refused",
-              "not a public address" in pg_r.get("error", "") and same_refusal(pg_r, pg_rw) and "not a public address" in api_r.get("error", "")
+                    "and so is a host name that pointed to a public address when it was first checked and to this machine at the fetch, and "
+                    "a price service's redirect on the screen; nothing reached the address refused",
+              "not a public address" in pg_r.get("error", "") and same_refusal(pg_r, pg_rw) and api_r.status_code == 400 and "not a public address" in str(detail(api_r))
               and "not a public address" in reb.get("error", "") and looked["rebind.example"] >= 2 and hits["127.0.0.3"] == [],
-              f"{pg_r} {api_r} {reb} {hits['127.0.0.3']}"[:400])
+              f"{pg_r} {detail(api_r)} {reb} {hits['127.0.0.3']}"[:400])
         try:            # a real public page, where this machine may reach the internet directly (the live site can)
             import certifi
             import ssl

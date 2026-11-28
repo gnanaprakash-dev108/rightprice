@@ -229,7 +229,8 @@ ASSISTANT_ALLOWED = set(DEFAULTS[ADMIN])
 ASSISTANT_NOTE = ("The MCP token: one fixed role with the Admin role's permissions (GP's decision, 27 Nov 2026). Through it an "
                   "assistant can do what an Admin can: change rates, upload and remove rows, apply drafts, mark alerts seen, "
                   "record and remove negotiation steps, draft messages, and add people and change roles (switching off an admin, or "
-                  "taking Admin away, stays with a person, so the admins cannot be locked out). Each tool goes through "
+                  "taking Admin away, stays with a person, so the admins cannot be locked out; so does bringing in prices from a "
+                  "price service, as its key is never given in a chat). Each tool goes through "
                   "the permission of the screen's address it mirrors, and every change is recorded as \"AI assistant\". It is "
                   "not changed here: it is switched on and off by the app setting RIGHTPRICE_MCP_TOKEN.")
 MARKS_NOTE = ("Each person's own marks (Status and Remarks in Right cost, saved searches, Library lists) are still kept in "
