@@ -39,7 +39,8 @@ RULE = [
     "fibre and blend, count, kind and spinner), in rupees a kilo, between Rs 50 and Rs 5,000; everything else is left "
     "out, and this page says what and why.",
     "A purchase order is costed on the yarn rates of its order month; a fabric code ordered in more than one month, on "
-    "the month that holds most of its metres (the earlier month when two hold the same, and the costing says so). Quotes "
+    "the month that holds most of its metres (the earlier month when two hold the same, and the costing says so). ZLOI "
+    "orders count in no month, as in no figure: a code bought only on ZLOI orders is costed on today's rates. Quotes "
     "and Cost a fabric are on today's rates. Only yarn rates are dated: every other rate (weaving, dyeing, finishing, "
     "wastage, overhead, margin) is today's, and so are the usual ranges, which come from the purchase orders as costed "
     "in the pilot.",
@@ -167,8 +168,8 @@ def month_figure(prices):
 # ------------------------------------------------------------------ the purchase orders' months
 def po_lines():
     """The purchase-order lines the pilot was costed from, by fabric code and month: metres and value. Read from the
-    purchase file (the same lines pilot.build_inputs keeps). Stage 2 keeps the purchase history with dates in the
-    database; this is where it would be read from instead."""
+    purchase file (the same lines pilot.build_inputs keeps, ZLOI included as the pilot had them): calibrate_splits.py's
+    test of the pilot splits on these. Right cost's order months come from ordered_lines() instead."""
     if not os.path.exists(PO_FILE):
         return None
 
@@ -186,9 +187,67 @@ def po_lines():
     return common.cached(PO_FILE + "#lines", load)
 
 
+def month_of(lines):
+    """One fabric code's order month from its order lines ((date 'YYYY-MM-DD', metres), ZLOI already left out): the
+    month holding most of its metres (the earlier on a tie, said so), with every month it was ordered in; None when no
+    line has a date. Right cost and the price popup both use this, so they cost a code on the same month."""
+    by = {}
+    for day, qty in lines:
+        if day:
+            by.setdefault(str(day)[:7], []).append(float(qty))
+    if not by:
+        return None
+    qty = {k: math.fsum(v) for k, v in by.items()}          # exact sums: a tie is a tie in whatever order the lines come
+    d = sorted(qty.items(), key=lambda x: (-x[1], x[0]))
+    total = math.fsum(qty.values())
+    return {"month": d[0][0], "months": sorted(qty), "share": d[0][1] / total if total else 1.0,
+            "tie": len(d) > 1 and d[0][1] == d[1][1]}
+
+
+_ordered_memo = {"key": None, "val": None}
+
+
+def _ordered():
+    """(lines by code and month, order months, codes bought only on ZLOI orders), kept while the lines are unchanged."""
+    from rules import purchases
+    key, by_code, _ = purchases.bought_lines()
+    if _ordered_memo["key"] != key:
+        rows, months, zloi_only = [], {}, set()
+        for code, lines in by_code.items():
+            kept = [(day, qty, price) for (po, item, day, typ, sup, qty, price) in lines if typ not in purchases.OUTLIER_TYPES]
+            if not kept:
+                zloi_only.add(str(code))
+                continue
+            om = month_of([(day, qty) for day, qty, _ in kept])
+            if om is None:
+                continue
+            months[str(code)] = om
+            by = {}
+            for day, qty, price in kept:
+                if day:
+                    by.setdefault(str(day)[:7], []).append((float(qty), float(qty) * float(price)))
+            rows += [(str(code), mo, math.fsum(q for q, _ in v), math.fsum(x for _, x in v)) for mo, v in sorted(by.items())]
+        frame = pd.DataFrame(rows, columns=["Material", "month", "qty", "value"])
+        _ordered_memo.update(key=key, val=(frame, months, zloi_only))
+    return _ordered_memo["val"]
+
+
+def ordered_lines():
+    """The purchase-order lines Right cost costs from, by fabric code and month (metres and value): stage 2's purchase
+    history (the database's lines; until the purchase file that came with the code is loaded into it, that file as well),
+    ZLOI orders left out as from every figure (GP's decision, 27 Nov 2026). None when there are none."""
+    frame = _ordered()[0]
+    return frame if len(frame) else None
+
+
 def order_months():
-    """Each purchase-order fabric code's order month: the month holding most of its metres (the earlier on a tie, said
-    so), with every month it was ordered in."""
+    """Each purchase-order fabric code's order month (month_of), from ordered_lines(): ZLOI orders count in no month."""
+    return _ordered()[1]
+
+
+def pilot_order_months():
+    """The order months calibrate_splits.py splits the pilot on, from po_lines() (ZLOI included, as the pilot had them),
+    worked out as stage 5 first did, so its test reads the same."""
     g = po_lines()
     if g is None:
         return {}
@@ -219,7 +278,9 @@ def po_rates(code, months, res):
     rate was used. res: the costing (with rates_of when it was costed on a month)."""
     om = months.get(str(code))
     if om is None or "rates_of" not in res:
-        why = (f"{code} is not in the purchase file, so its order month is not known" if months else
+        zloi_only = (_ordered_memo["val"] or (None, None, set()))[2]        # as order_months() found them
+        why = (f"{code} was bought only on ZLOI orders, which count in no figure, so it has no order month" if str(code) in zloi_only else
+               f"{code} is not in the purchase file, so its order month is not known" if months else
                "The order month is not known (the purchase file is not on this server)")
         return {"month": None, "label": "today", "dated": False, "note": why + ": costed on today's rates."}
     ro = res["rates_of"]
@@ -242,8 +303,8 @@ def today_rates():
 def pilot_rates_note():
     """Which rates the dashboard's purchase-order panels are on, beside Right cost's (for the dashboard). The count of
     orders on a dated yarn rate is worked out here from the dated rates and the order months, not read from Right cost."""
-    base = ("Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (no dated yarn rate), and "
-            "every usual range comes from them.")
+    base = ("Panels 1, 2 and 4 are your purchase orders on the rates in use (no dated yarn rate), worked out again at every rate "
+            "edit or applied cost-sheet draft, and every usual range comes from them.")
     n = sum(o["both"] + o["one"] for o in _orders_by_month(data_dated.rows())) if data_dated.available() else 0
     return base + (f" Right cost costs {n} of these orders on a dated yarn rate of their order month, so for those its should-cost "
                    "and verdict can differ from these panels." if n else

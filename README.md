@@ -25,8 +25,9 @@ numbers from `server.py`. The back end has three layers (since 27 Nov 2026): the
 (`engine.py`, `masters.py`: every number, every rate from the rate master), the business rules
 (`rules/`: briefs, the fabric list, the pack, Right cost, the tracker, supplier pages, alerts, drafts,
 the dashboard, rate edits) and the web requests (`server.py`, which reads a request, calls one rule
-and shapes the answer). The rules read and write only through the data layer, `store.py`. The
-earlier Streamlit screens stay reachable at `/classic` ("Earlier screens" in the left panel).
+and shapes the answer). The rules read and write only through the data layer, `store.py`. Since
+27 Nov 2026 there is one front end: the shell, with every page drawn in it (the earlier framed screens and the
+Streamlit screens at `/classic` are retired).
 
 Where the data is kept, chosen by one setting:
 - `DATABASE_URL` not set: files in the data folder, as before (`RIGHTPRICE_DATA`, or `data/`).
@@ -60,12 +61,13 @@ Since 26 Nov 2026 the app opens in one shell: a left rail with Home (Dashboard a
 Right cost (every costing) and Prices (market prices, the rate master tables and settings, and the
 costing and sourcing setup lists), and a "New cost" button that opens Create cost, Bulk upload,
 Compare and Negotiation pack as tabs in a popup. Light or dark, and settings, are under the user
-icon. The earlier screens are shown inside the shell (`/?embed=1` serves them on their own).
-The left panel groups the pages under Costing, Prices, Rates and Analysis. Light and dark are
-switched in the header; the search box finds yarns, saved costings, rate tables and pages.
-The left panel folds to icons and opens on hover; pin it open, or turn the compact header off, under
-Settings > Display. On a phone, "Add to Home screen" in the browser gives it its own icon and a
-full-screen view.
+icon. The left panel floats and folds to icons; its arrow opens it to icons with their names. On a
+phone, "Add to Home screen" in the browser gives it its own icon and a full-screen view.
+
+Each page is its own file in `web/pages/` (with its stylesheet where it has one), loaded by the shell
+(`web/rightcost.html`). A page registers itself with one call, `RP.page("<address>", { title, section },
+render)`, and one line in `rightcost.html` loads it; `web/pages/common.js` says how, and holds what the pages
+share.
 
 | Screen | What it does |
 |---|---|
@@ -82,6 +84,7 @@ full-screen view.
 | Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |
 | Settings | Shrinkage, reed space factor, mill tiers, order size slabs |
 | Pilot results | Should-cost against purchase order prices, and the calibration draft |
+| Purchase history and Fab groups (stage 2, on a database only) | Purchase-order files uploaded and read in the background (user icon > Purchase history > Purchase files); every fabric code in a Fab group (the same construction in any colour, across mills: Fab-0001 onward); a Fab group column in Right cost; price over time per fabric code (a popup from the row or its detail page); a page per Fab group (`#group/Fab-0001`) with its median, usual range, should-cost, price over time by mill and the purchases priced above the range; the list of groups and an admin merge (user icon > Purchase history). The newest file's figures win, newer read first from what a file covers (its latest document date, or a report date it carries); where that cannot tell (a correction of the same orders, a file saved again), the file saved later wins (GP, 28 Nov 2026), and the upload's page says which won, with both saved times; a row dated after its file was saved is left out (check it in SAP) and a saved date after the upload is not used; a line simply not in a newer file is kept (GP, 28 Nov 2026); the first upload loads the purchase file that came with the code first; only where nothing can tell (the same saved moment, or a file without a saved date that can be used, which never wins by one) and a file disagrees, the history stands and the disagreement is listed for an admin to settle; ZLOI order lines are kept but left out of every figure, Right cost's purchase-order rows and their order months (stage 5) included, and listed apart as outliers (GP, 27 Nov 2026). The popup and the group pages cost a code as Right cost does, on its order month's yarn rates; once the history holds a file, Right cost's purchase-order rows read it alone, as the popup does (before, the pilot's purchases as the file that came with the code has them). Uploading and merging are admin actions |
 
 ## The calculation
 
@@ -111,16 +114,17 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 |---|---|
 | `engine.py` | The calculation. Numbers in, numbers out. |
 | `masters.py` | Reads and saves the rate master, turns drop-down choices into rates, upload template, bulk costing |
-| `server.py` | The web requests: serves `web/`, turns each request into one call to `rules/`, and passes `/classic` through to the Streamlit screens |
+| `server.py` | The web requests: serves `web/` (the shell and its pages) and turns each request into one call to `rules/` |
 | `rules/` | The business rules, one module per area (`costing`, `fabric_list`, `pack`, `rightcost`, `tracker`, `supplier`, `alerts`, `drafts`, `dashboard`, `rates`, `costsheets`, `mills`, `common`) |
 | `store.py` | The data layer: files, or PostgreSQL / SQLite when `DATABASE_URL` is set; copies the files in once; `python store.py status`, `export <folder>`, `keep-database` |
-| `db/` | `001_files_moved_in.sql` (the tables in use) and `schema.sql` (the full design for stages 2 to 6) |
-| `web/` | The front end: `index.html`, `app.css`, `app.js` |
-| `app.py` | The earlier Streamlit screens, now at `/classic` |
+| `db/` | The tables in use: `001_files_moved_in.sql` (stage 1), `002_purchases_and_fab_groups.sql` (stage 2: mills and their spellings, fabrics, Fab groups, uploads, purchase lines); and `schema.sql` (the full design for stages 2 to 6) |
+| `data_purchases.py` | The SQL of the purchase history; `rules/purchases.py` (purchase files read in the background, the price popup) and `rules/fab_groups.py` (Fab groups, their page, the merge) decide what is done with it; `web/purchases.js` and `purchases.css` draw its pages |
+| `web/` | The front end: the shell (`rightcost.html`, `rightcost.js`, `rightcost.css`: the left panel, Right cost, the New cost popup) and its pages, one file each in `web/pages/` |
 | `mill_sheet.py` | Reads a mill's price sheet (base price plus upcharges), turns each row into the tool's choices, and checks the mill's arithmetic |
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |
 | `draft.py` | E-mail and WhatsApp drafts to a mill, written by Claude (app setting `ANTHROPIC_API_KEY`), with a fixed template when there is no key |
 | `mcp_server.py` | RightPrice as an MCP server for an AI assistant: at `/mcp` on the web app behind the token `RIGHTPRICE_MCP_TOKEN`, or `python mcp_server.py` on a laptop. The token is an admin key (GP, 27 Nov 2026): a tool for every change an Admin can make, each recorded as "AI assistant". See [docs/AZURE_DEPLOY.md](docs/AZURE_DEPLOY.md) |
+| `check_browser.py` | Opens every page of the shell in a browser (Chromium, through Playwright) on a temporary data folder and database, in light and dark and at phone width, and walks the main paths: cost a fabric (Qlty-1 = Rs 181.40), upload a mill sheet, open a Right cost row, the popup's tabs, print, the dated yarn rates; stage 2's Fab group page (from Right cost's Fab group column), price popup, list of Fab groups and Purchase files, with the purchase file that came with the code loaded; with users and roles on, walks every address as each role. Must print `ALL OK` |
 | `rules/access.py`, `data_users.py` | Users and roles: who is signed in (Azure's sign-in headers), the four roles and their default permissions, which permission each address needs, the admin page's changes and their record (the SQL is in `data_users.py`) |
 | `web/access.js`, `web/access.css` | The Users and roles page, and what the shell hides from a role that may not use it |
 | `check_server.py` | Checks the server gives the engine's numbers and refuses bad input, on the files, SQLite and PostgreSQL (`RIGHTPRICE_TEST_DATABASE_URL`, never `DATABASE_URL`), and proves the move from files to a database changes no answer. Must print `ALL OK` |

@@ -1,0 +1,126 @@
+/* New cost > Create cost (web/pages/cost.js): the steps, the cost and its charts. Scoped to the page, as in common.css. */
+
+/* ---------- waterfall (before the steps: as in the earlier screens, a step's padding and line also mark the waterfall's sub-cost rows) */
+.pg .wf { display: grid; grid-template-columns: minmax(120px, 250px) minmax(0, 1fr) 92px; column-gap: 12px; align-items: center; }
+.pg .wf-row { display: contents; }
+.pg .wf-row > * { padding: 3px 0; }
+.pg .wf-label { overflow: hidden; white-space: nowrap; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pg .wf-label .txt { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pg .card .txt { padding: 0; }                                  /* from the shell: a card's .txt there is padded */
+.pg .wf-label .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.pg .wf-label.step { padding-left: 18px; color: var(--muted); }
+.pg .wf-val.step { color: var(--muted); }
+.pg .wf-label.total, .pg .wf-val.total { font-weight: 700; }
+.pg .wf-label button { all: unset; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 28px; overflow: hidden; min-width: 0; }
+.pg .wf-label button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.pg .wf-label .caret { color: var(--faint); width: 10px; flex: none; transition: transform .15s; }
+.pg .wf-label [aria-expanded="true"] .caret { transform: rotate(90deg); }
+.pg .wf-track { position: relative; height: 26px; background: linear-gradient(var(--border), var(--border)) left center / 100% 1px no-repeat; }
+.pg .wf-row.head .wf-track, .pg .wf-row.sum .wf-track { background: none; }
+.pg .wf-bar { position: absolute; top: 4px; bottom: 4px; min-width: 3px; border-radius: 4px; }
+.pg .wf-bar.neg { background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.45) 4px 6px); }
+.pg .wf-bar.sumbar { top: 9px; bottom: 9px; background: var(--total); opacity: .55; border-radius: 3px; }
+.pg .wf-bar.totalbar { background: var(--total); }
+.pg .wf-bar.quotebar { background: transparent; border: 2px solid var(--total); }
+.pg .wf-gap { position: absolute; top: 4px; bottom: 4px; border-radius: 0 4px 4px 0; opacity: .8; }
+.pg .wf-gap.over { background: var(--red); }
+.pg .wf-gap.under { background: var(--accent-fill); }
+.pg .wf-val { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pg .wf-val small { color: var(--faint); font-size: 11px; display: block; line-height: 1.1; }
+.pg .wf-sep { grid-column: 1 / -1; height: 1px; background: var(--border); margin: 6px 0; padding: 0; }
+.pg .wf-row:hover > .wf-label, .pg .wf-row:hover > .wf-val { color: var(--text); }
+.pg .wf-axis { grid-column: 2; display: flex; justify-content: space-between; color: var(--faint); font-size: 11px; padding-top: 4px; }
+
+/* ---------- steps on the left, cost on the right, both on one screen */
+.pg:has(.cost-split) { padding-bottom: 8px; }
+.pg .cost-split { display: grid; grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); gap: 16px; height: calc(100vh - 168px); height: calc(100cqh - 168px); min-height: 420px; }
+.pg .pane { overflow-y: auto; min-width: 0; padding-right: 4px; scrollbar-width: thin; }
+.pg .pane-in { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 14px; }
+.pg .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 0 10px; border-bottom: 1px solid var(--border); position: sticky; top: -6px; background: var(--panel); z-index: 2; }
+.pg .step { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.pg .step:last-child { border-bottom: 0; }
+.pg .step-head { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; }
+.pg button.step-head { all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 32px; cursor: pointer; border-radius: 6px; }
+.pg button.step-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pg .step-caret { color: var(--faint); display: inline-flex; flex: none; transition: transform .15s; }
+.pg .step-sum + .step-caret { margin-left: 0; }
+.pg .step-head h2 + .step-caret { margin-left: auto; }
+.pg .step.open .step-caret { transform: rotate(180deg); }
+.pg .step-head h2 { font-size: 14px; white-space: nowrap; }
+.pg .step-n { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; flex: none; background: var(--accent-fill); color: #04130d; }
+.pg .step.done .step-n { background: var(--accent-soft); color: var(--accent); }
+.pg .step.locked .step-n { background: var(--panel2); color: var(--faint); border: 1px solid var(--border); }
+.pg .step.locked h2 { color: var(--faint); }
+.pg .step-sum { margin-left: auto; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pg .step .fields { margin-top: 12px; }
+.pg .step .chip { padding: 6px 12px; min-height: 34px; }
+.pg details.more { text-align: inherit; color: inherit; font-size: inherit; padding: 0; }     /* from the shell: .more there is a centred line */
+.pg details.more > summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.pg .cost-out > * + * { margin-top: 12px; }
+.pg .cost-out .card + .card { margin-top: 12px; }
+.pg .hero-row { display: flex; justify-content: space-between; align-items: center; gap: 12px 20px; flex-wrap: wrap; }
+.pg .cost-out .hero .big { font-size: 32px; }
+.pg .waiting .todo { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; color: var(--muted); }
+.pg .waiting .todo li.ok { color: var(--accent); }
+
+/* ---------- the brief */
+.pg .card.brief { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); max-width: none; font-size: inherit; line-height: inherit; }   /* from the shell: .brief there is narrower */
+.pg .brief-list { margin: 0; padding-left: 18px; display: grid; gap: 8px; max-width: 100ch; }
+.pg .brief-list ul { margin: 6px 0; padding-left: 18px; }
+.pg .brief-list li.caveat b { color: var(--amber); }
+.pg .simrow { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) 56px; gap: 12px; align-items: center; min-height: 34px; }
+.pg .simrow label { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg .simrow input[type=range] { width: 100%; accent-color: var(--accent-fill); height: 28px; }
+.pg .simval { text-align: right; font-weight: 600; }
+
+/* ---------- pie */
+.pg .pie { display: grid; grid-template-columns: minmax(180px, 280px) minmax(0, 1fr); gap: 24px; align-items: center; }
+.pg .pie-svg svg { width: 100%; height: auto; display: block; }
+.pg .slice { stroke: var(--panel); stroke-width: 2; }
+.pg .slice:focus-visible, .pg .pt:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.pg .pie-big { font: 700 22px var(--font); fill: var(--text); }
+.pg .pie-small { font: 500 11px var(--font); fill: var(--muted); }
+.pg .pie-list { display: grid; gap: 6px; }
+.pg .pie-item { display: grid; grid-template-columns: 12px minmax(0, 1fr) 44px 70px; gap: 10px; align-items: center; }
+.pg .pie-item .dot { width: 10px; height: 10px; border-radius: 3px; }
+.pg .pie-item .num { text-align: right; color: var(--muted); }
+.pg .pie-item .pie-amt { color: var(--text); font-weight: 600; }
+.pg .pie-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- treemap */
+.pg .treemap { position: relative; width: 100%; min-height: 260px; }
+.pg .tm-group { position: absolute; border: 2px solid var(--panel); border-radius: 6px; overflow: hidden; }
+.pg .tm-inner { position: absolute; inset: 0; }
+.pg .tm-kid { position: absolute; border: 1px solid var(--panel); overflow: hidden; background: rgba(0,0,0,.001); }
+.pg .tm-kid:nth-child(even) { background: rgba(255,255,255,.14); }
+.pg .tm-label { padding: 5px 7px; color: #fff; font-size: 12px; line-height: 1.25; display: grid; text-shadow: 0 1px 2px rgba(0,0,0,.55); }
+.pg .tm-label b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.pg .print-stamp { display: none; }
+
+/* ---------- narrower */
+@container (max-width: 1000px) {
+  .pg .cost-split { grid-template-columns: 1fr; height: auto; }
+  .pg .pane { overflow: visible; padding-right: 0; }
+  .pg .pie { grid-template-columns: 1fr; }
+  .pg .pie-svg { max-width: 240px; margin: 0 auto; }
+  .pg .treemap { aspect-ratio: 1 / 1 !important; }
+}
+@container (max-width: 820px) {
+  .pg .wf { grid-template-columns: minmax(0, 1fr) 78px; column-gap: 10px; }
+  .pg .wf-row > .wf-label { grid-column: 1 / -1; padding-bottom: 0; }
+  .pg .wf-row > .wf-track { grid-column: 1; }
+  .pg .wf-axis { grid-column: 1; }
+  .pg .wf-axis .mid { display: none; }
+  .pg .simrow { grid-template-columns: 1fr 48px; }
+  .pg .simrow label { grid-column: 1 / -1; }
+}
+
+/* ---------- on paper: the cost alone, its tables open (see printSheet in cost.js, which also sets the page's margin) */
+@media print {
+  .pg .pane-in, .pg .cost-intro { display: none !important; }
+  .pg .cost-split { display: block; height: auto !important; }
+  .pg .pane { overflow: visible !important; padding: 0; }
+  .pg .wf-bar, .pg .slice, .pg .tm-group { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .pg .print-stamp { display: block; color: #4f6077; font-size: 11px; margin: 0 0 8px; }
+  .pg .card.brief { border-color: #0b7d57; }
+}

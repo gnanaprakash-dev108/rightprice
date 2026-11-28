@@ -30,6 +30,7 @@ const CONFIG = {
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
+        { id: "fab_group", header: "Fab group", width: 130, type: "fabgroup", help: "Purchase orders: the fabric's Fab group (the same construction in any colour, across mills), from the purchase history. Click it for the group's page; the chart button shows the price over time" },
         { id: "route", header: "Route", width: 90 },
         { id: "weave", header: "Weave", width: 90 },
         { id: "finish", header: "Finish", width: 140 },
@@ -61,7 +62,7 @@ const CONFIG = {
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "mill", label: "Mill (every spelling)" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
-        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
+        { id: "order_size", label: "Order size" }, { id: "fab_group", label: "Fab group" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
@@ -81,7 +82,7 @@ const CONFIG = {
       ["Costing setup", ["Rating scale types", "Rating scales", "Cost sheet types", "Material cost configuration", "Seasonal exchange rates"].map(n => [n, "#lib/" + n])],
       ["Sourcing setup", ["Payment terms", "Delivery terms", "Sample type"].map(n => [n, "#lib/" + n])]] },
   },
-  // the earlier screens shown inside the shell: section, title, and the tabs of that section
+  // the pages of the shell under Home and Prices (their code is in web/pages/): section and title, and each section's tabs
   frames: {
     dashboard: ["Home", "Dashboard"], pilot: ["Home", "Pilot results"],
     yarn: ["Prices", "Yarn prices"], cotton: ["Prices", "Cotton prices"], intake: ["Prices", "Bring in prices"],
@@ -268,7 +269,7 @@ function rerunWithSkeleton() { state.loading = true; state.shown = CONFIG.pageSi
 // ================================================================== RENDER
 function railActive(id) {
   const first = decodeURIComponent(location.hash.slice(1)).split("/")[0] || "dashboard";
-  const now = id || (first === "rightcost" || first === "item" || first === "supplier" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
+  const now = id || (first === "rightcost" || first === "item" || first === "supplier" || first === "group" || first === "groups" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
   document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === now));
 }
 function renderRail() {
@@ -312,8 +313,9 @@ function openFly(name, anchor, hover, keep) {
       h("div", { class: "g" }, "Settings"),
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
       can("page:prices") ? [link("Calculation settings", "#settings"), link("Rate tables", "#rates")] : null,
+      canAny("page:groups", "page:purchase_files") ? h("div", { class: "g" }, "Purchase history") : null,      // stage 2: web/purchases.js
+      can("page:groups") ? link("Fab groups", "#groups") : null, can("page:purchase_files") ? link("Purchase files", "#purchase-files") : null,
       h("div", { class: "g" }, "Account"), profileExtras(),
-      can("do:edit_rates") ? h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/classic/"; } }, "Earlier screens (classic)") : null,
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
   fill(fly, ...kids); fly.hidden = false;
@@ -328,7 +330,8 @@ function route() {
   // the earlier addresses of the costing screens open them in the popup, over the Dashboard
   if (CONFIG.popupTabs.some(t => t[0] === full.split("/")[0])) { history.replaceState(null, "", "#dashboard?new=" + full.split("/")[0]); full = "dashboard?new=" + full.split("/")[0]; }
   let [hsh, q] = full.split("?"), want = new URLSearchParams(q || "").get("new"), open = document.querySelector(".scrim[data-popup]");
-  if (want && !CONFIG.popupTabs.some(t => t[0] === want)) { want = "cost"; history.replaceState(null, "", "#" + hsh + "?new=cost"); }
+  if (want && !CONFIG.popupTabs.length) { want = null; history.replaceState(null, "", "#" + hsh); }      // no screen of the popup open to this person (web/access.js)
+  else if (want && !CONFIG.popupTabs.some(t => t[0] === want)) { want = "cost"; history.replaceState(null, "", "#" + hsh + "?new=cost"); }
   if (want && !open) openPopup(want, undefined, true);
   else if (!want && open) { open.remove(); load(); }
   else if (want && open && open.dataset.tab !== want) open.switchTo(want, true);
@@ -340,50 +343,59 @@ function route() {
   if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || tabMemo(rest.join("/")) || "item", editing: false }; }
   else state.detail = null;
   state.users = id === "users";            // Users and roles (web/access.js)
+  state.page = typeof RP_PAGES !== "undefined" && RP_PAGES[id] ? { id, arg: rest.join("/") } : null;      // stage 2: web/purchases.js
   if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
   else if (CONFIG.frames[id]) state.frame = hsh;
-  else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.users) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
-  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier && !state.users ? " fixed listpage" : "");
+  else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.users && !state.page) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
+  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier && !state.users && !state.page ? " fixed listpage" : "");
   railActive(); render();
   if (state.supplier) loadSupplier();
   if (state.users) loadUsers();
+  if (state.page) RP_PAGES[state.page.id].enter(state.page);
   if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
-  document.title = (state.users ? "Users and roles" : state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
+  document.title = (state.users ? "Users and roles" : state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.page ? RP_PAGES[state.page.id].title(state.page) : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
-const frameSrc = hsh => `/?embed=1&bare=1&in=page#${hsh}`;
-function renderFrame(main) {
-  const id = state.frame.split("/")[0], [section, title] = CONFIG.frames[id];
-  const tabs = h("div", { class: "tabs", role: "tablist" }, CONFIG.sections[section].map(k => h("button", { type: "button", role: "tab", class: "tab" + (k === id ? " on" : ""), "aria-selected": String(k === id), onclick: () => { location.hash = "#" + k; } }, CONFIG.frames[k][1])));
-  const src = frameSrc(state.frame);
-  const head = h("div", { class: "framehead" }, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", section, "\u00A0\u203A\u00A0", h("span", {}, title)),
+const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
+
+// ------------------------------------------------------------------ the pages of the shell (web/pages/*.js)
+/* A page registered with RP.page() (web/pages/common.js says how) is drawn under its heading: the crumb, the title, its
+   section's tabs and New cost. The page itself is in its own box, which scrolls while the heading stays; asked for again
+   at the same address, it keeps what it shows. A page that names a section is added at the end of that section's tabs. */
+for (const p of Object.values(RP.pages)) if (!p.popup && !CONFIG.frames[p.id]) { CONFIG.frames[p.id] = [p.section, p.title]; if (CONFIG.sections[p.section]) CONFIG.sections[p.section].push(p.id); }
+function renderPage(main) {
+  const [id, ...rest] = state.frame.split("/"), [section, title] = CONFIG.frames[id], inSection = CONFIG.sections[section] || [];
+  const tabs = inSection.length ? h("div", { class: "tabs", role: "tablist" }, inSection.map(k => h("button", { type: "button", role: "tab", class: "tab" + (k === id ? " on" : ""), "aria-selected": String(k === id), onclick: () => { location.hash = "#" + k; } }, CONFIG.frames[k][1]))) : null;
+  const head = h("div", { class: "framehead" }, h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), section ? ["\u00A0\u203A\u00A0", section] : null, "\u00A0\u203A\u00A0", h("span", {}, title)),
     h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, h("h1", { class: "title", style: "cursor:default" }, title)), tabs), newCostButton()));
-  const old = main.querySelector("iframe.frame");
-  if (old && old.dataset.src === src && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) {
-    main.firstElementChild.replaceWith(head);           // the frame stays where it is: moving an iframe reloads it
-  } else {
-    const frame = h("iframe", { class: "frame", src, title, "data-src": src }); frame.addEventListener("load", () => syncFrameTheme(frame));
-    fill(main, head, frame);
-  }
+  const old = main.querySelector(":scope > .pgbox");
   $("#selbar").hidden = true;
+  if (old && old.dataset.address === state.frame && main.firstElementChild && main.firstElementChild.classList.contains("framehead")) main.firstElementChild.replaceWith(head);
+  else {
+    const box = h("div", { class: "pgbox", "data-address": state.frame });
+    fill(main, head, box);
+    if (RP.pages[id]) RP.show(id, rest.join("/"), box, { freshMeta: true });
+    else fill(box, h("div", { class: "empty" }, "This page could not be loaded: its file is missing from web/pages/."));
+  }
   const on = main.querySelector(".tab.on"); if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
-function syncFrameTheme(frame) { try { frame.contentDocument.documentElement.dataset.theme = document.documentElement.dataset.theme; } catch (e) { /* not loaded */ } }
-const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
+// what a page may ask of the shell
+RP.shell = { toast, go: hash => { location.hash = "#" + hash; }, showAlerts, alertsChanged: () => loadAlerts(), listChanged: () => { load(); loadAlerts(); }, popup: (tab, r) => openPopup(tab, r) };
 
 function render() {
   const main = $("#main");
   if (!pageOk()) return noPage(main);          // a page this person's role may not see (the server refuses its data too)
   if (state.users) return renderUsers(main);
-  if (state.frame) return renderFrame(main);
+  if (state.frame) return renderPage(main);
   if (state.library) return renderLibrary(main);
   if (state.supplier) return renderSupplier(main);
+  if (state.page) return RP_PAGES[state.page.id].render(main);
   if (state.detail) return renderDetail(main);
   const mod = CONFIG.modules.costs, rows = filtered(), cls = mod.classes.find(c => c[0] === state.cls) || mod.classes[0];
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", CONFIG.appName, "\u00A0\u203A\u00A0", h("span", {}, cls[1]));
   const title = h("button", { type: "button", class: "title", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.classes.map(([k, label]) => ({ label: `${label} (${k === "*" ? state.rows.length : state.counts[k] || 0})`, on: k === state.cls, run: () => { state.cls = k; store.set("cls", k); state.selection.clear(); rerunWithSkeleton(); } }))) },
     CONFIG.appName, h("span", { class: "caret" }, "▾"));
   const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label)));
-  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1])), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
+  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1] + (state.updating ? " · being brought up to date (a minute or two after a change; the figures shown are the last worked out)" : ""))), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
 }
 
@@ -467,6 +479,7 @@ function gridView(rows, skeleton) {
 function cellFor(r, c, cls, pinStyle, pend) {
   const k = keyOf(r), st = pinStyle(c);
   if (c.type === "select") { const b = h("input", { type: "checkbox", class: "cb", "aria-label": `Select ${r.code}` }); b.checked = state.selection.has(k); b.addEventListener("change", () => { b.checked ? state.selection.add(k) : state.selection.delete(k); render(); }); return h("td", { class: cls(c), style: st }, b); }
+  if (c.type === "fabgroup") return h("td", { class: cls(c), style: st }, typeof RP_PURCH !== "undefined" ? RP_PURCH.cell(r) : "");     // stage 2: web/purchases.js
   if (c.type === "thumb") return h("td", { class: cls(c), style: st }, h("div", { class: "thumb", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" }, title: r.route || "" }, (r.route || "—").split(/[ /]/)[0].slice(0, 5).toUpperCase()));
   if (c.type === "link") return h("td", { class: cls(c), style: st }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code));
   if (c.type === "band" && r.duplicate_of) return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: "Same order as " + r.duplicate_of + ": counted once in the negotiation pack" }, h("i", { style: { background: "#B9BEC7" } }), h("span", { class: "pt" }, "Duplicate of " + r.duplicate_of)));
@@ -506,15 +519,43 @@ function cardView(rows) {
   grid.addEventListener("scroll", () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 80 && state.shown < rows.length) { const t = grid.scrollTop; state.shown += CONFIG.pageSize; render(); const g = $(".cards"); if (g) g.scrollTop = t; } });
   return grid;
 }
+// SUPPLIER COUNTS: what the Suppliers tab counts for each mill, as /api/suppliers counts it (rules/supplier.py): a
+// purchase-order code only with a price paid (one bought only on ZLOI orders is never counted: GP, 27 Nov 2026); a
+// fabric-list row unless it repeats another. Beside them, each mill's codes it sold on ZLOI orders and is not counted
+// for, named by the ZLOI lines' own mill (not the row's supplier). check_server.py runs this function on the server's
+// rows and compares it with /api/suppliers.
+function supplierCounts(rows) {
+  const by = {}, at = k => by[k] = by[k] || { counted: [], zloi: [], names: {}, ids: new Set() };
+  for (const r of rows) {
+    if (r.source === "Purchase orders" ? r.price !== null && r.price !== undefined : !r.duplicate_of) { const x = at(r.mill || "(none)"); x.counted.push(r); x.ids.add(r); }
+  }
+  for (const r of rows) {
+    if (r.source !== "Purchase orders") continue;
+    const seen = new Set();
+    for (const o of r.outliers || []) {
+      const k = o.mill_key || "(none)", x = at(k);
+      x.names[o.mill] = (x.names[o.mill] || 0) + 1;
+      if (!seen.has(k) && !x.ids.has(r)) x.zloi.push(r);
+      seen.add(k);
+    }
+  }
+  return by;
+}
+// END SUPPLIER COUNTS
 function suppliersTab(rows) {
   if (!rows.length) return h("div", { class: "empty" }, "No records to view");
-  const by = {};
-  for (const r of rows) { const s = r.mill || "(none)"; (by[s] = by[s] || []).push(r); }
+  const by = supplierCounts(rows);
   const nameOf = rs => { const n = {}; rs.forEach(r => { if (r.supplier) n[r.supplier] = (n[r.supplier] || 0) + 1; }); return (Object.entries(n).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || ["(no supplier)"])[0]; };
-  const list = Object.entries(by).map(([k, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should && !r.duplicate_of); const met = m.reduce((a, r) => a + r.metres, 0); return { k, s: nameOf(rs), n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" && !r.duplicate_of).length, high: rs.filter(r => r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
-  return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier (opens its page)", "Fabrics", "Metres", "Price Rs/m (average over metres)", "Should-cost Rs/m", "Price above (average over metres)", "Above range (Push)", "Look high, tool unsure", "Other unsure", ""].map((t, i) => h("th", { class: i && i < 9 ? "n" : "" }, t)))),
-    h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, x.k === "(none)" ? x.s : h("button", { type: "button", class: "code", onclick: () => { location.hash = "#supplier/" + encodeURIComponent(x.k); } }, x.s)), h("td", { class: "n" }, n0(x.n)), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.high)), h("td", { class: "n" }, n0(x.unsure)),
-      h("td", {}, h("button", { type: "button", class: "btn line", style: "height:26px;font-size:12px", onclick: () => { state.filters.mill = [x.k]; state.tab = "items"; rerunWithSkeleton(); } }, "In the list")))))));
+  const list = Object.entries(by).filter(([, x]) => x.counted.length).map(([k, x]) => { const rs = x.counted, m = rs.filter(r => r.metres && r.price && r.should && !r.duplicate_of); const met = m.reduce((a, r) => a + r.metres, 0); return { k, s: nameOf(rs), n: rs.length, zloi: x.zloi.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" && !r.duplicate_of).length, high: rs.filter(r => r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
+  const zName = x => (Object.entries(x.names).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || ["(no supplier)"])[0];
+  const zOnly = Object.entries(by).filter(([, x]) => !x.counted.length && x.zloi.length).map(([k, x]) => ({ k, s: zName(x), n: x.zloi.length })).sort((a, b) => b.n - a.n);
+  const anyZ = list.some(x => x.zloi) || zOnly.length;
+  const millLink = x => x.k === "(none)" ? x.s : h("button", { type: "button", class: "code", onclick: () => { location.hash = "#supplier/" + encodeURIComponent(x.k); } }, x.s);
+  return h("div", {}, list.length ? h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier (opens its page)", "Fabrics", "Metres", "Price Rs/m (average over metres)", "Should-cost Rs/m", "Price above (average over metres)", "Above range (Push)", "Look high, tool unsure", "Other unsure", ""].map((t, i) => h("th", { class: i && i < 9 ? "n" : "" }, t)))),
+    h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, millLink(x)), h("td", { class: "n" }, n0(x.n), x.zloi ? h("div", { class: "muted", style: "font-size:11px" }, `+ ${n0(x.zloi)} ZLOI only, not counted`) : null), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.high)), h("td", { class: "n" }, n0(x.unsure)),
+      h("td", {}, h("button", { type: "button", class: "btn line", style: "height:26px;font-size:12px", onclick: () => { state.filters.mill = [x.k]; state.tab = "items"; rerunWithSkeleton(); } }, "In the list"))))))) : h("div", { class: "empty" }, "No fabric bought (with a price paid) or quoted among these rows"),
+    anyZ ? h("p", { class: "muted", style: "margin-top:10px;font-size:12px" }, "A fabric bought from a mill only on ZLOI orders (letters of intent) is not counted for that mill (GP, 27 Nov 2026): the figure under a mill's count is how many it sold only on ZLOI, named by the ZLOI lines' own mill; its page lists them apart." +
+      (zOnly.length ? " Bought only on ZLOI orders, so not in the table: " : ""), zOnly.map((x, i) => [i ? ", " : "", millLink(x), ` (${n0(x.n)} ${x.n === 1 ? "fabric" : "fabrics"})`])) : null);
 }
 
 // ------------------------------------------------------------------ supplier page: one mill, for the meeting with it
@@ -585,6 +626,8 @@ function renderSupplier(main) {
     B.rows.length ? h("section", { class: "sec" }, h("h2", {}, "Bought"), h("p", { class: "muted" }, counts(B) + "."), h("ul", { class: "mon" }, money(B, true)), swipe(), table(shown, "Paid", false),
       B.rows.length > shown.length ? h("p", { class: "noprint" }, h("button", { type: "button", class: "btn line", onclick: () => { sp.all = true; render(); } }, `Show all ${n0(B.rows.length)} (the ${shown.length} with the most money above the range are shown)`)) : null,
       B.rows.length > shown.length ? h("p", { class: "muted printonly" }, `The ${shown.length} purchases with the most money above the range are printed, of ${n0(B.rows.length)}.`) : null) : null,
+    typeof RP_PURCH !== "undefined" && (d.outliers || []).length ? h("section", { class: "sec" }, RP_PURCH.outliers(d.outliers, "this mill", true)) : null,      // stage 2
+    typeof RP_PURCH !== "undefined" && (d.to_check || []).length ? h("section", { class: "sec" }, RP_PURCH.toCheck(d.to_check, "this mill", true, () => loadSupplier())) : null,
     h("p", { class: "muted", style: "margin-top:18px" }, "Quotes: should-cost and verdicts on today's rates. " + (B.rates && B.rates.text ? B.rates.text + " " : "") + "“Above the usual range” is the price less the top of the range for that fabric type, times the metres; it is counted only where the tool is sure of the fabric."));
 }
 function renderSelbar() {
@@ -614,11 +657,12 @@ function renderSelbar() {
 function fields(r) {
   return [["Fabric code", r.code], ["Source", r.source], ["Description", r.description], ["Supplier", r.supplier], ["Route", r.route], ["Weave", r.weave], ["Weave group", r.weave_group],
     ["Finish", r.finish], ["Pattern", r.pattern], ["Warp yarn", r.warp], ["Weft yarn", r.weft], ["EPI × PPI", r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : ""], ["Finished width (in)", r.width],
-    ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", n2(r.price)],
+    ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", r.source === "Purchase orders" && r.price === null && (r.outliers || []).length ? "None: bought only on ZLOI orders (see Outliers below)" : r.source === "Purchase orders" && r.price === null && /^not in the purchase history/.test(r.worked_out_again || "") ? "None: not in the purchase history (see Worked out again)" : n2(r.price)],
     ["Against should-cost", r.price && r.gap !== null && r.gap !== undefined ? `Rs ${n2(Math.abs(r.gap))} ${r.gap >= 0 ? "above" : "below"} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
     [r.source === "Purchase orders" ? "Paid against should-cost, Rs" : "Quote against should-cost, Rs (not paid)", r.excess === null || r.excess === undefined ? "" : `${n0(Math.abs(r.excess))} ${r.excess >= 0 ? "above" : "below"}`],
-    ["Duplicate of", r.duplicate_of || ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
-    ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
+    ["Duplicate of", r.duplicate_of || ""], ["Fab group", r.fab_group ? `${r.fab_group}: ${r.fab_group_name}` : r.fab_group_name ? "Not grouped: " + r.fab_group_name : ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
+    ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")],
+    ["Worked out again", r.worked_out_again ? r.worked_out_again.charAt(0).toUpperCase() + r.worked_out_again.slice(1) : ""], ["Outliers (ZLOI)", (r.outliers || []).length ? `${r.outliers.length}, left out of every figure (listed below)` : ""]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
   document.querySelectorAll(".side").forEach(e => e.remove());
@@ -645,7 +689,7 @@ function renderDetail(main) {
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", h("button", { type: "button", onclick: () => { location.hash = "#rightcost"; } }, CONFIG.appName), "\u00A0\u203A\u00A0", h("span", {}, r.code));
   const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; location.hash = "#rightcost"; }),
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
-    ib("open", "Open in Create cost", () => openCostPopup(r)));
+    ib("open", "Open in Create cost", () => openCostPopup(r)), r.source === "Purchase orders" && typeof RP_PURCH !== "undefined" ? ib("chart", "Price over time (purchase history)", () => RP_PURCH.openHistory(r.code)) : null);
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
   const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; tabMemo(k, t); render(); if (t === "negotiation" || t === "log") loadNegos(); } }, l)));
   let content;
@@ -655,7 +699,8 @@ function renderDetail(main) {
     const remIn = h("input", { id: "f-remarks", type: "text", value: edit.remarks || "", disabled: !d.editing || null });
     content = [h("div", { style: "margin-top:12px;display:flex;gap:8px" }, d.editing ? [h("button", { type: "button", class: "btn fill", onclick: () => { state.edits[k] = { status: statusIn.value, remarks: remIn.value }; store.set("edits", state.edits); addLog(`${r.code}: status ${statusIn.value}${remIn.value ? `, remarks "${remIn.value}"` : ""}`); d.editing = false; toast("Saved"); render(); } }, "Save"), h("button", { type: "button", class: "btn", onclick: () => { d.editing = false; render(); } }, "Discard")] : h("button", { type: "button", class: "btn line", onclick: () => { d.editing = true; render(); } }, "Edit status and remarks")),
       h("div", { class: "form2" }, h("div", { class: "f" }, h("span", {}, "Status"), statusIn), h("div", { class: "f" }, h("label", { for: "f-remarks" }, "Remarks"), remIn), fields(r).map(([k2, v]) => h("div", { class: "f" }, h("span", {}, k2), h("span", {}, String(v))))),
-      h("p", { style: "color:var(--text2);font-size:11px;margin-top:10px" }, "Status and remarks are kept in this browser only.")];
+      h("p", { style: "color:var(--text2);font-size:11px;margin-top:10px" }, "Status and remarks are kept in this browser only."),
+      typeof RP_PURCH !== "undefined" ? RP_PURCH.outliers(r.outliers, "this fabric") : null];       // stage 2: ZLOI lines, shown apart
   } else if (d.tab === "costing") {
     if (r.buckets) content = costingTab(r);
     else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost")));
@@ -684,7 +729,7 @@ function costingTab(r, when) {
   return h("div", { class: "buckets" }, Object.entries(b).map(([name, v]) => h("div", { class: "bk" }, h("span", {}, name), h("div", {}, h("div", { class: "b", style: { width: Math.abs(v || 0) / top * 100 + "%" } })), h("span", { style: "text-align:right" }, n2(v)), h("span", { style: "text-align:right;color:var(--text2)" }, r.should ? (100 * (v || 0) / r.should).toFixed(1) + "%" : ""))),
     h("div", { class: "bk tot" }, h("span", {}, "Should-cost"), h("span"), h("span", { style: "text-align:right" }, n2(r.should)), h("span", { style: "text-align:right" }, "100%")),
     r.price ? h("div", { class: "bk" }, h("span", {}, r.source === "Purchase orders" ? "Price paid" : "Mill's quote"), h("span"), h("span", { style: "text-align:right" }, n2(r.price)), h("span", { style: "text-align:right" }, pc(r.gap_pct))) : null,
-    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : r.rates && r.rates.dated ? "Rs per metre, with the yarn on the dated rates of the order month (below) and every other rate today's. Create cost works on today's rates." : "Rs per metre, as costed in the purchase-order pilot. The Negotiation tab and Create cost work on today's rates; they give the same should-cost unless a rate has changed since."),
+    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : r.rates && r.rates.dated ? "Rs per metre, with the yarn on the dated rates of the order month (below) and every other rate today's. Create cost works on today's rates." : "Rs per metre, as costed in the purchase-order pilot (worked out again from the purchase lines where ZLOI orders or later purchases change its metres), on today's rates. The Negotiation tab and Create cost give the same should-cost."),
     when !== "today" && r.rates ? h("p", { class: "rates-note", style: "color:var(--text2);font-size:11px" }, "Rates: " + r.rates.note) : null,         // stage 5: which month's rates
     h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost"));
 }
@@ -885,36 +930,45 @@ async function loadNegos(always) {
 }
 
 // ------------------------------------------------------------------ the "+" popup: create cost, bulk upload, compare, negotiation pack
-/* One window over the page with the four costing screens as tabs. They are the earlier screens, in one
-   frame, so a fabric opened from the list in Bulk upload carries on in Create cost. */
+/* One window over the page with the four costing screens as tabs (web/pages/cost.js, bulk.js, compare.js, pack.js),
+   drawn in the popup's own box. They share what is open (RP.state), so a fabric opened from the list in Bulk upload
+   carries on in Create cost. Each opening starts afresh. */
 function popupHash(tab) { return "#" + (decodeURIComponent(location.hash.slice(1)).split("?")[0] || "dashboard") + (tab ? "?new=" + tab : ""); }
 function openPopup(tab = "cost", r = null, fromAddress = false) {
   closeLayers();
   document.querySelectorAll(".scrim[data-popup]").forEach(e => e.remove());
-  if (!CONFIG.popupTabs.some(t => t[0] === tab)) tab = (CONFIG.popupTabs[0] || ["cost"])[0];
   if (!fromAddress) history.pushState({ popup: tab }, "", popupHash(tab));          // Back closes the popup
-  const frame = h("iframe", { src: `/?embed=1&bare=1#${tab}`, title: "Costing" });
+  RP.fresh();
+  const box = h("div", { class: "pgbox" }, h("div", { class: "pg" }, h("p", { class: "empty" }, "Loading...")));
   const close = () => { if (history.state && history.state.popup) history.back(); else { history.replaceState(null, "", popupHash(null)); s.remove(); load(); } };
   const tabs = h("div", { class: "ptabs", role: "tablist" });
   const mark = id => { s.dataset.tab = id; tabs.querySelectorAll(".ptab").forEach(b => { const on = b.dataset.tab === id; b.classList.toggle("on", on); b.setAttribute("aria-selected", String(on)); }); };
   const switchTo = (id, fromAddr) => {
-    try { frame.contentWindow.location.replace(`/?embed=1&bare=1#${id}`); } catch (e) { frame.src = `/?embed=1&bare=1#${id}`; }
+    if (RP.pages[id]) RP.show(id, "", box, { inPopup: true, tab: t => switchTo(t) });
+    else fill(box, h("div", { class: "empty" }, "This tab could not be loaded: its file is missing from web/pages/."));
     mark(id); if (!fromAddr) history.replaceState(history.state, "", popupHash(id));
   };
-  for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
   const note = r ? h("span", { class: "pnote" }, `${r.code}${r.source === "Purchase orders" ? ": a purchase order (its price was paid); Add to list copies it into the fabric list" : ""}`) : null;
   const pop = h("div", { class: "popup", role: "dialog", "aria-modal": "true", "aria-label": "New cost" },
-    h("div", { class: "ph" }, h("h2", {}, "New cost"), h("div", { class: "ptabwrap" }, tabs), note, ib("x", "Close", close)), frame);
+    h("div", { class: "ph" }, h("h2", {}, "New cost"), h("div", { class: "ptabwrap" }, tabs), note, ib("x", "Close", close)), box);
   const s = h("div", { class: "scrim", onmousedown: e => { if (e.target === s) close(); } }, pop);
-  s.dataset.popup = "1"; s.switchTo = switchTo; s.close = close;
-  mark(tab);
-  frame.addEventListener("load", () => {
-    syncFrameTheme(frame);
-    const w = frame.contentWindow;
-    w.addEventListener("hashchange", () => { const id = (w.location.hash.slice(1) || "cost").split("/")[0]; if (CONFIG.popupTabs.some(t => t[0] === id)) { mark(id); history.replaceState(history.state, "", popupHash(id)); } });
-    if (tab === "cost" && r !== undefined) { const t = setInterval(() => { if (w.rpOpen) { clearInterval(t); w.rpOpen(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null); } }, 60); setTimeout(() => clearInterval(t), 8000); }
-  }, { once: true });
+  s.dataset.popup = "1"; s.dataset.tab = tab; s.switchTo = switchTo; s.close = close;
   $("#layer").append(s);
+  // first what this person may use (web/access.js) and the rate master's lists, read afresh: a fabric opened from Right
+  // cost needs the lists to find its yarns, and a yarn added by someone else since shows without a reload
+  (async () => {
+    try { if (RP.known()) await RP.known(); } catch (e) { /* asked again by web/access.js */ }
+    if (!s.isConnected) return;
+    // not let in, or no screen of the popup open to this role: no popup, and nothing asked of the server (the page says why)
+    if (shutOut() || !CONFIG.popupTabs.length) { s.remove(); history.replaceState(null, "", popupHash(null)); return; }
+    try { await RP.loadMeta(); } catch (e) { /* the tab says the rate master could not be read */ }
+    if (!s.isConnected) return;
+    let now = s.dataset.tab;                       // the address may have moved to another tab meanwhile
+    if (!CONFIG.popupTabs.some(t => t[0] === now)) now = (CONFIG.popupTabs[0] || ["cost"])[0];
+    for (const [id, label] of CONFIG.popupTabs) tabs.append(h("button", { type: "button", role: "tab", class: "ptab", "data-tab": id, onclick: () => switchTo(id) }, label));
+    if (tab === "cost" && r !== undefined && RP.cost && RP.state.meta) RP.cost.open(r ? r.choices : null, r && r.source === "Fabric list" ? r.id : null);
+    switchTo(now, fromAddress && s.dataset.tab === now);
+  })();
 }
 const openCostPopup = r => can("page:cost") ? openPopup("cost", r || null) : toast(`Your role (${RPA.me.role}) may not use Create cost`, false);
 
@@ -958,7 +1012,6 @@ function renderLibrary(main) {
 function toggleTheme() {
   const t = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = t; try { localStorage.setItem("rp-theme", t); } catch (e) { /* kept for this visit */ }
-  document.querySelectorAll("iframe").forEach(syncFrameTheme);
   toast(t === "dark" ? "Dark" : "Light");
 }
 async function whoAmI() {
@@ -1114,28 +1167,12 @@ function openDrawer() {
 
 addEventListener("keydown", e => {
   if (e.key === "Escape") { const pop = document.querySelector(".scrim"); if (pop) { if (pop.dataset.popup) pop.close(); else pop.remove(); return; } closeLayers(); }
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail) { e.preventDefault(); const s = $("#search"); if (s) s.focus(); }
+  // Ctrl+F finds in the list when the list is what is in view; everywhere else it is the browser's own find
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && !state.detail && !state.frame && !state.library && !state.supplier && !state.users && !document.querySelector(".scrim")) {
+    const s = $("#search"); if (s && s.offsetParent) { e.preventDefault(); s.focus(); } }
 });
 // the address follows the page: #item/<source|code> is a fabric's detail page; Back returns to the list
 addEventListener("hashchange", route);
-addEventListener("message", e => {
-  if (e.origin !== location.origin || !e.data) return;
-  if (e.data.rp === "listChanged") { load(); loadAlerts(); }
-  if (e.data.rp === "alertsChanged") loadAlerts();
-  if (e.data.rp === "draft" && Array.isArray(e.data.ids) && e.data.ids.length) draftDialog({ type: "rows", keys: e.data.ids.map(i => "Fabric list|" + i) }, e.data.mill || "the mill");
-  if (e.data.rp === "showAlerts" && e.source === (($("#main iframe.frame") || {}).contentWindow)) showAlerts();
-  if (e.data.rp === "go" && /^(supplier|item)\/[^?]+$/.test(e.data.hash || "") && e.source === (($("#main iframe.frame") || {}).contentWindow)) location.hash = "#" + e.data.hash;
-  if (e.data.rp === "close") { const pop = document.querySelector(".scrim[data-popup]"); if (pop) pop.close(); }
-  if (e.data.rp === "nav" && e.data.hash) {
-    const hsh = e.data.hash, id = hsh.split("/")[0], frame = $("#main iframe.frame");
-    if (!CONFIG.frames[id] || !frame || e.source !== frame.contentWindow || hsh === state.frame) return;
-    frame.dataset.src = frameSrc(hsh);                 // the frame is already there: only the heading, tabs and address follow
-    route.page = hsh; history.pushState(null, "", "#" + hsh); route.page = null; route();
-  }
-  // a screen shown in the page asked for one of the costing screens: they live in the popup
-  if (e.data.rp === "popup" && e.data.move) { try { sessionStorage.setItem("rp-list-move", JSON.stringify(e.data.move)); } catch (err) { /* no handover */ } }
-  if (e.data.rp === "popup") openPopup(e.data.tab || "cost", e.data.choices ? { code: e.data.choices["Fabric code"] || "fabric", source: "", choices: e.data.choices, id: e.data.listId } : undefined);
-});
 const catchUp = () => { if (!document.hidden && !state.frame && !state.library && !state.supplier && state.rows.length && !document.querySelector(".scrim")) loadNegos(); };
 const alertsUp = () => { if (!document.hidden) loadAlerts(); };
 addEventListener("focus", alertsUp); setInterval(alertsUp, 30000);
@@ -1147,11 +1184,12 @@ async function load() {
   try {
     const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];
-    state.rows = d.rows; state.counts = d.counts;
+    state.rows = d.rows; state.counts = d.counts; state.updating = !!d.updating;      // the rows last worked out, while new ones are
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
     if (!state.frame) render();
     if (state.supplier && !d.ready) loadSupplier();
   } catch (err) { if (shutOut()) return render(); fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
+if (new URLSearchParams(location.search).get("from") === "rightcost") history.replaceState(null, "", "/" + (location.hash || "#rightcost"));     // the earlier address /rightcost
 renderRail(); route(); load(); loadAlerts(); whoAmI();

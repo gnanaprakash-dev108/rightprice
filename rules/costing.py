@@ -52,6 +52,16 @@ def yarn_sensitivity(res):
 BAND_MIN, BAND_MAX = 5.0, 10.0
 
 
+def usual_range(p25=None, p75=None):
+    """The usual range either side, in per cent (lo, hi): the middle half of past prices (lower and upper quarter, in
+    per cent against the figure the range is set round), never narrower than BAND_MIN either way nor wider than
+    BAND_MAX. Without past prices: BAND_MIN either way. The brief sets it round should-cost by fabric type; a Fab
+    group's page round the group's median price (GP's decision, 27 Nov 2026: the same rule)."""
+    if p25 is None or p75 is None:
+        return -BAND_MIN, BAND_MIN
+    return max(-BAND_MAX, min(-BAND_MIN, p25)), min(BAND_MAX, max(BAND_MIN, p75))
+
+
 # A placeholder rate stops the brief naming a target only when the costs resting on it are more than this
 # share of the price; below it, a placeholder off by half moves the should-cost by under 5%.
 PLACEHOLDER_SHARE_LIMIT = 0.10
@@ -185,8 +195,7 @@ def brief(res, m, quantity=None, notes=(), sel=None):
                         f"{cat['fabrics']} fabrics bought, and they were paid {cat['gap']:+.1f}% against should-cost on "
                         "average (dashboard panel 1)")
 
-    hi = BAND_MIN if cat is None else min(BAND_MAX, max(BAND_MIN, cat["p75"]))
-    lo = -BAND_MIN if cat is None else max(-BAND_MAX, min(-BAND_MIN, cat["p25"]))
+    lo, hi = usual_range(None, None) if cat is None else usual_range(cat["p25"], cat["p75"])
     upper, lower = round(should * (1 + hi / 100), 2), round(should * (1 + lo / 100), 2)
     if cat is None:
         band_why = "5% either side of should-cost" + ("" if ins and ins[1] else " (there is no purchase history on this server to set it from)")
@@ -198,7 +207,7 @@ def brief(res, m, quantity=None, notes=(), sel=None):
 
     ro = res.get("rates_of") or {}
     if ro.get("dated"):     # stage 5: the range is measured on today's rates; say so when this should-cost is not
-        band_why += (f". The range is measured on today's rates (the purchase orders as costed in the pilot); this should-cost "
+        band_why += (f". The range is measured on today's rates (the purchase orders on the rates in use); this should-cost "
                      f"has its yarn on the dated rates of {ro['label']}")
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False

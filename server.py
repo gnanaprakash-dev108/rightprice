@@ -10,21 +10,20 @@ Three layers since stage 1 of the rebuild (27 Nov 2026):
 - the web requests: this file. It reads the request, calls one rule, and turns the answer into the response: a refusal
   into its status and words, a download into a file, an unreachable database into 503. It decides nothing itself.
 
-The earlier Streamlit screens stay reachable under /classic. This server starts Streamlit beside itself and passes
-/classic through.
+The front end is one shell (web/rightcost.html, its pages in web/pages/) since stage 4 (27 Nov 2026); the earlier
+front end and the Streamlit screens (/classic) are retired.
 """
 import asyncio
 import datetime as dt
 import json
 import os
-import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
-import httpx
-import websockets
-from fastapi import Body, FastAPI, File, Request, UploadFile, WebSocket
+from fastapi import Body, FastAPI, File, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -40,35 +39,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.join(HERE, "web")
 
 
-CLASSIC_PORT = int(os.environ.get("RIGHTPRICE_CLASSIC_PORT", "8501"))
-
-
-CLASSIC = f"127.0.0.1:{CLASSIC_PORT}"
-
-
-_classic = None
-
-
 @asynccontextmanager
 async def lifespan(_app):
-    global _classic
     # more worker threads than the default 40, so that requests waiting on a slow database cannot hold up the pages and files
     import anyio.to_thread
     anyio.to_thread.current_default_thread_limiter().total_tokens = 120
     await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
-    if os.environ.get("RIGHTPRICE_NO_CLASSIC") != "1":
-        _classic = subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", os.path.join(HERE, "app.py"),
-             "--server.port", str(CLASSIC_PORT), "--server.address", "127.0.0.1", "--server.headless", "true",
-             "--server.baseUrlPath", "classic", "--server.enableCORS", "false",
-             "--server.enableXsrfProtection", "false", "--browser.gatherUsageStats", "false"], cwd=HERE)
+    from rules import purchases as _purchases       # stage 2: purchase files left half-read by a restart are read again
+    threading.Thread(target=_purchases.resume_at_start, daemon=True).start()
     if _mcp_app is not None:
         async with mcp_server.mcp.session_manager.run():       # the MCP endpoint's own machinery, for as long as the app runs
             yield
     else:
         yield
-    if _classic:
-        _classic.terminate()
 
 
 app = FastAPI(title="RightPrice", lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -154,7 +137,7 @@ def _route_for(scope):
 
 
 def _route_key(route, method):
-    """How rules/access.py ROUTES names a route: "GET /api/costs", "WS /classic/{path:path}", "MOUNT /"."""
+    """How rules/access.py ROUTES names a route: "GET /api/costs", "WS /path" (a web socket), "MOUNT /"."""
     from starlette.routing import Mount, WebSocketRoute
     if isinstance(route, Mount):
         return f"MOUNT {route.path or '/'}"
@@ -255,7 +238,17 @@ def store_status():
 def rightcost_page():
     """The earlier address of Right cost: it is now a page of the shell."""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/#rightcost", status_code=307)
+    # no '#' in the address given: the browser keeps the one asked for (/rightcost#group/Fab-0001), and the shell opens
+    # Right cost when there is none
+    return RedirectResponse("/?from=rightcost", status_code=307)
+
+
+@app.get("/classic")
+@app.get("/classic/{path:path}")
+def classic_retired(path: str = ""):
+    """The earlier Streamlit screens are retired (stage 4, 27 Nov 2026): a bookmark of them leads to the app."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/", status_code=307)
 
 
 def _who(request):
@@ -343,9 +336,20 @@ def pack(options: dict = Body(default={})):
     return pack_rules.pack(options)
 
 
+_costs_body = [(None, None)]           # (the last answer, its JSON), replaced whole
+
+
 @app.get("/api/costs")
 def costs():
-    return rightcost.costs()
+    # the answer is kept while nothing it rests on changes (rightcost.costs): its JSON is kept with it, so a page asking
+    # every half second while the verdicts are worked out does not turn 3 MB into JSON each time (on a slow machine that
+    # took the background work's time: the CI run of 4e1f6f0)
+    val = rightcost.costs()
+    kept, body = _costs_body[0]
+    if kept is not val:
+        body = JSONResponse(jsonable_encoder(val)).body
+        _costs_body[0] = (val, body)
+    return Response(body, media_type="application/json")
 
 
 @app.post("/api/costs/download")
@@ -563,61 +567,76 @@ def users_permissions(payload: dict = Body(...), request: Request = None):
     return access.set_permissions(payload, request.headers)
 
 
-
-# ------------------------------------------------------------------ classic screens, passed through
-HOP = {"connection", "keep-alive", "transfer-encoding", "upgrade", "content-encoding", "content-length", "host"}
-
-
-@app.api_route("/classic", methods=["GET"])
-@app.api_route("/classic/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"])
-async def classic_http(request: Request, path: str = ""):
-    url = f"http://{CLASSIC}/classic/{path}"
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            r = await client.request(request.method, url, params=request.query_params, headers=headers,
-                                     content=await request.body())
-    except httpx.HTTPError:
-        return Response("The classic screens are still starting. Try again in a few seconds.", status_code=503,
-                        headers={"Retry-After": "5"})
-    return Response(r.content, status_code=r.status_code,
-                    headers={k: v for k, v in r.headers.items() if k.lower() not in HOP})
+# ------------------------------------------------------------------ stage 2: purchase history, Fab groups (on a database only)
+# Who may look and who may upload or merge: rules/access.py (ROUTES).
+from rules import fab_groups, purchases  # noqa: E402
 
 
-@app.websocket("/classic/{path:path}")
-async def classic_ws(ws: WebSocket, path: str):
-    proto = ws.headers.get("sec-websocket-protocol")
-    subs = [p.strip() for p in proto.split(",")] if proto else None
-    query = f"?{ws.url.query}" if ws.url.query else ""
-    try:
-        upstream = await websockets.connect(f"ws://{CLASSIC}/classic/{path}{query}", subprotocols=subs,
-                                            max_size=None, additional_headers={"Cookie": ws.headers.get("cookie", "")})
-    except Exception:
-        await ws.close(code=1013)
-        return
-    await ws.accept(subprotocol=upstream.subprotocol)
+@app.get("/api/purchases/status")
+def purchases_status():
+    return purchases.status()
 
-    async def up():
-        try:
-            while True:
-                msg = await ws.receive()
-                if msg["type"] == "websocket.disconnect":
-                    break
-                await upstream.send(msg["bytes"] if msg.get("bytes") is not None else msg["text"])
-        finally:
-            await upstream.close()
 
-    async def down():
-        try:
-            async for msg in upstream:
-                await (ws.send_bytes(msg) if isinstance(msg, bytes) else ws.send_text(msg))
-        finally:
-            try:
-                await ws.close()
-            except RuntimeError:
-                pass
+@app.get("/api/purchases/uploads")
+def purchase_uploads():
+    return purchases.uploads()
 
-    await asyncio.gather(up(), down(), return_exceptions=True)
+
+@app.post("/api/purchases/upload")
+async def purchase_upload(request: Request, file: UploadFile = File(...)):
+    data = await file.read(purchases.MAX_BYTES + 1)        # never more than the most that is read: a larger file is refused unread
+    return await asyncio.to_thread(purchases.upload, file.filename, data, _who(request))
+
+
+@app.post("/api/purchases/load-shipped")
+def purchase_load_shipped(request: Request = None):
+    return purchases.upload_shipped(who=_who(request))
+
+
+@app.get("/api/purchases/uploads/{upload_id}")
+def purchase_upload_detail(upload_id: int):
+    return purchases.upload_detail(upload_id)
+
+
+@app.post("/api/purchases/disagreements")
+def purchase_settle(payload: dict = Body(...), request: Request = None):
+    return purchases.settle(payload, who=_who(request))
+
+
+@app.post("/api/purchases/price-check")
+def purchase_price_check(payload: dict = Body(...), request: Request = None):
+    return purchases.count_held_price(payload, who=_who(request))
+
+
+@app.get("/api/purchases/skipped/{upload_id}")
+def purchase_upload_skipped(upload_id: int):
+    return _file(purchases.skipped_download(upload_id))
+
+
+@app.get("/api/purchases/history")
+def purchase_history(code: str):
+    return purchases.history(code)
+
+
+@app.get("/api/groups")
+def groups_list():
+    return fab_groups.listing()
+
+
+@app.get("/api/groups/{code}")
+def group_page(code: str):
+    return fab_groups.page(code)
+
+
+@app.post("/api/groups/merge")
+def groups_merge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.merge(payload, who=_who(request))
+
+
+@app.post("/api/groups/unmerge")
+def groups_unmerge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.unmerge(payload, who=_who(request))
+
 
 
 # ------------------------------------------------------------------ the front end
@@ -638,12 +657,10 @@ def _page(file, assets):
 
 
 @app.get("/")
-def index(request: Request):
-    """The app's shell (left rail, Right cost, the "+" popup). Every other screen is the earlier front end
-    shown inside it: /?embed=1 serves that front end on its own, without its page list or header."""
-    if request.query_params.get("embed") == "1":
-        return _page("index.html", ("app.css", "app.js", "dated.css", "dated.js"))
-    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js"))
+def index():
+    """The app: one shell (left rail, Right cost, the "+" popup) with every page in it; each page is a file in web/pages/."""
+    pages = sorted("pages/" + f for f in os.listdir(os.path.join(WEB, "pages")) if f.endswith((".js", ".css")))
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js", "dated.css", "dated.js", "purchases.css", "purchases.js", *pages))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")

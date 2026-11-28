@@ -28,10 +28,11 @@ window.RPDated = (() => {
   const SOURCE = { typed: "Typed here", "brought in": "Brought in", "market history": "Market history" };
   const say = (box, text, kind) => box.replaceChildren(text ? el("div", { class: "notice" + (kind ? " " + kind : ""), role: kind === "err" ? "alert" : "status" }, text) : "");
 
-  // the one tooltip: the page's own (#tip) where it has one
+  // the one tooltip: the shell's pages' own (web/pages/common.js), else the page's #tip
+  const kit = () => window.RP && window.RP.kit;
   const tipEl = () => document.getElementById("tip") || document.body.appendChild(el("div", { id: "tip", class: "tip", role: "tooltip", hidden: true }));
-  const tip = (html, x, y) => { const t = tipEl(); t.innerHTML = html; t.hidden = false; const r = t.getBoundingClientRect(); t.style.left = Math.max(8, Math.min(x + 14, innerWidth - r.width - 8)) + "px"; t.style.top = Math.max(8, Math.min(y + 14, innerHeight - r.height - 8)) + "px"; };
-  const untip = () => { const t = document.getElementById("tip"); if (t) t.hidden = true; };
+  const tip = (html, x, y) => { if (kit()) return kit().showTip(html, x, y); const t = tipEl(); t.innerHTML = html; t.hidden = false; const r = t.getBoundingClientRect(); t.style.left = Math.max(8, Math.min(x + 14, innerWidth - r.width - 8)) + "px"; t.style.top = Math.max(8, Math.min(y + 14, innerHeight - r.height - 8)) + "px"; };
+  const untip = () => { if (kit()) return kit().hideTip(); const t = document.getElementById("tip"); if (t) t.hidden = true; };
 
   /* One yarn's dated rates by month. Months without a rate are left as gaps: no line crosses them, and a grey mark on the
      baseline shows each one (today's rate is used there). The thin level line is today's rate, for comparison. */
@@ -75,8 +76,10 @@ window.RPDated = (() => {
         el("tbody", {}, rows.length ? rows : el("tr", {}, el("td", { colspan: String(columns.length), class: "dr-empty" }, opts.empty || "None")))));
   }
 
-  /* The card on the Yarn prices page. */
-  function card() {
+  /* The card on the Yarn prices page. With { edit: false } (a role that may not edit rates, stage 3) it shows the rates
+     and the months, without the form, Remove or Load. */
+  function card(opts = {}) {
+    const edit = opts.edit !== false;
     const host = el("div", { class: "card dr-card" }, el("p", { class: "dr-empty" }, "Loading the dated yarn rates…"));
     const load = async () => {
       let d;
@@ -135,18 +138,18 @@ window.RPDated = (() => {
         el("td", {}, removable ? el("button", { class: "btn small", type: "button", "aria-label": `Remove the rate for ${r.yarn_key}, ${r.label}`, onclick: async () => {
           if (!confirm(`Remove the dated rate for ${r.yarn_key}, ${r.label}? Purchase orders of that month go back to today's rate for it.`)) return;
           try { await postJSON("/api/dated-rates/remove", { id: r.id }); await load(); } catch (err) { say(msg, err.message, "err"); }
-        } }, "Remove") : `${r.removed_why || "removed"} ${String(r.removed_at || "").slice(0, 10)}${r.removed_by ? " by " + r.removed_by : ""}`));
+        } }, "Remove") : !r.removed_at && !r.removed_why ? "" : `${r.removed_why || "removed"} ${String(r.removed_at || "").slice(0, 10)}${r.removed_by ? " by " + r.removed_by : ""}`));
       const cols = [{ t: "Yarn" }, { t: "Month" }, { t: "Rs a kilo", n: true }, { t: "Range", n: true }, { t: "Prices", n: true }, { t: "Source" }, { t: "Where from" }, { t: "Entered" }, { t: "" }];
       host.replaceChildren(...[         // never a null into replaceChildren: it would show as the word "null"
         el("div", { class: "card-head" }, el("div", {}, el("h2", {}, "Dated yarn rates: the rates of a month"),
           el("p", { class: "dr-small", style: "margin:2px 0 0" }, "A purchase order is costed on the yarn rates of its order month where there is a dated rate; quotes and Create cost on today's rates (the yarn master above). Every costing says which."))),
         orders, charts, d.series.length ? el("p", { class: "dr-small" }, "Each chart is one yarn, in rupees a kilo, on its own scale. A grey mark on the baseline is a month with no dated rate: there the line stops, and today's rate is used. The level line is today's rate.") : null,
-        el("h3", { class: "dr-h" }, "Enter a dated rate"), form, msg,
-        el("h3", { class: "dr-h" }, "The market history in hand"),
-        d.market_file ? el("div", {}, el("p", { class: "dr-small" }, `Only prices of a yarn that surely is in the yarn master are used. Nothing is loaded until you press Load.`), market.childElementCount ? market : el("button", { class: "btn", type: "button", onclick: e => { e.currentTarget.replaceWith(market); preview(); } }, "See what it holds"))
+        edit ? el("h3", { class: "dr-h" }, "Enter a dated rate") : null, edit ? form : null, msg,
+        edit ? el("h3", { class: "dr-h" }, "The market history in hand") : null,
+        !edit ? null : d.market_file ? el("div", {}, el("p", { class: "dr-small" }, `Only prices of a yarn that surely is in the yarn master are used. Nothing is loaded until you press Load.`), market.childElementCount ? market : el("button", { class: "btn", type: "button", onclick: e => { e.currentTarget.replaceWith(market); preview(); } }, "See what it holds"))
           : el("p", { class: "dr-empty" }, "The market history file is not on this server."),
         el("h3", { class: "dr-h" }, `In force (${d.entries.length})`),
-        table(cols, d.entries.map(r => entryRow(r, true)), { label: "Dated yarn rates in force", empty: "No dated rate yet." }),
+        table(cols, d.entries.map(r => entryRow(r, edit)), { label: "Dated yarn rates in force", empty: "No dated rate yet." }),
         d.history.length ? el("details", { class: "dr-details" }, el("summary", {}, `Replaced or removed (${d.history.length}, newest first)`), table(cols, d.history.map(r => entryRow(r, false)), { label: "Dated rates replaced or removed" })) : null,
         el("details", { class: "dr-details", open: !d.entries.length }, el("summary", {}, "How the rate of a month is worked out"), el("ol", { class: "dr-rule" }, d.rule.map(t => el("li", {}, t))))].filter(Boolean));
     };
