@@ -217,6 +217,22 @@ faults; all were fixed the same day (below, "After the cold review").
       analysis of the year was sent to GP (summary: Rs 661.5 crore of domestic bulk per-metre buying; about 43% of bulk
       spend in USD/EUR/kg; a typing slip PO 3310092944/10 at Rs 71,158.75 a metre = Rs 12.5 crore; a price-slip guard
       was given to stage 2).
+  - **Update, 13:20 UTC.** Stage 2 pushed at 4e1f6f0 (CI race fixed: freshness per caller; the simplified dating
+    rule; price-slip guard holding exactly PO 3310092944/10 in GP's files, admin can count it; Purchase files upload
+    fixed (file box kept across redraws); ZLOI-only mill page; search by every word; light print of the group chart;
+    wording "PO costings follow the rates in use"). Full local check ALL OK (1,164). **GitHub's checks job FAILED on
+    4e1f6f0** (log in the scratchpad `ci_4e1f6f0.txt`): Right cost's PO rows "ready False, updating False" for 23 min in
+    the assistant section on sqlite and postgres (a liveness fault in the background pass: stale and nothing running), and
+    a 503 on Yarn prices for a Buyer (users and roles, postgres). A fresh builder is fixing it in `/home/user/wt-stage2b`
+    (reproduce under `taskset -c 0,1` with load, like GitHub's 2-CPU runner). GP's real files through the app on PG:
+    shipped 6,265 lines (10 s); file 2: 3,547 new, 6 changed, 6,253 already in, 6 removed (22 s); file 1: 13,972 new
+    (16 s); either order the same history: 15,678 lines (15,677 counted after the guard), 8,100 ZLOI, 0 for an admin,
+    12,123 codes, 2,225 groups, 86 mills; Right cost settles in 1 to 4 minutes after an upload or rate save (said on the
+    page). Stage 4 pushed b3440e6 (print in light colours, no popup for someone not let in, tables start on page 1, a
+    browser check uploading through Purchase files); merging stage 2's head next. Stage 2b: Fab library, the 12-month
+    window, every PO line, exchange rates (RBI monthly averages of daily FBIL rates, Nov 2025 to Nov 2026, collected with
+    sources in the scratchpad `fx/rbi_reference_monthly.csv`; Nov 2026 partial), Purchase lines page: built, checks
+    running. Handover PR 34 (this file) is a draft, green.
   - **Stage 2** (PR 28, branch `claude/sleepy-dirac-dknzrp-stage2`, pushed head d438c21; builder's worktree
     `/home/user/wt-stage2b`, local branch `stage2-work`). Confirmed fixed by running (three reviews): N1 to N6, width
     tolerance, saved later wins on plain SAP exports, two processes at once, restarts mid-upload, the rate-save wait
