@@ -92,11 +92,36 @@
     const top = mills.slice(0, 3).map((m, i) => ({ key: m.key, name: m.name, cls: "s" + (i + 1) }));
     return mills.length > 3 ? top.concat([{ key: "*", name: `${mills.length - 3} other ${mills.length - 3 === 1 ? "mill" : "mills"}`, cls: "s0" }]) : top;
   }
+  // one price for every purchase is said once: "Rs 208.00 (every purchase)", never "Rs 208.00 to 208.00"
+  const priceSpan = (lo, hi) => n2(lo) === n2(hi) ? `Rs ${n2(lo)} (every purchase)` : `Rs ${n2(lo)} to ${n2(hi)}`;
+  // GROUP SEARCH: every word of the search, anywhere in the code or the name ("Twill 40s" finds "Twill-2/1 · 40s x 40s")
+  function groupMatches(g, q) {
+    const t = (g.code + " " + g.name).toLowerCase();
+    return String(q || "").toLowerCase().split(/\s+/).filter(Boolean).every(w => t.includes(w));
+  }
+  // END GROUP SEARCH
   const rangeWords = r => r.enough ? `Rs ${n2(r.lower)} to ${n2(r.upper)}` : "Too few purchases";
   const rangeSub = (r, min) => r.enough ? `${pc(r.lo)} to ${pc(r.hi)} round the median` + ((r.lo !== r.p25 || r.hi !== r.p75) ? `; its middle half (${pc(r.p25)} to ${pc(r.p75)}) kept within 5% to 10%` : ": the middle half of its prices")
     : `${r.orders || 0} separate ${r.orders === 1 ? "order" : "orders"}; a usual range needs at least ${min}`;
   // ZLOI order lines: kept, in no figure, listed apart (GP, 27 Nov 2026)
   const ZLOI_WORDS = "ZLOI order lines are left out of every figure on this page (price paid, metres, medians, ranges, should-cost): GP's decision of 27 Nov 2026.";
+  // prices held apart to check in SAP (more than ten times, or under a tenth of, the code's other purchases): counted
+  // nowhere until an admin counts them (the build lead's guard, 28 Nov 2026)
+  function toCheck(list, whose, withCode, after) {
+    if (!list || !list.length) return null;
+    const count = async (x, yes) => {
+      try { await api("/api/purchases/price-check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ line_id: x.id, count: yes }) });
+        toast(yes ? `Counted: ${x.po}/${x.item} at Rs ${n2(x.price)}` : `Held apart again: ${x.po}/${x.item}`); if (after) after(); }
+      catch (e) { toast(e.message, false); }
+    };
+    const act = x => may("do:upload_purchases") ? h("button", { type: "button", class: "btn line", onclick: () => count(x, !x.counted_by) }, x.counted_by ? "Hold apart again" : "Count it") : "";
+    const heads = (withCode ? ["Date", "Order", "Fabric code", "Mill"] : ["Date", "Order", "Mill"]).concat(["Metres", "Price Rs/m", "Why", ""]);
+    const cells = x => (withCode ? [day(x.date), `${x.po}/${x.item}`, codeLink(x.code), x.mill] : [day(x.date), `${x.po}/${x.item}`, x.mill])
+      .concat([n0(x.metres), n2(x.price), wide(x.counted_by ? `counted by ${x.counted_by} (${x.why})` : x.why), act(x)]);
+    return h("div", { class: "outl" }, h("h3", {}, `Prices to check in SAP: ${list.length} ${list.length === 1 ? "line" : "lines"} of ${whose}`),
+      h("p", { class: "muted" }, "A price more than ten times, or under a tenth of, the code's other purchases is held apart: it is in no figure (price paid, metres, ranges) until an admin, having checked it in SAP, counts it."),
+      table(heads, list.map(cells), withCode ? [4, 5] : [3, 4]));
+  }
   function outliers(list, whose, withCode) {
     if (!list || !list.length) return null;
     const heads = withCode ? ["Date", "Order", "Fabric code", "Mill", "Metres", "Price Rs/m"] : ["Date", "Order", "Mill", "Metres", "Price Rs/m"];
@@ -129,7 +154,7 @@
       h("p", { class: "muted" }, specLine),
       h("div", { class: "stiles" },
         tile("Bought", `${n0(x.lines.length)} ${x.lines.length === 1 ? "purchase" : "purchases"}`, `${n0(x.metres)} m on ${x.orders} ${x.orders === 1 ? "order" : "orders"}`),
-        tile("Price paid", x.lines.length ? (x.lines.length > 1 ? `Rs ${n2(Math.min(...x.lines.map(l => l.price)))} to ${n2(Math.max(...x.lines.map(l => l.price)))}` : `Rs ${n2(x.lines[0].price)}`) : "None", x.lines.length ? `last on ${day(x.lines[x.lines.length - 1].date)}` : ""),
+        tile("Price paid", x.lines.length ? (x.lines.length > 1 ? priceSpan(Math.min(...x.lines.map(l => l.price)), Math.max(...x.lines.map(l => l.price))) : `Rs ${n2(x.lines[0].price)}`) : "None", x.lines.length ? `last on ${day(x.lines[x.lines.length - 1].date)}` : ""),
         tile("Should-cost", x.should ? `Rs ${n2(x.should)}` : "Not costed", x.should ? (x.should_on || "on today's rates") : x.should_why),
         g ? tile(`Fab group ${g.code}`, g.range.enough ? rangeWords(g.range) : `${g.purchases} ${g.purchases === 1 ? "purchase" : "purchases"}`, g.range.enough ? `its usual range; median Rs ${n2(g.range.median)} on ${g.purchases} purchases, ${g.range.orders} orders` : `on ${g.range.orders || 0} separate ${g.range.orders === 1 ? "order" : "orders"}: too few for a usual range (needs ${g.min_for_range})`) : tile("Fab group", "Not grouped", x.not_grouped)),
       pts.length ? priceChart({ points: pts, series, marks, band: g && g.range.enough ? { lower: g.range.lower, upper: g.range.upper, label: `${g.code} usual range` } : null, label: `Price over time for ${x.code}` }) : null,
@@ -140,6 +165,7 @@
       x.lines.length ? table(["Date", "Order", "Mill", "Metres", "Price Rs/m", "Against should-cost"], x.lines.map(l => [day(l.date), `${l.po}/${l.item}`, l.mill, n0(l.metres), n2(l.price), x.should ? pc((l.price / x.should - 1) * 100) : ""]), [3, 4, 5])
         : h("p", { class: "muted" }, x.outliers.length ? "None but ZLOI orders, which are listed apart below: no price paid is shown." : "None."),
       outliers(x.outliers, "this code"),
+      toCheck(x.to_check, "this code", false, () => { s.remove(); openHistory(code); }),
       h("div", { class: "acts" }, g && may("page:groups") ? h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null,
         h("button", { type: "button", class: "btn line", onclick: () => s.remove() }, "Close")),
       h("p", { class: "muted" }, "Should-cost is as Right cost has it: for the metres bought (ZLOI left out), on the yarn rates of the order month (today's where none is dated) and today's other rates. Prices are the net price on each purchase-order line (ex-mill, Rs per metre)."));
@@ -179,7 +205,7 @@
         (() => { const bought = d.mills.filter(m => m.lines), only = d.mills.length - bought.length;
           return tile("Mills", `${bought.length}`, [bought.slice(0, 3).map(m => m.name).join(", ") + (bought.length > 3 ? ` and ${bought.length - 3} more` : ""),
             only ? `${bought.length ? only + " more" : only} with ZLOI lines only, not counted` : ""].filter(Boolean).join(" · ")); })(),
-        tile("Median price paid", r.median ? `Rs ${n2(r.median)}` : "None", r.median ? `paid Rs ${n2(r.low)} to ${n2(r.high)}` : ""),
+        tile("Median price paid", r.median ? `Rs ${n2(r.median)}` : "None", r.median ? "paid " + priceSpan(r.low, r.high) : ""),
         tile("Usual range", rangeWords(r), rangeSub(r, d.min_for_range), r.enough ? "" : "amber"),
         tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + (sh.dated && sh.dated.length ? `on the order months' yarn rates (some dated)` : `on today's rates`) + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
         tile("Priced well above the group", r.enough ? `${d.above.length} ${d.above.length === 1 ? "purchase" : "purchases"}` : "No range yet", r.enough ? (d.above.length ? `Rs ${n0(d.above_rs)} above the top of the usual range` : "none above the top of its usual range") : "too few orders to say", d.above.length ? "red" : "")),
@@ -230,7 +256,7 @@
     if (list.error) return fillP(main, top, h("h1", { class: "ptitle" }, "Fab groups"), h("p", { class: needsDb(list.error) ? "note" : "err" }, list.error));
     if (!list.data) return fillP(main, top, h("div", { class: "empty" }, "Loading…"));
     const d = list.data, q = list.q.trim().toLowerCase();
-    const rows = d.groups.filter(g => !q || (g.code + " " + g.name).toLowerCase().includes(q)).sort((a, b) => b.purchases - a.purchases || a.code.localeCompare(b.code));
+    const rows = d.groups.filter(g => groupMatches(g, q)).sort((a, b) => b.purchases - a.purchases || a.code.localeCompare(b.code));
     const search = h("input", { type: "search", class: "search", placeholder: "Search a code or the construction (e.g. Twill 40s)", value: list.q, "aria-label": "Search the Fab groups" });
     search.addEventListener("keydown", e => { if (e.key === "Enter") { list.q = search.value; list.shown = 100; render(); } });
     const a = h("input", { type: "text", placeholder: "Fab-0012", "aria-label": "The group to merge" }), b = h("input", { type: "text", placeholder: "Fab-0003", "aria-label": "The group to merge it into" });
@@ -261,9 +287,9 @@
     };
     const c = d.counts;
     fillP(main, top, h("div", { class: "headrow" }, h("h1", { class: "ptitle" }, "Fab groups")),
-      h("p", { class: "muted" }, `${n0(c.groups)} groups of ${n0(c.fabrics_grouped)} fabric codes (the same construction in any colour, across mills), from ${n0(c.lines)} purchase lines` + (c.first ? `, ${day(c.first)} to ${day(c.last)}` : "") + `. ${n0(c.fabrics - c.fabrics_grouped)} codes are not grouped` + (d.not_grouped.length ? ` (${d.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")})` : "") + ".",
+      h("p", { class: "muted" }, `${n0(c.groups)} ${c.groups === 1 ? "group" : "groups"} of ${n0(c.fabrics_grouped)} fabric codes (the same construction in any colour, across mills), from ${n0(c.lines)} purchase lines` + (c.first ? `, ${day(c.first)} to ${day(c.last)}` : "") + `. ${n0(c.fabrics - c.fabrics_grouped)} codes are not grouped` + (d.not_grouped.length ? ` (${d.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")})` : "") + ".",
         " ", may("page:purchase_files") ? h("a", { href: "#purchase-files" }, "Purchase files") : null),
-      h("div", { class: "toolbar" }, search, h("button", { type: "button", class: "btn line", onclick: () => { list.q = search.value; list.shown = 100; render(); } }, "Search"), h("span", { class: "count" }, `${n0(rows.length)} groups`)),
+      h("div", { class: "toolbar" }, search, h("button", { type: "button", class: "btn line", onclick: () => { list.q = search.value; list.shown = 100; render(); } }, "Search"), h("span", { class: "count" }, `${n0(rows.length)} ${rows.length === 1 ? "group" : "groups"}`)),
       rows.length ? table(["Fab group", "Construction", "Codes", "Purchases", "Metres", "Median Rs/m", "Last bought"],
         rows.slice(0, list.shown).map(g => [groupLink(g.code), wide(g.name), n0(g.codes), n0(g.purchases), n0(g.metres), g.median === null ? "" : n2(g.median), day(g.last)]), [2, 3, 4, 5]) : h("div", { class: "empty" }, c.groups ? "No group matches." : "No Fab groups yet: load a purchase file first."),
       rows.length > list.shown ? h("p", {}, h("button", { type: "button", class: "btn line", onclick: () => { list.shown += 200; render(); } }, `Show more (${n0(rows.length - list.shown)} more)`)) : null,
@@ -308,16 +334,15 @@
     if (files.error) return fillP(main, top, title, h("p", { class: needsDb(files.error) ? "note" : "err" }, files.error));
     if (!files.data) return fillP(main, top, title, h("div", { class: "empty" }, "Loading…"));
     const d = files.data, c = d.counts;
-    const input = h("input", { type: "file", accept: ".xlsx,.xlsm", "aria-label": "Purchase-order file" });
-    const big = () => input.files.length ? tooBig(input.files[0].size, d.max_bytes, input.files[0].name) : null;
-    input.addEventListener("change", () => { files.uploadError = big(); render(); });     // said at once, before anything is sent
+    files.max = d.max_bytes;
+    const [input, fileNote] = fileBox(files, h, tooBig);       // kept across redraws: a chosen file is never lost
     const send = async () => {
       if (!input.files.length) return toast("Choose the purchase-order file first", false);
-      files.uploadError = big();
-      if (files.uploadError) return render();
+      files.serverError = null; sayFile(files, tooBig);
+      if (files.uploadError) return;
       const fd = new FormData(); fd.append("file", input.files[0]);
-      try { const r = await api("/api/purchases/upload", { method: "POST", body: fd }); files.open = r.id; files.detail = null; toast(r.shipped_first ? "Uploaded: the purchase file that came with the code is read first, then this one, in the background" : "Uploaded: it is read in the background"); enterFiles(); }
-      catch (e) { files.uploadError = e.message; render(); }
+      try { const r = await api("/api/purchases/upload", { method: "POST", body: fd }); files.open = r.id; files.detail = null; input.value = ""; sayFile(files, tooBig); toast(r.shipped_first ? "Uploaded: the purchase file that came with the code is read first, then this one, in the background" : "Uploaded: it is read in the background"); enterFiles(); }
+      catch (e) { files.serverError = e.message; sayFile(files, tooBig); }
     };
     const shipped = async () => {
       try { const r = await api("/api/purchases/load-shipped", { method: "POST" }); files.open = r.id; files.detail = null; toast("Loading the purchase file that came with the code"); enterFiles(); }
@@ -347,7 +372,7 @@
         : "Nothing is loaded yet: Right cost's purchase-order rows show the pilot's purchases as the purchase file that came with the code has them. The purchase history always starts from that file (GP, 28 Nov 2026): it is loaded first, as its own upload, when the first file is uploaded here (or with the button below), and from then on Right cost, the price popup and the Fab groups read the history.") : null,
       !may("do:upload_purchases") ? h("p", { class: "note" }, `Your role${typeof RPA !== "undefined" && RPA.me && RPA.me.role ? " (" + RPA.me.role + ")" : ""} may look at the uploads but not upload: that is an admin action.`) :
       h("section", { class: "sec" }, h("h2", {}, "Upload a purchase-order file"), h("div", { class: "uprow" }, input, h("button", { type: "button", class: "btn fill", onclick: send }, "Upload")),
-        files.uploadError ? h("p", { class: "err", role: "alert" }, files.uploadError) : h("p", { class: "muted" }, `Up to ${Math.floor(d.max_bytes / 1048576)} MB a file: a longer period goes in as several files, by 6 months or by year.`),
+        fileNote,
         d.shipped.available ? [h("h3", {}, "Or load the file that came with the code" + (d.shipped.loaded ? " (loaded already)" : "")),
           h("p", { class: "muted" }, "inputs/Fabric _ 3Months_4746.xlsx: the purchase orders of 1 Aug to 23 Nov 2026 that the pilot was run on, as SAP exported them on 23 Nov 2026. Each order line is kept once, and it never undoes a newer file, nor one covering the same orders saved later."),
           h("button", { type: "button", class: "btn line", onclick: shipped }, "Load the purchase file that came with the code")] : null),
@@ -357,6 +382,27 @@
         det ? skippedView(det) : null),
       h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026). A saved date after the upload (a clock set wrong) is not used: such a file, or one with no saved date, is taken by its upload at the latest and never wins by a saved date. A row dated after the file was saved (a forward-dated order, or a typo) is left out, listed with why, so the file keeps its saved date; a report date counts only between its latest order and its saved date. Document dates are days in India; saved times are UTC. The upload's page says which file won and why, with both saved times, and every date it did not use. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre; an older or earlier-saved file never changes it or brings it back. A line simply not in a newer file is never taken as cancelled: the history keeps it (GP, 28 Nov 2026), so a later download covering a longer span takes each line once. Only where nothing can tell (saved at the very same moment, or either file without a saved date it can be dated by) and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification and Fab group; a code whose specification is missing or incomplete is not grouped. The PLM specifications are the extract deployed with the code (data/plm_specs_for_po.csv in the code's own folder, not the data folder): a corrected extract goes in with a code change, and is read at the next upload."));
   }
+  // FILE BOX: the file box and the words under it are made once and kept across the page's redraws (it redraws every two
+  // seconds while a file is read, and redrew on choosing a file: the chosen file was lost, the cold review of 28 Nov), so a
+  // chosen file stays chosen; a file too large is said at once, in place, before anything is sent. check_server.py drives
+  // these two functions under node.
+  function fileBox(files, h, tooBig) {
+    if (!files.input) {
+      files.input = h("input", { type: "file", accept: ".xlsx,.xlsm", "aria-label": "Purchase-order file" });
+      files.note = h("p", { class: "muted" });
+      files.input.addEventListener("change", () => { files.serverError = null; sayFile(files, tooBig); });
+    }
+    sayFile(files, tooBig);
+    return [files.input, files.note];
+  }
+  function sayFile(files, tooBig) {
+    const f = files.input.files && files.input.files[0];
+    files.uploadError = files.serverError || (f ? tooBig(f.size, files.max, f.name) : null);
+    files.note.className = files.uploadError ? "err" : "muted";
+    if (files.uploadError) files.note.setAttribute("role", "alert"); else files.note.removeAttribute("role");
+    files.note.textContent = files.uploadError || `Up to ${Math.floor(files.max / 1048576)} MB a file: a longer period goes in as several files, by 6 months or by year.`;
+  }
+  // END FILE BOX
   // TOO BIG: what a file over the limit is told on the screen at once, before it is sent (as rules/purchases.py too_big;
   // check_server.py runs this function and compares the two)
   function tooBig(size, max, name) {
@@ -407,6 +453,8 @@
     return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`), savedView(u), disagreeView(u),
       u.status === "done" ? h("p", {}, `Already in the history: ${n0(u.rows_same || 0)} order lines, the same in this file (one line each, counted once). Updated by this file: ${n0((u.rows_changed || 0) + (u.rows_removed || 0))}` +
         ((u.rows_changed || 0) + (u.rows_removed || 0) ? ` (${n0(u.rows_changed || 0)} with its newer figures, ${n0(u.rows_removed || 0)} it shows no longer bought)` : "") + ". New: " + n0(u.rows_new || 0) + ".") : null,
+      (s.price_checks || []).length ? h("p", { class: "note" }, `${n0(s.price_checks.length)} ${s.price_checks.length === 1 ? "price is" : "prices are"} held apart to check in SAP (counted nowhere until an admin counts ${s.price_checks.length === 1 ? "it" : "them"}, in the price popup of the code): ` +
+        s.price_checks.slice(0, 5).map(x => `${x.code} ${x.po}/${x.item} at Rs ${n2(x.price)} (the others' median Rs ${n2(x.reference)})`).join("; ") + (s.price_checks.length > 5 ? `; and ${n0(s.price_checks.length - 5)} more` : "") + ".") : null,
       s.read_again_own ? h("p", { class: "note" }, `Read again from the start after the server restarted: ${n0(s.read_again_own)} of the lines counted as already in had been written by this file's own first reading, before the restart.`) : null,
       ch.length ? table(["Order", "Item", "Was", "Now (this file)"], ch.map(x => [x.po, x.item, wide(brief(x.was)), wide(brief(x.now))]), []) : null,
       ch.length && ch.length < (u.rows_changed || 0) + (u.rows_removed || 0) ? h("p", { class: "muted" }, `The first ${ch.length} are shown.`) : null,
@@ -430,7 +478,7 @@
     "purchase-files": { enter: enterFiles, render: renderFiles, title: () => "Purchase files", rail: null },
   };
   window.RP_PURCH = {
-    openHistory, outliers,
+    openHistory, outliers, toCheck,
     // Right cost's Fab group cell: the group (to its page) and the price popup
     cell(r) {
       if (r.source !== "Purchase orders" || (r.fab_group === undefined && r.fab_group_name === undefined) || (r.fab_group === null && !r.fab_group_name)) return "";

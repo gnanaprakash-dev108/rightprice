@@ -1135,6 +1135,30 @@ def stage2_checks(c, check):
         run_ = subprocess.run(["node", "-e", fn + f"\nconsole.log(JSON.stringify([tooBig({purchases.MAX_BYTES + 1}, {purchases.MAX_BYTES}, 'big.xlsx'), "
                                                   f"tooBig({purchases.MAX_BYTES}, {purchases.MAX_BYTES}, 'big.xlsx')]))"], capture_output=True, text=True)
         on_screen = json.loads(run_.stdout) if run_.returncode == 0 else run_.stderr[-200:]
+        # choosing a file, as the page does it: its own file box under node, with a stand-in for the page's elements
+        box = js[js.index("// FILE BOX"):js.index("// END FILE BOX")]
+        drive = box + fn + r"""
+function h(tag, attrs) {
+  const el = { tag, className: (attrs || {}).class || "", textContent: "", files: [], value: "", attrs: {}, on: {},
+    addEventListener(t, f) { (this.on[t] = this.on[t] || []).push(f); }, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; },
+    fire(t) { (this.on[t] || []).forEach(f => f()); } };
+  return el;
+}
+const files = { max: %d };
+const [inp, note] = fileBox(files, h, tooBig);
+inp.files = [{ size: 1000, name: "orders.xlsx" }]; inp.fire("change");
+const first = [files.uploadError, note.className];
+const [inp2] = fileBox(files, h, tooBig);                   // the page redrawn (every two seconds while a file is read)
+const kept = inp2 === inp && inp2.files.length === 1 && inp2.files[0].name === "orders.xlsx";
+inp.files = [{ size: %d, name: "big.xlsx" }]; inp.fire("change");
+console.log(JSON.stringify({ first, kept, big: [files.uploadError, note.className, note.textContent, note.attrs.role || null] }));
+""" % (purchases.MAX_BYTES, purchases.MAX_BYTES + 1)
+        run_b = subprocess.run(["node", "-e", drive], capture_output=True, text=True)
+        chose = json.loads(run_b.stdout) if run_b.returncode == 0 else {"error": run_b.stderr[-300:]}
+        check(f"{k} Purchase files: a chosen file stays chosen when the page redraws (the cold review of 28 Nov: choosing a file emptied the box, "
+              "so Upload said to choose one); a file too large is said at once, in place, in the server's words",
+              chose.get("first") == [None, "muted"] and chose.get("kept") is True
+              and chose.get("big") == [big.json()["detail"], "err", big.json()["detail"], "alert"], str(chose)[:400])
     check(f"{k} a file that is not an Excel workbook, or is larger than 40 MB, is refused at once (the large one unread); the page says so on the "
           "screen as soon as the file is chosen, before sending it, in the server's own words: the limit, and to split it by 6 months or by year",
           bad.status_code == 400 and ".xlsx" in bad.json()["detail"] and big.status_code == 413 and "40 MB" in big.json()["detail"]
@@ -1572,7 +1596,44 @@ def stage2_checks(c, check):
           any(o.get("mill_key") == zkey for r in rc_z["rows"] if r["source"] == "Purchase orders" for o in r["outliers"])
           and zkey not in {s_["key"] for s_ in c.get("/api/suppliers").json()["suppliers"]} and sp_zl.status_code == 200
           and sp_zl.json()["bought"]["fabrics"] == 0 and [(o["code"], o["price"]) for o in sp_zl.json()["outliers"]] == [(a1, 550.0)], sp_zl.text[:300])
+    # a price slip: a line ten times its code's other purchases (or a tenth) is held apart to check in SAP, counted nowhere
+    # until an admin counts it (the build lead's guard, 28 Nov 2026)
+    before_h = c.get("/api/purchases/history", params={"code": a1}).json()
+    u_slip = wait(c.post("/api/purchases/upload", files={"file": ("a price slip.xlsx", io.BytesIO(_stage2_file(
+        [row(9900000091, 10, a1, "2026-11-21", arv, 300, 15000), row(9900000091, 20, a1, "2026-11-21", arv, 300, 9)], saved="2026-11-27T12:00:00")))}).json()["id"])
+    d_slip = c.get(f"/api/purchases/uploads/{u_slip['id']}").json()
+    h_slip = c.get("/api/purchases/history", params={"code": a1}).json()
+    held_ = {x["item"]: x for x in h_slip["to_check"]}
+    check(f"{k} a price slip (Rs 15,000 a metre, and Rs 9, against a code bought at about Rs 100): both held apart to check in SAP, in no figure "
+          "(price paid, metres, the group), listed on the upload and in the price popup with why",
+          set(held_) == {"10", "20"} and "times the median" in held_["10"]["why"] and "under a tenth" in held_["20"]["why"]
+          and h_slip["metres"] == before_h["metres"] and len(h_slip["lines"]) == len(before_h["lines"]) and len(d_slip["summary"]["price_checks"]) == 2
+          and c.get("/api/purchases/status").json()["counts"]["price_checks"] >= 2, str(h_slip["to_check"])[:400])
+    gp_h = {"X-MS-CLIENT-PRINCIPAL-NAME": "gp@example.com"}
+    counted_ = c.post("/api/purchases/price-check", json={"line_id": held_["10"]["id"], "count": True}, headers=gp_h)
+    h_counted = c.get("/api/purchases/history", params={"code": a1}).json()
+    twice_ = c.post("/api/purchases/price-check", json={"line_id": held_["10"]["id"], "count": True})
+    back_ = c.post("/api/purchases/price-check", json={"line_id": held_["10"]["id"], "count": False})
+    bad_ = [c.post("/api/purchases/price-check", json=b_).status_code for b_ in ({}, {"line_id": held_["10"]["id"], "count": "yes"}, {"line_id": 99999999})]
+    h_back = c.get("/api/purchases/history", params={"code": a1}).json()
+    check(f"{k} an admin counts a held price after checking it in SAP: it is counted (price paid, metres), recorded with who; counting twice, or "
+          "without saying which line or which way, is refused; held apart again, it is out of every figure again",
+          counted_.status_code == 200 and h_counted["metres"] == before_h["metres"] + 300 and any(x["counted_by"] == "gp@example.com" for x in h_counted["to_check"])
+          and twice_.status_code == 409 and back_.status_code == 200 and bad_ == [400, 400, 404] and h_back["metres"] == before_h["metres"],
+          f"{counted_.text[:200]} {twice_.status_code} {bad_}")
     page_js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+    if shutil.which("node"):            # the Fab groups search, the page's own function: every word, anywhere
+        fn_s = page_js[page_js.index("// GROUP SEARCH"):page_js.index("// END GROUP SEARCH")]
+        g_ = {"code": "Fab-0001", "name": "100% Cotton · Piece Dyed · Twill-2/1 · 40s x 40s · 136 x 90 · 57 in · Normal Soft"}
+        run_s = subprocess.run(["node", "-e", fn_s + f"\nconst g = {json.dumps(g_)};\nconsole.log(JSON.stringify(['Twill 40s', 'twill', '40s', 'fab-0001 soft', 'twill 60s', ''].map(q => groupMatches(g, q))))"],
+                               capture_output=True, text=True)
+        check(f"{k} Fab groups' search finds its own example (Twill 40s): every word, anywhere in the code or the name", run_s.returncode == 0
+              and json.loads(run_s.stdout) == [True, True, True, True, False, True], run_s.stdout + run_s.stderr[-200:])
+    css_ = open(os.path.join(HERE, "web", "purchases.css"), encoding="utf8").read()
+    check(f"{k} the page's words and print: one price for every purchase said once (never 'Rs 208.00 to 208.00'); one group in the singular; a "
+          "printed chart in light colours whatever the theme",
+          "(every purchase)" in page_js and 'rows.length === 1 ? "group" : "groups"' in page_js and "@media print" in css_
+          and css_.index("@media print") < css_.rindex("--pgrid: #ECE8DD"))
     check(f"{k} the page's words: no stray separator on a group of ZLOI lines only, one ZLOI line in the singular, the PLM extract said to be "
           "the one deployed with the code",
           "(only ? ` · ${only} more with ZLOI lines only" not in page_js and '${u.rows_outliers === 1 ? "line" : "lines"}' in page_js
@@ -1717,11 +1778,13 @@ def dated_checks(c, check):
           and not set(lines_["Material"]) & zloi_only and all(r["code"] in months for r in po if r["code"] not in zloi_only), f"{len(tied)} tied")
     dl = pd.read_excel(io.BytesIO(c.post("/api/costs/download", json={"keys": [f"Purchase orders|{po[0]['code']}", f"Fabric list|{next(r['id'] for r in d['rows'] if r['source'] == 'Fabric list')}"]}).content))
     ins = c.get("/api/insights").json()
-    check("Dated rates: the list and its spreadsheet say which rates each costing is on; the dashboard says its panels are on today's rates",
+    check("Dated rates: the list and its spreadsheet say which rates each costing is on; the dashboard says its panels are on the rates in use, "
+          "worked out again at every rate edit (GP, 28 Nov 2026)",
           all(r["rates_of"] == (f"{r['rates']['label']}: today's yarn rates (no dated rate)" if r["code"] not in zloi_only else "Today's rates") for r in po)
           and all(r["rates_of"] == "Today's rates" for r in d["rows"] if r["source"] == "Fabric list")
           and list(dl["Rates of"]) == [po[0]["rates_of"], "Today's rates"]
-          and "on today's rates" in ins["pilot_rates"] and "none does yet" in ins["pilot_rates"], str(ins.get("pilot_rates")))
+          and "on the rates in use" in ins["pilot_rates"] and "worked out again at every rate edit" in ins["pilot_rates"] and "none does yet" in ins["pilot_rates"],
+          str(ins.get("pilot_rates")))
     # Bring in prices: the document's own date where it can be read, and where from; never today's for a dated rate
     csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n"
     for name, want in (("circular 21.11.2026.csv", (True, "2026-11-21")), ("circular.csv", (False, None))):
@@ -2529,6 +2592,7 @@ def assistant_files_checks():
                      c.post("/api/purchases/upload", headers=gp, files={"file": ("orders.xlsx", io.BytesIO(xl_))})),
                     (call("load_shipped_purchase_file"), web("POST", "/api/purchases/load-shipped")),
                     (call("settle_purchase_disagreements", upload_id=1, take="file"), web("POST", "/api/purchases/disagreements", json={"upload_id": 1, "take": "file"})),
+                    (call("count_price_to_check", line_id=1), web("POST", "/api/purchases/price-check", json={"line_id": 1, "count": True})),
                     (call("merge_fab_groups", code="Fab-0001", into="Fab-0002"), web("POST", "/api/groups/merge", json={"code": "Fab-0001", "into": "Fab-0002"})),
                     (call("unmerge_fab_group", code="Fab-0001"), web("POST", "/api/groups/unmerge", json={"code": "Fab-0001"}))]
         check(tag + "Users and roles, dated rates and the purchase history (stage 2) need the database: refused on the files in the screen's own words",
@@ -2657,7 +2721,7 @@ def assistant_checks():
                   "change_role_permissions": "POST /api/users/permissions",
                   # stage 2: the purchase history and Fab groups
                   "purchase_upload_status": "GET /api/purchases/uploads/{upload_id}", "upload_purchase_file": "POST /api/purchases/upload",
-                  "load_shipped_purchase_file": "POST /api/purchases/load-shipped", "settle_purchase_disagreements": "POST /api/purchases/disagreements",
+                  "load_shipped_purchase_file": "POST /api/purchases/load-shipped", "settle_purchase_disagreements": "POST /api/purchases/disagreements", "count_price_to_check": "POST /api/purchases/price-check",
                   "merge_fab_groups": "POST /api/groups/merge", "unmerge_fab_group": "POST /api/groups/unmerge"}
         check(tag + "Each tool mirrors the route it really does the work of (pinned here, so a tool cannot quietly name a weaker address; a new "
                     "tool adds its line)", dict(mirrors) == PINNED,
@@ -3398,6 +3462,16 @@ def assistant_checks():
                     "settled by \"AI assistant\"; settling twice is refused in the screen's words",
               u_c["rows_disagree"] == 1 and s_m.get("settled") == 1 and price_now == 111 and [tuple(r) for r in by_] == [(AI, "file")] and same_refusal(again_m, again_w),
               str(s_m)[:200] + str(by_))
+        slip = read_(upload("/api/purchases/upload", "a price slip.xlsx", _stage2_file([po_(9800000009, a1_, 15000)], saved="2026-11-11T00:00:00")).json()["id"])
+        slip_id = (slip.get("summary") or {}).get("price_checks", [{}])[0].get("id") if (slip.get("summary") or {}).get("price_checks") else None
+        if slip_id is None:
+            slip_id = web("GET", f"/api/purchases/uploads/{slip['id']}").json()["summary"]["price_checks"][0]["id"]
+        cnt_m = call("count_price_to_check", line_id=slip_id)
+        by_c = sql("SELECT price_ok_by FROM purchase_line WHERE id = %s", (slip_id,))[0][0]
+        again_c, again_cw = call("count_price_to_check", line_id=slip_id), web("POST", "/api/purchases/price-check", json={"line_id": slip_id, "count": True})
+        check(tag + "count_price_to_check counts a price held apart to check in SAP as the price popup does, counted by \"AI assistant\"; counting "
+                    "twice is refused in the screen's words",
+              cnt_m.get("now") == "counted" and by_c == AI and same_refusal(again_c, again_cw), str(cnt_m)[:200])
         hist_ = lambda code: web("GET", "/api/purchases/history", params={"code": code}).json()["group"]["code"]
         ga_, gb_ = hist_(a1_), hist_(b1_)
         first_m, first_w = call("merge_fab_groups", code=gb_, into=ga_), web("POST", "/api/groups/merge", json={"code": gb_, "into": ga_}).json()

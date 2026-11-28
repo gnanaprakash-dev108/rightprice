@@ -12,7 +12,9 @@ import store
 KIND = "purchases"          # store.KINDS: writers wait for each other, and the version moves with every change
 STATUS = "purchase_status"  # a job's progress and signs of life: written without moving the version (no page needs redoing)
 OUTLIER_TYPES = ("ZLOI",)   # order types kept but left out of every calculation (GP, 27 Nov 2026)
-_NOT_OUTLIER = "l.doc_type NOT IN (" + ", ".join(f"'{t}'" for t in OUTLIER_TYPES) + ")"
+# a line counted in a figure: not ZLOI, and not a price held apart to check in SAP (unless an admin counted it)
+_HELD = "(l.price_check IS NOT NULL AND l.price_ok_by IS NULL)"
+_NOT_OUTLIER = "l.doc_type NOT IN (" + ", ".join(f"'{t}'" for t in OUTLIER_TYPES) + f") AND NOT {_HELD}"
 _OUTLIER = "l.doc_type IN (" + ", ".join(f"'{t}'" for t in OUTLIER_TYPES) + ")"
 
 
@@ -318,7 +320,7 @@ def shipped_loaded(c, sha):
 
 # ------------------------------------------------------------------ purchase lines
 LINE = ("id, po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, upload_id, removed_upload_id, removed_why, "
-        "state_upload_id, state_from, state_to, state_saved")
+        "state_upload_id, state_from, state_to, state_saved, price_check, price_ok_by")
 
 
 def lines_by_key(c, keys):
@@ -358,8 +360,8 @@ def add_marks(c, rows):
 def change_lines(c, rows):
     """rows: dicts with id and the line's columns: a newer file's figures, the line counted again."""
     _many(c, "UPDATE purchase_line SET doc_date = %s, doc_type = %s, fabric_id = %s, mill_id = %s, supplier = %s, qty_m = %s, price = %s, "
-             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s, state_saved = %s "
-             "WHERE id = %s",
+             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s, state_saved = %s, "
+             "price_check = NULL, price_ok_by = NULL, price_ok_at = NULL WHERE id = %s",      # new figures: their price judged afresh
           [(r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"], r["upload_id"],
             r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"], r["id"]) for r in rows])
 
@@ -420,7 +422,7 @@ def lines_for_codes(c, codes):
     out = []
     for part in _chunks(sorted(set(codes))):
         out += c.all("SELECT f.code, l.po_number, l.item, l.doc_date, l.doc_type, l.supplier, l.qty_m, l.price, "
-                     "CASE WHEN l.removed_upload_id IS NULL THEN 0 ELSE 1 END FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id "
+                     f"CASE WHEN l.removed_upload_id IS NULL AND NOT {_HELD} THEN 0 ELSE 1 END FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id "
                      f"WHERE f.code IN {store._in(len(part))}", part)
     return out
 
@@ -466,6 +468,7 @@ def counts(c):
             "outliers": one(f"SELECT count(*) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_OUTLIER}"),
             "lines_removed": one("SELECT count(*) FROM purchase_line WHERE removed_upload_id IS NOT NULL AND fabric_id IS NOT NULL"),
             "marks": one("SELECT count(*) FROM purchase_line WHERE fabric_id IS NULL"),
+            "price_checks": one(f"SELECT count(*) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_HELD}"),
             "disagreements": one("SELECT count(*) FROM line_disagreement WHERE settled_at IS NULL"),
             "fabrics": one("SELECT count(*) FROM fabric"), "fabrics_grouped": one("SELECT count(*) FROM fabric WHERE fab_group_id IS NOT NULL"),
             "groups": one("SELECT count(*) FROM fab_group g WHERE g.merged_into IS NULL AND EXISTS (SELECT 1 FROM fabric f WHERE f.fab_group_id = g.id)"),
@@ -473,3 +476,48 @@ def counts(c):
             "mills": one("SELECT count(*) FROM mill"),
             "first": one(f"SELECT min(l.doc_date) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER}"),
             "last": one(f"SELECT max(l.doc_date) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER}")}
+
+
+# ------------------------------------------------------------------ prices held apart to check in SAP
+def counted_prices(c, fabric_ids):
+    """{fabric id: [(line id, price, counted by an admin)]}: the lines that count (or would, but for the price check) of
+    these fabrics: not removed, not ZLOI, not held apart (an admin's counted ones included)."""
+    out = {}
+    for part in _chunks(sorted(set(fabric_ids))):
+        for i, f, p, ok in c.all("SELECT l.id, l.fabric_id, l.price, l.price_ok_by FROM purchase_line l WHERE l.removed_upload_id IS NULL "
+                                 f"AND l.doc_type NOT IN ({', '.join(repr(t) for t in OUTLIER_TYPES)}) AND NOT {_HELD} "
+                                 f"AND l.fabric_id IN {store._in(len(part))}", part):
+            out.setdefault(f, []).append((i, float(p), ok is not None))
+    return out
+
+
+def group_prices(c, group_id, but_fabric):
+    """The prices counted for the other fabric codes of this Fab group."""
+    if group_id is None:
+        return []
+    return [float(p) for (p,) in c.all(f"SELECT l.price FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id WHERE f.fab_group_id = %s "
+                                       f"AND l.fabric_id <> %s AND l.removed_upload_id IS NULL AND {_NOT_OUTLIER}", (group_id, but_fabric))]
+
+
+def hold_prices(c, rows):
+    """rows: (why, line id): held apart to check in SAP."""
+    _many(c, "UPDATE purchase_line SET price_check = %s, price_ok_by = NULL, price_ok_at = NULL WHERE id = %s", rows)
+
+
+def count_price(c, line_id, who, at, count=True):
+    """An admin counts a price held apart (count), or holds it apart again."""
+    c.run("UPDATE purchase_line SET price_ok_by = %s, price_ok_at = %s WHERE id = %s AND price_check IS NOT NULL",
+          ((who or "an admin") if count else None, at if count else None, line_id))
+
+
+def held_lines(c, fabric_ids=None, line_ids=None):
+    """The lines held apart as prices to check in SAP (an admin's counted ones included, marked so), with code and mill."""
+    sql = ("SELECT l.id, f.code AS fabric_code, l.fabric_id, l.po_number, l.item, l.doc_date, l.doc_type, l.supplier, l.qty_m, l.price, "
+           "l.price_check, l.price_ok_by, l.price_ok_at, m.name AS mill, m.key AS mill_key FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id "
+           "JOIN mill m ON m.id = l.mill_id WHERE l.removed_upload_id IS NULL AND l.price_check IS NOT NULL")
+    if fabric_ids is None and line_ids is None:
+        return _dicts(c, sql + " ORDER BY l.doc_date, l.po_number, l.item")
+    out, col, vals = [], ("l.fabric_id" if fabric_ids is not None else "l.id"), (fabric_ids if fabric_ids is not None else line_ids)
+    for part in _chunks(sorted(set(vals))):
+        out += _dicts(c, sql + f" AND {col} IN {store._in(len(part))}", part)
+    return sorted(out, key=lambda r: (r["doc_date"] or "", r["po_number"], r["item"]))

@@ -84,7 +84,8 @@ STANCE_BAND = {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask bre
 
 
 def costs():
-    """Right cost: every purchase-order fabric costed in the pilot (1,696), plus the rows of the fabric list,
+    """Right cost: every purchase-order fabric of the pilot (1,696), costed on the rates in use (the order month's dated yarn
+    rate where there is one) and worked out again at every rate edit or applied cost-sheet draft (GP, 28 Nov 2026), plus the rows of the fabric list,
     each with what the list page shows and the choices to open it in Cost a fabric. Read-only."""
     m = common.get_masters()
     L = masters.lists(m)

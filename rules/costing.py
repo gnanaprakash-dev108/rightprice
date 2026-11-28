@@ -207,7 +207,7 @@ def brief(res, m, quantity=None, notes=(), sel=None):
 
     ro = res.get("rates_of") or {}
     if ro.get("dated"):     # stage 5: the range is measured on today's rates; say so when this should-cost is not
-        band_why += (f". The range is measured on today's rates (the purchase orders as costed in the pilot); this should-cost "
+        band_why += (f". The range is measured on today's rates (the purchase orders on the rates in use); this should-cost "
                      f"has its yarn on the dated rates of {ro['label']}")
     why_qty, qty_fix = quantity_check(res, sel, m, quantity, notes)
     qty_only = False

@@ -63,3 +63,10 @@
   .ptitle { font-size: 20px; }
   .mergerow input { width: 100px; }
 }
+/* a printed chart is always in light colours, whatever the screen's theme (the cold review of 28 Nov: a page printed in
+   dark mode kept a near-white should-cost line, smeared labels and a heavy grid) */
+@media print {
+  .pchart, .plegend { --s1: #257de0; --s2: #f47230; --s3: #00b894; --s0: #A3ABA6; --pgrid: #ECE8DD; --paxis: #C9C3B4;
+    --pband: rgba(31, 111, 74, .10); --pband-edge: rgba(31, 111, 74, .35); --text: #1f2421; --text2: #5c645f; --panel: #ffffff;
+    color: #1f2421; background: #ffffff; }
+}

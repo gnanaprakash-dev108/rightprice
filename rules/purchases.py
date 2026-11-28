@@ -558,6 +558,95 @@ def _kept_view(old):
             "figures": None if old["fabric_id"] is None else {k: old[k] for k in FIGURES}}
 
 
+PRICE_FACTOR = 10           # a price this many times its code's others (or under 1/this): held apart to check in SAP
+
+
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    return None if not n else (xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2)
+
+
+def check_prices(st, fabric_ids):
+    """Bulk lines priced more than PRICE_FACTOR times, or under a tenth of, the median of their code's other counted
+    lines (with fewer than two others, of those and its Fab group's other codes' lines; nothing to compare with: left
+    alone) are held apart as "price to check in SAP": stored, counted nowhere (as ZLOI) until an admin counts them (the
+    build lead's guard, 28 Nov 2026: GP's one-year file has one line at Rs 71,158.75 a metre where the same order was
+    raised again at Rs 755). One at a time, the most extreme first, so a slip never makes the right price look wrong;
+    two lines a tenfold apart with nothing else to tell: the higher is held. A line an admin counted is never held again.
+    Returns what was held."""
+    import math
+    held = []
+    with _job_tx(st, KIND) as c:
+        lines = dp.counted_prices(c, fabric_ids)
+        index = {f["id"]: (code, f["fab_group_id"]) for code, f in dp.fabric_index(c).items() if f["id"] in lines}
+        rows = []
+        for fid, live in lines.items():
+            if len(live) < 2 and index.get(fid, (None, None))[1] is None:
+                continue                            # one line and no group: nothing to compare it with
+            gp = None
+            while True:
+                best = None
+                whole = _median([p for _, p, _ in live]) if len(live) >= 6 else None     # many lines: one line hardly moves it
+                for lid, p, ok in live:
+                    if ok or p <= 0:
+                        continue
+                    others = [q for i, q, _ in live if i != lid]
+                    if len(others) < 2:
+                        if gp is None:
+                            gp = dp.group_prices(c, index.get(fid, (None, None))[1], fid)
+                        pool, whose = others + gp, "this code's other purchases and its Fab group's"
+                    else:
+                        pool, whose = others, "this code's other purchases"
+                    ref = whole if whole is not None else _median(pool)
+                    if not ref or ref <= 0:
+                        continue
+                    r = p / ref
+                    if r > PRICE_FACTOR or r < 1 / PRICE_FACTOR:
+                        key = (abs(math.log(r)), p)
+                        if best is None or key > best[0]:
+                            best = (key, lid, p, ref, r, whose)
+                if best is None:
+                    break
+                _, lid, p, ref, r, whose = best
+                why = (f"price to check in SAP: Rs {p:,.2f} a metre is {r:,.0f} times the median of {whose} (Rs {ref:,.2f})" if r > 1 else
+                       f"price to check in SAP: Rs {p:,.2f} a metre is under a tenth of the median of {whose} (Rs {ref:,.2f})")
+                rows.append((why, lid))
+                held.append({"id": lid, "fabric_id": fid, "code": index.get(fid, (None,))[0], "price": p, "reference": round(ref, 2), "why": why})
+                live = [x for x in live if x[0] != lid]
+        dp.hold_prices(c, rows)
+        if held:                                     # their order and item, for the upload's page
+            got = {r["id"]: r for r in dp.held_lines(c, line_ids=[x["id"] for x in held])}
+            for x in held:
+                x.update(po=got.get(x["id"], {}).get("po_number"), item=got.get(x["id"], {}).get("item"))
+    return held
+
+
+def count_held_price(payload, who=""):
+    """An admin counts a price held apart to check in SAP after all (count true), or holds it apart again (count false).
+    An admin action (do:upload_purchases, rules/access.py). Recorded with who and when."""
+    st = need_db()
+    payload = payload or {}
+    try:
+        lid = int(payload.get("line_id"))
+    except (TypeError, ValueError):
+        raise common.Refused(400, "Say which line (line_id), as the upload or the price popup lists it.")
+    count = payload.get("count", True)
+    if count not in (True, False):
+        raise common.Refused(400, 'Say "count": true to count it after all, or false to hold it apart again.')
+    with st.tx(write=KIND) as c:
+        got = dp.held_lines(c, line_ids=[lid])
+        if not got:
+            raise common.Refused(404, "No line held apart as a price to check has that number.")
+        if bool(got[0]["price_ok_by"]) == count:
+            raise common.Refused(409, "That line is counted already." if count else "That line is held apart already.")
+        dp.count_price(c, lid, who, _now(), count)
+    recost(st, [got[0]["fabric_id"]])
+    kick_right_cost()
+    return {"line_id": lid, "code": got[0]["fabric_code"], "po": got[0]["po_number"], "item": got[0]["item"], "price": got[0]["price"],
+            "now": "counted" if count else "held apart to check in SAP"}
+
+
 def _brief(line):
     """A line in a few words, for the upload's page: its date, type, metres and price, or why it is not counted."""
     if line.get("removed_upload_id") is not None or line.get("fabric_id") is None:
@@ -824,6 +913,9 @@ def _load(st, uid):
             dp.add_disagreements(c, uid, disagree)
             n["removed"] += len(gone)
             n["listed"] += len(disagree)
+    # a price ten times its code's other purchases (or a tenth): held apart to check in SAP (the build lead's guard, 28 Nov)
+    price_checks = check_prices(st, set(fabric_id.values()))
+    touched |= {x["fabric_id"] for x in price_checks}
     _status(uid, step="Working out the costing choices", rows_new=n["new"], rows_changed=n["changed"], rows_same=n["same"], rows_older=n["older"],
             rows_removed=n["removed"], rows_dropped=0, rows_disagree=n["disagree"],
             rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"])
@@ -854,6 +946,7 @@ def _load(st, uid):
                    "disagreements": n["listed"], "listed": min(len(rd.skipped), MAX_LISTED),
                    # rows dated in the future: kept as they are, not used to date the file
                    "changed_lines": changed_lines, "dating_notes": dating_["notes"], "future_count": rd.future,
+                   "price_checks": [{k: x[k] for k in ("id", "po", "item", "code", "price", "reference", "why")} for x in price_checks[:300]],
                    # read again after a restart: the lines its first reading had written count as already in
                    "read_again_own": n["own"]}
         # which uploads the saved date decided against, with when each was saved, for the upload's page
@@ -1110,6 +1203,7 @@ def history(code):
         own = dp.lines(c, [fab["id"]])
         lines = [fab_groups._line(r) for r in own]
         outliers = [fab_groups._line(r) for r in dp.lines(c, [fab["id"]], outliers=True)]
+        to_check = [_held_view(r) for r in dp.held_lines(c, fabric_ids=[fab["id"]])]
         groups = dp.groups(c)
         gid = fab_groups.final(groups, fab["fab_group_id"]) if fab["fab_group_id"] is not None else None
         got = fab_groups.gather(c, gid, groups) if gid is not None else None
@@ -1117,7 +1211,7 @@ def history(code):
     grp = fab_groups.history(got) if got is not None else None
     should, why, on = fab_groups.shoulds({code: fab}, own)[code]          # on its order month's yarn rates, as in Right cost
     s = fab_groups.short_spec(fab["spec"]) if fab["spec"] else {}
-    out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "should": should, "should_why": why, "should_on": on,
+    out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "to_check": to_check, "should": should, "should_why": why, "should_on": on,
            "metres": round(sum(x["metres"] for x in lines), 2), "orders": len({x["po"] for x in lines}),
            "spec": _shown_spec(s) if s else None,
            "not_grouped": None if gid is not None else (fab["not_grouped"] or "Not grouped"), "group": None,
@@ -1147,7 +1241,7 @@ def status():
 # paid, metres, quantity band, should-cost and verdict are worked out again from the order lines bought, ZLOI left out
 # (GP, 27 Nov 2026): from the purchase history; until the purchase file that came with the code has been loaded into
 # it, that file is read the same way as well (the history's lines win). A fabric whose lines are the pilot's own (no ZLOI,
-# nothing bought since) keeps the pilot's figures exactly.
+# nothing bought since) keeps the pilot's lines and choices (its should-cost follows the rates in use: rightcost.costs).
 _lines_memo = {"key": None, "val": None, "source": None}
 _shipped_memo = {"key": None, "val": None}
 _sha_memo = {"key": None, "val": None}
@@ -1444,6 +1538,21 @@ def _work_rows(key, by_code, src, fp, held):
                    "Excess Rs": None if gap is None else gap * metres})
         out.append(nr)
     _rows_memo.update(key=key, val=(key, out))
+
+
+def _held_view(r):
+    return {"id": r["id"], "code": r["fabric_code"], "po": r["po_number"], "item": r["item"], "date": r["doc_date"], "type": r["doc_type"],
+            "mill": r["mill"], "metres": r["qty_m"], "price": r["price"], "why": r["price_check"], "counted_by": r["price_ok_by"], "counted_at": r["price_ok_at"]}
+
+
+def to_check_for_mill(key):
+    """The lines of one mill held apart as prices to check in SAP (an admin's counted ones marked so)."""
+    st = store.get()
+    if st.kind == "files":
+        return []
+    with st.tx() as c:
+        rows = dp.held_lines(c)
+    return [_held_view(r) for r in rows if mills.mill_key(VENDOR_NO.sub("", r["supplier"] or "").strip()) == key or r["mill_key"] == key]
 
 
 def outliers_for_mill(key):

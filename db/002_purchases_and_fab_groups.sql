@@ -171,6 +171,11 @@ CREATE TABLE purchase_line (
     price              @REAL@,              -- Net Price, rupees per metre (ex-mill)
     removed_upload_id  BIGINT REFERENCES upload(id),   -- a newer file removed it (deleted in SAP, no longer bulk ...): kept, not counted
     removed_why        TEXT,
+    -- a price more than ten times, or under a tenth of, its code's other purchases (else its Fab group's): held apart as
+    -- "price to check in SAP", counted nowhere (like ZLOI) until an admin counts it (the build lead's guard, 28 Nov 2026)
+    price_check        TEXT,                -- why it is held
+    price_ok_by        TEXT,                -- the admin who counted it after all
+    price_ok_at        TEXT,
     state_upload_id    BIGINT NOT NULL,     -- the newest file that covered it (set its figures, or removed or marked it),
     state_from         TEXT NOT NULL,       -- when that file can have been taken: from (upload.covers_from)
     state_to           TEXT,                -- to (upload.covers_to: its saved date, or its upload)
