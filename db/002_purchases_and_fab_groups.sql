@@ -15,13 +15,13 @@
 --     (so a corrected PLM specification, or a change in how the fields are tidied, regroups it at the next upload);
 --     fabric_regroup records each move, for the group pages.
 --   - each order line keeps the evidence of the newest file that covered it (the second review, 27 Nov 2026): when that
---     file can have been taken, from what it covers (its latest document date, or a report date it carries) to when it
---     was saved, never after it was uploaded. Where what two files cover cannot tell which is newer, the one saved later
---     wins (GP, 28 Nov 2026): the line keeps that file's (state_to, state_saved), and files go in order by them. A line a
---     file shows deleted is kept as a mark even before any file gave its figures, so an older file never brings it back;
---     a line simply not in a newer file is never taken as cancelled (GP, 28 Nov 2026). Where two files still cannot be put in order (the same report and saved date
---     to the second) and disagree, the figures kept stand and the disagreement is listed for a person to settle
---     (line_disagreement).
+--     file can have been taken, from its latest document date (or a later report date it carries) to when it was saved
+--     (or uploaded, when it has no saved date that can be used). Where that cannot tell which of two files is newer, the
+--     one saved later wins when both have a saved date (GP, 28 Nov 2026): the line keeps the file's state_from, state_to
+--     and state_saved. A line a file shows deleted is kept as a mark even before any file gave its figures, so an older
+--     file never brings it back; a line simply not in a newer file is never taken as cancelled (GP, 28 Nov 2026). Where
+--     nothing can tell (the same saved moment, or a file without a saved date that can be used) and a file disagrees,
+--     the figures kept stand and the disagreement is listed for a person to settle (line_disagreement).
 --     ZLOI lines are kept, and left out of every calculation (GP's decision).
 
 -- the mills: one record each, however the name is written (rules/mills.py, mill_key)
@@ -127,10 +127,9 @@ CREATE TABLE upload (
     file_date_from TEXT,                    -- in words: what the file covers and when it was saved
     covers_from   TEXT,                     -- the earliest it can have been taken (UTC): its report date, else its latest
                                             -- document date (a day in India), from the day's start
-    covers_to     TEXT,                     -- the latest: its report date's end, else when the workbook was saved, else when
-                                            -- it was uploaded; never after the upload
-    covers_saved  TEXT,                     -- what puts it in order where what it covers cannot: its saved date where that
-                                            -- counts, else when it was uploaded (UTC). Files go in order by (covers_to, covers_saved)
+    covers_to     TEXT,                     -- the latest: when the workbook was saved, else when it was uploaded
+    covers_saved  TEXT,                     -- its saved date when it can be used (not after the upload), else empty: where
+                                            -- what two files cover cannot tell, the later of two of these wins
     report_date   TEXT,                     -- a report or export date the file carries in a column of its own, if any
     report_used   TEXT,                     -- that date, when it counts (its latest order <= it <= its saved date or upload)
     saved_at      TEXT,                     -- when the workbook says it was saved, as read (UTC); not used when after the
@@ -174,9 +173,9 @@ CREATE TABLE purchase_line (
     removed_why        TEXT,
     state_upload_id    BIGINT NOT NULL,     -- the newest file that covered it (set its figures, or removed or marked it),
     state_from         TEXT NOT NULL,       -- when that file can have been taken: from (upload.covers_from)
-    state_to           TEXT,                -- to (upload.covers_to: its report date, saved date or upload)
-    state_saved        TEXT,                -- and upload.covers_saved: where from and to cannot tell two files apart, the later
-                                            -- (state_to, state_saved) wins: saved later wins (GP, 28 Nov 2026)
+    state_to           TEXT,                -- to (upload.covers_to: its saved date, or its upload)
+    state_saved        TEXT,                -- and upload.covers_saved: where from and to cannot tell two files apart, the one
+                                            -- saved later wins, when both have one (GP, 28 Nov 2026)
     UNIQUE (po_number, item)                -- the same order line uploaded twice is one line
 );
 CREATE INDEX purchase_line_fabric ON purchase_line (fabric_id, doc_date);

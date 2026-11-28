@@ -15,22 +15,24 @@ review, 27 Nov 2026): a file can have been taken no earlier than its latest docu
 in a column of its own) and no later than when it was saved; one file is newer for certain when it can have been taken
 no earlier than the other was at the latest, and that decides. Where that cannot tell (a correction of the same orders,
 the same file saved again), the file saved later wins (GP's decision, 28 Nov 2026, "saved later wins"), exactly as a
-file certainly newer does: its figures, its removals, its marks. Nothing dated after the upload is trusted (the second
-reviews, 28 Nov 2026): a saved date after it (a clock set wrong) or before the file's latest order is not used, and the
-file is dated by its upload instead; a report date counts only between its latest order and its saved date; a document
-date after the upload's day does not date the file (the row is kept and listed). Document dates are days in India,
-saved and upload times UTC (dating()). Files go in order by (covers_to, covers_saved), which each order line's state
-(state_to, state_saved), each mark and a settled line carry, so the comparison is made the same way whenever, and in
-whichever process, a file is read: an older or earlier-saved file read after a newer one, or at the same moment in
-another server process, never brings back or changes what the newer one decided.
+file certainly newer does: its figures, its removals, its marks; both files need a saved date that can be used. The last
+round of the reviews (28 Nov 2026) set the dates literally (dating()): a row dated after its file was saved is left out
+(listed: check it in SAP), so the file keeps its saved date; a saved date after the upload is not used, and such a file,
+like one with no saved date, is taken by its upload at the latest and never wins by a saved date; a report date counts
+only between the latest order and the saved date. Document dates are days in India, saved and upload times UTC. Each
+order line's state (state_from, state_to, state_saved), each mark and a settled line carry the covering file's dates, so
+the comparison is made the same way whenever, and in whichever process, a file is read: an older or earlier-saved file
+read after a newer one, or at the same moment in another server process, never brings back or changes what the newer
+one decided.
 
 Every order line keeps the evidence of the newest file that covered it: its figures, or that it was shown deleted,
 blocked, no longer bulk, not in rupees, not per metre, with no price or quantity. That holds before any file gave the
 line's figures (a mark). A newer file changes or removes a line; a line simply not in a newer file of the same order is
 never taken as cancelled (GP, 28 Nov 2026): the history keeps it. The upload's page says how many lines were already in,
-and which this file updated. Only where two files carry the very same dates, to the second, and disagree on a line, the
-history's figures stand and the disagreement is listed on the file's page, for an admin to keep them or to take the
-file's (settle; POST /api/purchases/disagreements, the assistant's settle_purchase_disagreements).
+and which this file updated. Only where nothing can tell (the same saved moment, or either file without a saved date
+that can be used) and a file disagrees on a line, the history's figures stand and the disagreement is listed on the
+file's page, for an admin to keep them or to take the file's (settle; POST /api/purchases/disagreements, the
+assistant's settle_purchase_disagreements).
 
 The purchase history always starts from the purchase file that came with the code (GP, 28 Nov 2026): when the first
 file is uploaded and that one is not in yet, it is loaded first, as its own upload (upload()). Every kept line is
@@ -205,17 +207,18 @@ def utc_of(local):
 
 
 def dating(latest, report, saved, at=None, future=0):
-    """What a file covers, as the history puts files in order (the second reviews, 28 Nov 2026): {file_date,
-    file_date_from (in words), covers_from, covers_to, covers_saved, report_date, report_used, saved_at, notes}. Every
-    time is UTC; a document date is a day in India. Nothing after the upload (`at`, UTC) is trusted:
-    - its saved date counts when it is not after the upload (a clock set wrong) and not before its latest order;
-    - a report date it carries counts only when its latest order <= the report date <= its saved date (or, with no saved
-      date that counts, the upload);
-    - covers_from: the earliest it can have been taken (the report date's start, else its latest order's day's start);
-      covers_to: the latest (the report date's end, else its saved date, else the upload, never after either);
-    - covers_saved: what puts it in order where what it covers cannot (GP, 28 Nov 2026, saved later wins): its saved
-      date, else the upload. Files are put in order by (covers_to, covers_saved), which agrees with what they cover
-      wherever that can tell (newer()).
+    """What a file covers, as the history puts files in order (GP's rule, set literally on 28 Nov 2026 after the reviews):
+    {file_date, file_date_from (in words), covers_from, covers_to, covers_saved, report_date, report_used, saved_at,
+    notes}. Every time is UTC; a document date is a day in India. `at`: when it was uploaded.
+    - Its saved date can be used when it is there and not after the upload (else a clock set wrong). Rows dated after it
+      are left out when the file is read (read_po_file), so its latest order is never after it.
+    - A report date it carries counts only when its latest order <= the report date <= its saved date (with no saved
+      date that can be used, its upload); it only raises covers_from.
+    - covers_from: the start of its latest order's day, or of its report date when that is later;
+      covers_to: its saved date; with none that can be used, its upload.
+    - covers_saved: its saved date that can be used, else None. One file is newer than another for certain when it can
+      have been taken no earlier than the other at the latest; else the one saved later wins, when both have a saved
+      date that can be used and they differ; else nothing can tell (newer()).
     Each date not used is said in `notes`, with why."""
     at = at or utc_now()
     notes, saved_ok, report_ok = [], saved, None
@@ -224,32 +227,32 @@ def dating(latest, report, saved, at=None, future=0):
         notes.append(f"saved {shown(saved)}, after it was uploaded ({shown(at)}): the workbook's clock was wrong, so that date is not used")
         saved_ok = None
     orders_from = _day_start(latest) if latest else "0001-01-01T00:00:00"
-    if saved_ok and saved_ok < orders_from:
+    if saved_ok and latest and latest > india_day(saved_ok):      # (read_po_file leaves such rows out; a date given here)
         notes.append(f"saved {shown(saved)}, before its latest order ({latest}, a day in India): that date is not used")
         saved_ok = None
     if report:
         r_lo = _iso(dt.datetime.fromisoformat(report) - IST) if "T" in report else _day_start(report)
-        r_hi = r_lo if "T" in report else _day_end(report)
         why = ("before its latest order" if latest and report[:10] < latest else
                "after it was saved" if saved_ok and r_lo > saved_ok else "after it was uploaded" if not saved_ok and r_lo > at else None)
         if why:
             notes.append(f"its report date {report[:10]} is {why}: not used")
         else:
-            report_ok = (r_lo, min(r_hi, saved_ok or at))
-    lo, hi = report_ok or (orders_from, saved_ok or at)
+            report_ok = r_lo
+    lo, hi = max(orders_from, report_ok or orders_from), saved_ok or at
     if report_ok:
         words = f"taken on {report[:10]}, the report date it carries"
     elif latest:
         words = f"orders up to {latest}"
     else:
         words = "no document date read"
-    words += f"; saved {shown(saved_ok)}" if saved_ok else f"; no saved date it can be dated by: dated by its upload ({shown(at)})"
+    words += (f"; saved {shown(saved_ok)}" if saved_ok else
+              f"; no saved date it can be dated by: taken by its upload ({shown(at)}) at the latest, and never put after a file by a saved date")
     if future:
-        notes.append(f"{future:,} {'row' if future == 1 else 'rows'} dated after it was uploaded: not used to date it")
+        notes.append(f"{future:,} {'row' if future == 1 else 'rows'} dated after the file was {'saved' if saved_ok else 'uploaded'}: left out (check them in SAP)")
     if notes:
         words += " (" + "; ".join(notes) + ")"
     return {"report_date": report, "report_used": report if report_ok else None, "saved_at": saved, "file_date": (report if report_ok else latest),
-            "covers_from": lo, "covers_to": hi, "covers_saved": saved_ok or at, "file_date_from": words, "notes": notes}
+            "covers_from": lo, "covers_to": hi, "covers_saved": saved_ok, "file_date_from": words, "notes": notes}
 
 
 def order_of(a, b):
@@ -265,17 +268,16 @@ def order_of(a, b):
 
 def newer(a, b):
     """Which of two files is newer, and how that was told: (+1 or -1, "covers") when what they cover says so for certain
-    (order_of); else, GP's decision of 28 Nov 2026, the file saved later: (+1 or -1, "saved"), by (covers_to,
-    covers_saved) of each: when it was saved where that counts (else when it was uploaded), a report date it carries
-    first; (0, None) when both are the same. Each is (covers_from, covers_to, covers_saved). covers_to is never before
-    covers_from, so a file certainly newer also comes later this way: the two never pull apart, and files never go round
-    in a circle, whatever order they are read in."""
+    (order_of); else, GP's decision of 28 Nov 2026, the file saved later: (+1 or -1, "saved"), when both have a saved
+    date that can be used and they differ; else (0, None): the same saved moment, or either without a saved date that
+    can be used (such a file never wins by a saved date). Each is (covers_from, covers_to, covers_saved). Ordering by
+    saved date never pulls against what files cover, since covers_from <= the saved date of every file that has one, so
+    files never go round in a circle, whatever order they are read in."""
     o = order_of(a, b)
     if o:
         return o, "covers"
-    ka, kb = (a[1], a[2]), (b[1], b[2])
-    if None not in ka + kb and ka != kb:
-        return (1 if ka > kb else -1), "saved"
+    if a[2] and b[2] and a[2] != b[2]:
+        return (1 if a[2] > b[2] else -1), "saved"
     return 0, None
 
 
@@ -287,19 +289,24 @@ class Read:
     def __init__(self):
         self.kept, self.skipped, self.removing, self.orders, self.total, self.texts = [], [], [], {}, 0, {}
         self.latest = self.report = None         # its latest document date, any row; a report date it carries
-        self.future = []                         # rows dated in the future (after it was uploaded): not used to date it
+        self.future = 0                          # rows dated after the file was saved (or uploaded): left out
         self.dating = {}
 
 
 def read_po_file(data, filename="", at=None):
     """Read a purchase-order file row by row (little memory, whatever its size). Refused when it is not a workbook in the
-    SAP export's shape. `at`: when it was uploaded, UTC (else now). A document date after the upload's day in India
-    cannot be real (a mistyped year): it would otherwise date the file after every export saved before that day. Such
-    rows are kept as they are, listed (Read.future) and left out of the file's dating (the second reviews, 28 Nov 2026)."""
+    SAP export's shape. `at`: when it was uploaded, UTC (else now). A row dated after the file was saved (as a day in
+    India; with no saved date that can be used, after the upload's day) is a forward-dated order or a typo: it is left
+    out, listed with why ("check it in SAP"), and does not date the file, so the file keeps its saved date (the
+    orchestrator's rule of 28 Nov 2026, the last round of the reviews)."""
     from openpyxl import load_workbook
     out = Read()
     saved, at = _saved_at(data), at or utc_now()
-    bound = india_day(at)               # the last day a real document date can have
+    usable = saved if saved and saved <= at else None
+    # the last day a document date can have: the day in India the file was saved (its saved date when that can be used),
+    # and never after the upload's day
+    bound = min(india_day(usable), india_day(at)) if usable else india_day(at)
+    after = "after the file was saved" if usable else "after the file was uploaded"
     try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as e:
@@ -347,10 +354,11 @@ def read_po_file(data, filename="", at=None):
             price, qty = _number(get("Net Price")), _number(get("Order Quantity"))
             supplier = text("Name of Supplier")
             day, day_why = _date(get("Document Date"))
-            if day and day > bound:
-                if len(out.future) < MAX_LISTED:
-                    out.future.append((row, po, item, material, day))
-            elif day and (out.latest is None or day > out.latest):
+            if day and day > bound:             # a forward-dated order or a typo: left out, so the file keeps its dating
+                out.future += 1
+                skip("Dated after the file was saved", f"Document date {day} is {after} ({bound}, a day in India): check it in SAP")
+                continue
+            if day and (out.latest is None or day > out.latest):
                 out.latest = day                        # what the file covers: every row with a date, kept or not
             if report_col is not None and report_col < len(values):
                 rep = _stamp(values[report_col])
@@ -389,7 +397,7 @@ def read_po_file(data, filename="", at=None):
                     out.texts[material] = (k, st)
     finally:
         wb.close()
-    out.dating = dating(out.latest, out.report, saved, at, future=len(out.future))
+    out.dating = dating(out.latest, out.report, saved, at, future=out.future)
     return out
 
 
@@ -728,7 +736,7 @@ def _load(st, uid):
     me = (uid, dating_["covers_from"], dating_["covers_to"], dating_["covers_saved"])
     vs = lambda old: newer(me[1:], (old["state_from"], old["state_to"], old["state_saved"]))
     # (disagree: lines this file keeps that the history holds otherwise; listed: every disagreement, removals included)
-    n = {"new": 0, "changed": 0, "same": 0, "older": 0, "disagree": 0, "listed": 0, "removed": 0}
+    n = {"new": 0, "changed": 0, "same": 0, "older": 0, "disagree": 0, "listed": 0, "removed": 0, "own": 0}
     # decided by the saved date alone, for the upload's page: {other upload: lines} where this file's word replaced that
     # one's (this file saved later), and where that one's word stood against this file's (that one saved later)
     won, lost = {}, {}
@@ -749,6 +757,8 @@ def _load(st, uid):
                     add.append(line)
                     touched.add(line["fabric_id"])
                     continue
+                if old["state_upload_id"] == uid:   # written by this file's own first reading, before a restart
+                    n["own"] += 1
                 o, by = vs(old)
                 if o > 0:
                     if _same(old, line):
@@ -814,7 +824,8 @@ def _load(st, uid):
             dp.add_disagreements(c, uid, disagree)
             n["removed"] += len(gone)
             n["listed"] += len(disagree)
-    _status(uid, step="Working out the costing choices", rows_removed=n["removed"], rows_dropped=0, rows_disagree=n["disagree"],
+    _status(uid, step="Working out the costing choices", rows_new=n["new"], rows_changed=n["changed"], rows_same=n["same"], rows_older=n["older"],
+            rows_removed=n["removed"], rows_dropped=0, rows_disagree=n["disagree"],
             rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"])
 
     # the costing choices of every fabric of this file, or whose lines or specification changed, that are not worked out
@@ -842,12 +853,15 @@ def _load(st, uid):
                    "regrouped": sum(1 for m_ in rg["moves"] if m_[1] != m_[2]), "respecified": len(rg["respecified"]), "renamed": len(rg["renamed"]),
                    "disagreements": n["listed"], "listed": min(len(rd.skipped), MAX_LISTED),
                    # rows dated in the future: kept as they are, not used to date the file
-                   "changed_lines": changed_lines, "dating_notes": dating_["notes"], "future_count": len(rd.future), "future": [{"row": r_[0], "po": r_[1], "item": r_[2], "material": r_[3], "date": r_[4]} for r_ in rd.future[:300]]}
+                   "changed_lines": changed_lines, "dating_notes": dating_["notes"], "future_count": rd.future,
+                   # read again after a restart: the lines its first reading had written count as already in
+                   "read_again_own": n["own"]}
         # which uploads the saved date decided against, with when each was saved, for the upload's page
         others = dp.upload_dates(c, set(won) | set(lost))
         said = lambda d: [dict(others.get(u, {"id": u}), lines=k) for u, k in sorted(d.items())]
         summary.update(saved_later_than=said(won), saved_earlier_than=said(lost))
         dp.set_upload(c, uid, status="done", step="", finished_at=_now(), alive_at=_now(), summary=summary)
+    kick_right_cost()           # a fresh pass that covers this file's lines, whoever asks next
 
 
 def _pid_alive(pid):
@@ -913,7 +927,8 @@ FIRST_NAME = SHIPPED_NAME[:-1] + ", loaded first: the history starts from it)"
 
 def too_big(size, name):
     """What a file over the limit is told, on the screen at once (web/purchases.js tooBig says the same before sending it)."""
-    return (f"{name} is {size / 1048576:.1f} MB: larger than {MAX_BYTES // 1048576} MB, the most read at once. "
+    mb = f"{size / 1048576:.1f}".removesuffix(".0")
+    return (f"{name} is {mb} MB: larger than {MAX_BYTES // 1048576} MB, the most read at once. "
             "Split it in SAP by 6 months or by year, and upload each part.")
 
 
@@ -1042,6 +1057,7 @@ def settle(payload, who=""):
             dp.remove_lines(c, gone, state)
         dp.settle_disagreements(c, [r["id"] for r in rows], _now(), who or "", take)
     recost(st, touched - {None})
+    kick_right_cost()
     return {"upload_id": uid, "settled": len(rows), "took": "this file's figures" if take == "file" else "the history's figures",
             "left_as_they_are": changed_since}
 
@@ -1058,6 +1074,25 @@ def skipped_download(uid):
     buf = io.BytesIO()
     df.to_excel(buf, index=False)
     return common.Download(buf.getvalue(), f"Rows left out of upload {up['id']}.xlsx")
+
+
+def _shown_spec(s):
+    """A code's PLM specification as the popup shows it: blank where the Fab group and the costing take a value as
+    missing (an EPI or PPI of 20 or less, a width outside 30 to 130 in), so the popup never shows a figure beside
+    "EPI, PPI missing" (the re-review of d438c21)."""
+    out = {k: s.get(k, "") for k in ("blend_name", "dyemethod_name", "weavetype_name", "warpcount", "weftcount", "epi", "ppi",
+                                     "finishedwidth", "finishedwidth_uom", "finish_name", "pattern_name")}
+    try:
+        epi, ppi, width = pilot.plm_numbers(s)
+    except KeyError:
+        epi = ppi = width = 0
+    if epi <= 20:
+        out["epi"] = ""
+    if ppi <= 20:
+        out["ppi"] = ""
+    if not 30 <= width <= 130:
+        out["finishedwidth"], out["finishedwidth_uom"] = "", ""
+    return out
 
 
 def history(code):
@@ -1084,8 +1119,7 @@ def history(code):
     s = fab_groups.short_spec(fab["spec"]) if fab["spec"] else {}
     out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "should": should, "should_why": why, "should_on": on,
            "metres": round(sum(x["metres"] for x in lines), 2), "orders": len({x["po"] for x in lines}),
-           "spec": {k: s.get(k, "") for k in ("blend_name", "dyemethod_name", "weavetype_name", "warpcount", "weftcount", "epi", "ppi",
-                                              "finishedwidth", "finishedwidth_uom", "finish_name", "pattern_name")} if s else None,
+           "spec": _shown_spec(s) if s else None,
            "not_grouped": None if gid is not None else (fab["not_grouped"] or "Not grouped"), "group": None,
            "moved": [{"from": groups[m["from_group_id"]]["code"] if m["from_group_id"] else None,
                       "to": groups[m["to_group_id"]]["code"] if m["to_group_id"] else None, "why": m["why"], "at": m["at"]} for m in moves]}
@@ -1129,7 +1163,7 @@ def shipped_sha():
                 val = hashlib.sha256(f.read()).hexdigest()
         _sha_memo.update(key=key, val=val)
     return _sha_memo["val"]
-_rows_memo = {"key": None, "val": None, "stale": False, "running": False}
+_rows_memo = {"key": None, "val": None, "running": False}
 _rows_lock = threading.Lock()
 
 
@@ -1275,17 +1309,10 @@ def pilot_rows():
     history's (worked out from each code's PLM specification by pilot.py's own functions), else the same worked out from
     the PLM list here. Each row keeps the pilot's columns, plus "Costing choices", "Outliers (ZLOI)" and "Worked out
     again" (why, or None when the pilot's own figures stand: the same lines and the same choices). Kept until the lines,
-    the rates, the history or the PLM list change."""
-    digest, by_code, _ = bought_lines()
-    src = lines_source()
-    fp = lists_fingerprint()
-    st = store.get()
-    codes = {str(r["Fabric code"]) for r in pilot_records()}
-    held = _held_fabrics(codes)
-    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS),
-           src["history"], src["shipped_loaded"], fp)
+    the rates, the history or the PLM list change. Once worked out, a change is worked out in the background and the last
+    complete answer served meanwhile: rows_up_to_date(key) says whether the rows a caller got rest on what is held now."""
+    key, by_code, src, fp, held = _rows_key()
     if _rows_memo["key"] == key:
-        _rows_memo["stale"] = False
         return _rows_memo["val"]
     job = lambda: _work_rows(key, by_code, src, fp, held)
     if _rows_memo["val"] is None:           # the first time: worked out here, once (a request at the same time waits for it)
@@ -1295,7 +1322,6 @@ def pilot_rows():
         return _rows_memo["val"]
     # since then: worked out again in the background, one at a time, and the last complete answer served meanwhile, so no
     # page waits for it (after a save to the rate master, every page waited half a minute: the stage 4 builder, 28 Nov)
-    _rows_memo["stale"] = True
     with _rows_lock:
         if not _rows_memo["running"]:
             _rows_memo["running"] = True
@@ -1305,13 +1331,43 @@ def pilot_rows():
                     job()
                 finally:
                     _rows_memo["running"] = False
+                pilot_rows()                    # a further pass at once if the lines moved again meanwhile
             threading.Thread(target=work, daemon=True, name="rightprice-purchase-order-rows").start()
     return _rows_memo["val"]
 
 
-def rows_up_to_date():
-    """Whether the purchase-order rows last served are worked out on what they rest on now (pilot_rows)."""
-    return not _rows_memo.get("stale")
+def _bring_up_to_date():
+    try:
+        pilot_rows()
+    except Exception:
+        pass                    # the next page to ask works it out
+
+
+def kick_right_cost():
+    """An upload read (or its disagreements settled): Right cost's purchase-order rows start on the new lines at once, in
+    the background, without waiting for a page to ask (the verdicts follow when one does)."""
+    threading.Thread(target=_bring_up_to_date, daemon=True, name="rightprice-purchase-order-rows-after-upload").start()
+
+
+def _rows_key():
+    """(key, lines by code, where they come from, the lists' fingerprint, the history's choices): what the purchase-order
+    rows rest on now. Each part is kept until what it reads changes, so this is quick."""
+    digest, by_code, _ = bought_lines()
+    src = lines_source()
+    fp = lists_fingerprint()
+    st = store.get()
+    codes = {str(r["Fabric code"]) for r in pilot_records()}
+    held = _held_fabrics(codes)
+    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS),
+           src["history"], src["shipped_loaded"], fp)
+    return key, by_code, src, fp, held
+
+
+def rows_up_to_date(key):
+    """Whether purchase-order rows with this key (pilot_rows()[0]) rest on what is held now: worked out afresh for the
+    caller's own rows, never read from a flag another thread could have set meanwhile (the CI run of d438c21: a verdict
+    thread asking for the rows at the moment new ones were ready let a page take the old ones for up to date)."""
+    return key == _rows_key()[0]
 
 
 def _work_rows(key, by_code, src, fp, held):

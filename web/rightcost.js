@@ -389,7 +389,7 @@ function render() {
   const title = h("button", { type: "button", class: "title", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.classes.map(([k, label]) => ({ label: `${label} (${k === "*" ? state.rows.length : state.counts[k] || 0})`, on: k === state.cls, run: () => { state.cls = k; store.set("cls", k); state.selection.clear(); rerunWithSkeleton(); } }))) },
     CONFIG.appName, h("span", { class: "caret" }, "▾"));
   const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label)));
-  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1] + (state.updating ? " · being brought up to date (the figures shown are the last worked out)" : ""))), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
+  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1] + (state.updating ? " · being brought up to date (a minute or two after a change; the figures shown are the last worked out)" : ""))), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
 }
 

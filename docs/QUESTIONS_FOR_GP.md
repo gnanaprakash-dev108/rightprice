@@ -37,11 +37,15 @@
 - **File size: one file per year or per 6 months.** A file over the limit (40 MB now; the limit itself is still to be
   decided) is refused on the screen as soon as it is chosen, before anything is sent, naming the limit and saying to
   split it by 6 months or by year. Done.
-- **Dates a file carries (the reviewers' data-validity rule, not a decision of GP's):** nothing dated after the upload
-  is trusted. A saved date after the upload (a clock set wrong) or before the file's latest order is not used, and the
-  file is dated by its upload; a report date counts only between its latest order and its saved date, and two files of
-  the same report date go by their saved dates; a document date after the upload's day is kept but does not date the
-  file. Document dates are compared as days in India with saved times in UTC. Each date not used is said on the upload.
+- **Dates a file carries (GP's rule taken literally, set by the build lead on 28 Nov after three rounds of review; to tell
+  GP):** a file covers from its latest order (or its report date, when that is later) to when it was saved; with no
+  saved date that can be used, to when it was uploaded. A row dated after the file was saved (a forward-dated order or a
+  typo; or after the upload, with no saved date) is left out, listed on the upload as "dated after the file was saved:
+  check it in SAP", and the saved date stays usable; a saved date after the upload (a clock set wrong) is not used; a
+  report date counts only between the latest order and the saved date. A file newer for certain wins; otherwise, when
+  both have a saved date that can be used, the one saved later wins (report-dated or not); otherwise (the same saved
+  moment, or a file without a saved date that can be used) the history stands and the disagreement is listed for an
+  admin: such a file never wins by a saved date. Document dates are days in India, saved times UTC.
 - **Width tolerance: chain, as built.** Codes alike in the other eight fields whose widths are within half an inch of
   each other, directly or through other codes, are one group, so a group can run over more than half an inch from end
   to end (57, 57.4 and 57.8 in are one group). Kept; no change.

@@ -198,7 +198,7 @@ def costs():
         if r["source"] == "Purchase orders":
             g = groups.get(str(r["code"])) or {}
             r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
-    fresh = purchases.rows_up_to_date()     # the purchase-order rows are worked out again in the background after a change
+    fresh = purchases.rows_up_to_date(pkey)     # the purchase-order rows are worked out again in the background after a change
     val = {"rows": out, "ready": verdicts is not None and fresh, "updating": not fresh, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
     _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey), val=val)

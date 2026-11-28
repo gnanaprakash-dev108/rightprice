@@ -121,7 +121,8 @@ def supplier(mill: str):
     key = mills.mill_key(mill)
     d = rightcost.costs()
     rows = [dict(r) for r in d["rows"] if mills.mill_key(r["supplier"]) == key]         # copies: the page changes its rows
-    if not key or not rows:
+    zl = _outliers(key) if key else []       # a mill of the purchase history with ZLOI lines only has a page too: 0 bought
+    if not key or (not rows and not zl):
         raise common.Refused(404, "No fabric bought from or quoted by that mill")
     m = common.get_masters()
     po = [r for r in rows if r["source"] == "Purchase orders" and r.get("price") is not None]     # ZLOI-only codes: listed apart, not bought
@@ -293,14 +294,15 @@ def supplier(mill: str):
     slim = lambda r: {k: r.get(k) for k in ("source", "id", "code", "description", "route", "weave_group", "should", "price", "gap", "gap_pct", "metres", "excess",
                                               "band", "range", "duplicate_of", "problems", "why_unsure", "placeholders", "above_range", "tracked", "sheet_price", "first_quote",
                                               "rates")}
-    return {"key": key, "name": _mill_names(rows)[0], "names": _mill_names(rows), "ready": d["ready"],
+    names = _mill_names(rows) if rows else [zl[0]["mill"]]
+    return {"key": key, "name": names[0], "names": names, "ready": d["ready"],
             "bought": dict(b_side, rows=[slim(r) for r in sorted(po, key=lambda r: (-r["above_range"], -(r["excess"] or 0)))],
                            rates=_bought_rates(po) if d["ready"] else {"of": len(po), "known": 0, "dated": 0, "by_month": {}, "text": ""}),
             "quoted": dict(q_side, rows=[slim(r) for r in sorted(fl, key=lambda r: (r.get("tracked") == "Agreed", -r["above_range"]))], not_costed=not_costed, sheets=sheets),
             "sums": sums, "hint": hint, "today": common._day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},
             "questions": {"quoted": quoted_q, "bought": bought_q, "general": general},
-            "outliers": _outliers(key)}
+            "outliers": zl}
 
 
 def _outliers(key):
