@@ -194,7 +194,13 @@ def _as_run():
     _, rows = purchases.pilot_rows()
     priced = sum(1 for r in rows if r["PO price Rs/m"] is not None)
     again = sum(1 for r in rows if r["Worked out again"])
+    zl_only = sum(1 for r in rows if r["PO price Rs/m"] is None and r.get("Outliers (ZLOI)"))
+    absent = sum(1 for r in rows if r["PO price Rs/m"] is None and not r.get("Outliers (ZLOI)"))
+    unpriced = [f"{zl_only:,} bought only on ZLOI orders"] if zl_only else []
+    if absent:                  # the purchase history holds files, and these pilot fabrics are in none of them
+        unpriced.append(f"{absent:,} in no file of the purchase history" + ("" if purchases.lines_source()["shipped_loaded"]
+                                                                            else " (the purchase file that came with the code is not loaded)"))
     return (f"This page is the pilot as it was run (pilot/Pilot_Results.xlsx, never changed): {len(rows):,} fabrics, ZLOI orders included. "
             f"Since GP's decision of 27 Nov 2026, ZLOI orders are left out of every other figure: the Dashboard, Right cost and the supplier "
-            f"pages count the {priced:,} fabrics with a price paid on other orders ({again:,} worked out again from their order lines), and "
-            f"{len(rows) - priced:,} bought only on ZLOI orders show no price. So a mill's or a fabric type's figures here differ from theirs.")
+            f"pages count the {priced:,} fabrics with a price paid on other orders ({again:,} worked out again from their order lines)"
+            + (f", and {' and '.join(unpriced)} show no price" if unpriced else "") + ". So a mill's or a fabric type's figures here differ from theirs.")

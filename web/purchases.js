@@ -385,7 +385,10 @@
   }
   function skippedView(u) {
     const s = u.summary || {};
+    const fut = s.future || [];
     return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`), savedView(u), disagreeView(u),
+      s.future_count ? h("p", { class: "note" }, `${n0(s.future_count)} ${s.future_count === 1 ? "row is" : "rows are"} dated in the future (after the file was uploaded), so the ${s.future_count === 1 ? "date is" : "dates are"} not used to date the file: ` +
+        fut.slice(0, 5).map(x => `row ${x.row} (order ${x.po}/${x.item}, ${x.date})`).join(", ") + (s.future_count > 5 ? ` and ${n0(s.future_count - 5)} more` : "") + ". Check them in SAP; the rows are kept as they are.") : null,
       u.status === "done" ? h("p", {}, `Order lines dated ${day(s.first)} to ${day(s.last)}, from ${n0(s.mills)} ${s.mills === 1 ? "spelling of a mill" : "mill spellings"}, for ${n0(s.fabrics)} fabric codes: ${n0(s.grouped)} in Fab groups, ${n0(s.costed)} costed.` +
         (s.not_grouped && s.not_grouped.length ? ` Not grouped: ${s.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")}.` : "")) : null,
       u.skipped_count ? [h("p", {}, `Left out: ${n0(u.skipped_count)} rows. ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",

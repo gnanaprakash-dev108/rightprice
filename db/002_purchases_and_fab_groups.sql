@@ -72,6 +72,11 @@ CREATE TABLE fabric (
     spec_sha      TEXT,                     -- SHA-256 of that row, to see when the PLM list changes it
     choices       TEXT,                     -- JSON: the costing choices worked out from it as pilot.py does; empty: not costed
     problems      TEXT NOT NULL DEFAULT '[]',   -- JSON: why it is not costed
+    -- what the choices were worked out on, so stale ones are worked out again (a restart part-way through an upload, the
+    -- rate master's lists changed): empty until they are first worked out
+    choices_lists  TEXT,                    -- a fingerprint of the rate master's lists (rules/purchases.py lists_fingerprint)
+    choices_metres @REAL@,                  -- its metres then (they set the quantity band)
+    choices_spec   TEXT,                    -- the spec_sha then
     updated_at    TEXT NOT NULL
 );
 CREATE INDEX fabric_group ON fabric (fab_group_id);

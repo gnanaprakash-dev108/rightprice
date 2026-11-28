@@ -26,7 +26,14 @@ back or changes what the newer one decided.
 
 Every order line keeps the evidence of the newest file that covered it: its figures, or that it was shown deleted,
 blocked, no longer bulk, not in rupees, not per metre, with no price or quantity, or left out of an order the file has.
-That holds before any file gave the line's figures (a mark). A newer file changes or removes a line. What is left with
+That holds before any file gave the line's figures (a mark, which takes the word of the newest file about it, one that
+has the rest of its order without it included). A newer file changes or removes a line. A document date in the future
+(after the day the file was uploaded: a mistyped year) does not date the file; the row is kept and listed.
+
+Each fabric's costing choices are kept with what they were worked out on (its metres, its specification, the rate
+master's lists): at the end of every upload, at start, and when the lists change, those that are stale are worked out
+again in the background, so neither a restart part-way through an upload nor a finish added to the rate master leaves
+them behind. What is left with
 no way to tell (both saved at the same moment, or either file without a saved date that can be used): where a file and
 the history disagree on a line, the history's figures stand and the disagreement is listed on the file's page, for an
 admin to keep them or to take the file's (settle; POST /api/purchases/disagreements, the assistant's
@@ -164,7 +171,7 @@ def _stamp(v):
     return d
 
 
-def dating(latest, report, saved):
+def dating(latest, report, saved, future=0):
     """What a file covers, as the history puts files in order: {file_date, file_date_from (in words), covers_from,
     covers_to, report_date, saved_at}. covers_from: the earliest it can have been taken (its report date, else its latest
     document date); covers_to: the latest (its report date, else when it was saved; None: not known, as when it carries
@@ -183,6 +190,8 @@ def dating(latest, report, saved):
     else:
         lo, hi = "0001-01-01T00:00:00", saved
         words = "no document date read" + (f"; saved {saved[:16].replace('T', ' ')} UTC" if saved else "")
+    if future:
+        words += f"; {future:,} {'row' if future == 1 else 'rows'} dated in the future, not used to date it"
     return dict(out, covers_from=lo, covers_to=hi, file_date_from=words)
 
 
@@ -221,14 +230,22 @@ class Read:
     def __init__(self):
         self.kept, self.skipped, self.removing, self.orders, self.total, self.texts = [], [], [], {}, 0, {}
         self.latest = self.report = None         # its latest document date, any row; a report date it carries
+        self.future = []                         # rows dated in the future (after it was uploaded): not used to date it
         self.dating = {}
 
 
-def read_po_file(data, filename=""):
+def read_po_file(data, filename="", at=None):
     """Read a purchase-order file row by row (little memory, whatever its size). Refused when it is not a workbook in the
-    SAP export's shape."""
+    SAP export's shape. A document date later than the day after the file was uploaded (`at`; when it is read now, today)
+    is in the future: it cannot be real, and it cannot be what the file covers. A mistyped date (2027 for 2026) would
+    otherwise date the file after every export saved before that day, and leave its saved date unused. Such rows are
+    kept as they are, listed (Read.future) and left out of the file's dating (the second review, 28 Nov 2026). A date
+    after the file was saved but not in the future still makes its saved date unusable, as agreed (dating())."""
     from openpyxl import load_workbook
     out = Read()
+    saved = _saved_at(data)
+    # the last day a real document date can have: the day after the upload (a day's grace for the time zones)
+    bound = (dt.date.fromisoformat((at or _now())[:10]) + dt.timedelta(days=1)).isoformat()
     try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as e:
@@ -276,7 +293,10 @@ def read_po_file(data, filename=""):
             price, qty = _number(get("Net Price")), _number(get("Order Quantity"))
             supplier = text("Name of Supplier")
             day, day_why = _date(get("Document Date"))
-            if day and (out.latest is None or day > out.latest):
+            if day and day > bound:
+                if len(out.future) < MAX_LISTED:
+                    out.future.append((row, po, item, material, day))
+            elif day and (out.latest is None or day > out.latest):
                 out.latest = day                        # what the file covers: every row with a date, kept or not
             if report_col is not None and report_col < len(values):
                 rep = _stamp(values[report_col])
@@ -315,7 +335,7 @@ def read_po_file(data, filename=""):
                     out.texts[material] = (k, st)
     finally:
         wb.close()
-    out.dating = dating(out.latest, out.report, _saved_at(data))
+    out.dating = dating(out.latest, out.report, saved, future=len(out.future))
     return out
 
 
@@ -345,7 +365,7 @@ def quantity_terms(route, metres, m):
     return pilot.quantity_band(route, metres or 0), (pilot.order_size(m, metres) if metres else None)
 
 
-def costing_choices(code, spec, metres, m, ctx, patterns):
+def costing_choices(code, spec, metres, m, ctx, patterns, supplier=None):
     """The costing choices for one fabric, worked out from its PLM specification exactly as pilot.py does (the rate card
     quantity band and the order size from its metres on record, ZLOI left out), in the form Right cost costs purchase
     orders in (rightcost._pilot_choices). (choices, []) or (None, why not costed)."""
@@ -355,7 +375,7 @@ def costing_choices(code, spec, metres, m, ctx, patterns):
     if s.get("productgroup_name") != "Woven":
         return None, [f"Not a woven fabric ({s.get('productgroup_name') or 'blank'} in the PLM)"]
     s["Content group"] = grouping.blend_group(s.get("blend_name"))
-    row, why = pilot.fabric_inputs(code, s, ctx, metres)
+    row, why = pilot.fabric_inputs(code, s, ctx, metres, supplier=supplier)
     if why:
         return None, [why]
     band, slab = quantity_terms(row["Route"], metres, m)
@@ -495,28 +515,97 @@ def _newest(files):
     return best
 
 
+_fp_memo = {"m": None, "fp": None}
+
+
+def _plain(v):
+    """A value as plain, ordered data, for a fingerprint."""
+    if isinstance(v, dict):
+        return sorted((repr(k), _plain(x)) for k, x in v.items())
+    if isinstance(v, (set, frozenset)):
+        return sorted(repr(x) for x in v)
+    if isinstance(v, (list, tuple)):
+        return [_plain(x) for x in v]
+    return repr(v)
+
+
+def lists_fingerprint(m=None):
+    """A fingerprint of what costing choices are worked out on besides a code's specification and metres: the rate
+    master's lists and what pilot.py reads from them (yarns by count, the tool's weaves, the finishes). Stored with each
+    fabric's choices, so they are worked out again when it changes (a finish, yarn or weave added)."""
+    m = m if m is not None else common.get_masters()
+    if _fp_memo["m"] is not m:
+        val = json.dumps([_plain(masters.lists(m)), _plain(pilot.inputs_context(m))])
+        _fp_memo.update(m=m, fp=hashlib.sha256(val.encode()).hexdigest()[:20])
+    return _fp_memo["fp"]
+
+
 def recost(st, fabric_ids):
     """The costing choices of these fabrics worked out again (their metres set the quantity band; their specification
-    the rest), a few hundred to a transaction."""
+    the rest), a few hundred to a transaction; each kept with what it was worked out on (the lists' fingerprint, the
+    metres, the specification's SHA-256), so a stale one can be told (stale())."""
     m = common.get_masters()
-    ctx, patterns = pilot.inputs_context(m), masters.lists(m)["Pattern"]
+    ctx, patterns, fp = pilot.inputs_context(m), masters.lists(m)["Pattern"], lists_fingerprint(m)
     ids = sorted(set(fabric_ids))
     for i in range(0, len(ids), 500):
         with _job_tx(st, KIND) as c:
             part = ids[i:i + 500]
-            fabs, met = dp.fabrics(c, ids=part), dp.metres(c, part)
+            fabs, met, top = dp.fabrics(c, ids=part), dp.metres(c, part), dp.top_suppliers(c, part)
             rows = []
             for code, f in fabs.items():
-                sel, problems = costing_choices(code, f["spec"], float(met.get(f["id"]) or 0), m, ctx, patterns)
-                rows.append({"id": f["id"], "choices": sel, "problems": problems})
+                metres = float(met.get(f["id"]) or 0)
+                sel, problems = costing_choices(code, f["spec"], metres, m, ctx, patterns, supplier=top.get(f["id"]))
+                rows.append({"id": f["id"], "choices": sel, "problems": problems, "lists": fp, "metres": metres, "spec": f["spec_sha"]})
             dp.set_choices(c, rows, _now())
+
+
+def stale(st, fabric_ids=None):
+    """The fabrics (these, or every one) whose costing choices are not worked out on what they rest on now: never
+    worked out (a restart part-way through an upload, or an upload that failed after writing its lines), worked out on
+    other metres or another specification, or on the rate master's lists as they were (the second review, 28 Nov 2026)."""
+    fp = lists_fingerprint()
+    with st.tx() as c:
+        basis = dp.choices_basis(c, None if fabric_ids is None else sorted(set(fabric_ids) - {None}))
+        met = dp.metres(c, list(basis))
+    return sorted(i for i, (lists, metres, spec, sha) in basis.items()
+                  if lists != fp or spec != sha or metres is None or abs(metres - float(met.get(i) or 0)) > 1e-6)
+
+
+_refresh = {"fp": None}                # the lists' fingerprint the last refresh of this process worked on
+_refresh_lock = threading.Lock()       # one refresh at a time in this process
+
+
+def refresh_choices(wait=False):
+    """In the background (never holding a page): work out again every fabric's costing choices that are stale (stale()).
+    Run at start, and whenever Right cost finds the rate master's lists changed since the choices were worked out.
+    wait=True: here and now, after a refresh already running."""
+    st = store.get()
+    if st.kind == "files":
+        return
+
+    def work():
+        try:
+            fp = lists_fingerprint()
+            ids = stale(st)
+            if ids:
+                recost(st, ids)
+            _refresh["fp"] = fp
+        except Exception:
+            pass                    # the database not reachable: the next look tries again
+        finally:
+            _refresh_lock.release()
+    if wait:
+        _refresh_lock.acquire()
+        work()
+    elif _refresh_lock.acquire(blocking=False):
+        threading.Thread(target=work, daemon=True, name="rightprice-costing-choices").start()
 
 
 def _load(st, uid):
     with _job_tx(st, KIND) as c:            # a fresh start (also after a restart): this upload's own evidence is written again
         data, up = dp.upload_file(c, uid), dp.upload(c, uid)
         dp.forget_evidence(c, uid)
-    rd = read_po_file(data or b"", up["filename"])
+    rd = read_po_file(data or b"", up["filename"], up["uploaded_at"])
     data = None
     name, dating_ = up["filename"], rd.dating
     kinds = {}
@@ -575,7 +664,9 @@ def _load(st, uid):
         held = dp.ids_of(c, list(first))
         new_codes = [code for code in sorted(first, key=lambda x: (first[x], x)) if code not in held]
         dp.add_fabrics(c, [{"code": code, "description": rd.texts.get(code, (None, ""))[1]} for code in new_codes], at)
-        old_text = dict(c.all(f"SELECT code, description FROM fabric WHERE id IN {store._in(len(held))}", list(held.values()))) if held else {}
+        old_text = {}
+        for part in dp._chunks(sorted(held.values())):            # a few hundred to a statement, however many codes
+            old_text.update(dict(c.all(f"SELECT code, description FROM fabric WHERE id IN {store._in(len(part))}", part)))
         dp.set_fabrics(c, [{"id": held[code], "description": rd.texts[code][1]} for code in held
                            if code in rd.texts and rd.texts[code][1] != old_text.get(code)], at)
         rg = fab_groups.regroup(c, specs, first, set(new_codes), at, uid, ready)
@@ -665,11 +756,20 @@ def _load(st, uid):
         part = rd.removing[i:i + CHUNK]
         with _job_tx(st, KIND) as c:
             have = dp.lines_by_key(c, [(po, item) for po, item, _ in part])
+            seen = dp.orders_seen(c, {po for po, item, _ in part if (po, item) not in have}, but=uid)
             gone, touch, marks, disagree = [], [], [], []
             for po, item, why in part:
                 old = have.get((po, item))
                 if old is None:
-                    marks.append((po, item, f"{name}: {why}", me))
+                    # marked with the word of the newest file about it: this one, or one that has the rest of its order
+                    # without it, newer (or not to be told apart), as for a line kept (the second review, 28 Nov 2026)
+                    lacking = [(newer(me[1:], (lo, hi)), u, lo, hi, fn) for u, items, lo, hi, fn in seen.get(po, []) if item not in items]
+                    other = _newest(x for x in lacking if x[0][0] < 0) or (sorted((x for x in lacking if x[0][0] == 0), key=lambda x: (x[2], x[1])) or [None])[-1]
+                    if other is None:
+                        marks.append((po, item, f"{name}: {why}", me))
+                    else:
+                        _, u, lo, hi, fn = other          # both say it is not counted: no disagreement
+                        marks.append((po, item, f"Not in {fn} (upload {u}), which has the rest of order {po}", (u, lo, hi)))
                     continue
                 o, by = vs(old)
                 if o > 0:
@@ -719,8 +819,11 @@ def _load(st, uid):
     _status(uid, step="Working out the costing choices", rows_removed=n["removed"], rows_dropped=n["dropped"], rows_disagree=n["disagree"],
             rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"])
 
-    # the costing choices of every fabric whose lines or specification changed (the quantity band follows its metres)
-    recost(st, touched - {None})
+    # the costing choices of every fabric of this file, or whose lines or specification changed, that are not worked out
+    # on what they rest on now (its metres, which set the quantity band; its specification; the rate master's lists). Not
+    # only what this reading changed: a restart part-way through an upload, or an upload that failed after writing its
+    # lines, leaves choices that the next reading finds "the same" and would never work out (the second review, 28 Nov)
+    recost(st, stale(st, set(fabric_id.values()) | (touched - {None})))
 
     # done
     with _job_tx(st, KIND) as c:
@@ -733,12 +836,15 @@ def _load(st, uid):
                 not_grouped[k] = not_grouped.get(k, 0) + 1
             else:
                 grouped += 1
-        costed = c.one(f"SELECT count(*) FROM fabric WHERE choices IS NOT NULL AND code IN {store._in(len(first))}", list(first))[0] if first else 0
+        costed = sum(c.one(f"SELECT count(*) FROM fabric WHERE choices IS NOT NULL AND code IN {store._in(len(part))}", part)[0]
+                     for part in dp._chunks(sorted(first)))
         summary = {"skipped_by_kind": sorted(kinds.items(), key=lambda x: -x[1]), "first": min((l.date for l in rd.kept), default=None),
                    "last": max((l.date for l in rd.kept), default=None), "fabrics": len(first), "mills": len({l.supplier for l in rd.kept}),
                    "not_grouped": sorted(not_grouped.items(), key=lambda x: -x[1]), "grouped": grouped, "costed": costed,
                    "regrouped": sum(1 for m_ in rg["moves"] if m_[1] != m_[2]), "respecified": len(rg["respecified"]), "renamed": len(rg["renamed"]),
-                   "disagreements": n["listed"], "listed": min(len(rd.skipped), MAX_LISTED)}
+                   "disagreements": n["listed"], "listed": min(len(rd.skipped), MAX_LISTED),
+                   # rows dated in the future: kept as they are, not used to date the file
+                   "future_count": len(rd.future), "future": [{"row": r_[0], "po": r_[1], "item": r_[2], "material": r_[3], "date": r_[4]} for r_ in rd.future[:300]]}
         # which uploads the saved date decided against, with when each was saved, for the upload's page
         others = dp.upload_dates(c, set(won) | set(lost))
         said = lambda d: [dict(others.get(u, {"id": u}), lines=k) for u, k in sorted(d.items())]
@@ -794,8 +900,10 @@ def _resume_quietly():
 
 
 def resume_at_start():
-    """At start: pick up what a restart left, and look again once a job elsewhere would have shown it is alive."""
+    """At start: pick up what a restart left, and look again once a job elsewhere would have shown it is alive; work out
+    any costing choices left stale (refresh_choices)."""
     _resume_quietly()
+    refresh_choices()
     later = threading.Timer(STALE + 10, _resume_quietly)
     later.daemon = True
     later.start()
@@ -1085,8 +1193,8 @@ def _outlier(code, po, item, day, sup, qty, price):
 
 
 def _held_fabrics(codes):
-    """{code: (choices, problems, spec, metres)} of the codes the purchase history holds (its choices are what the price
-    popup costs), kept until the history changes."""
+    """{code: (choices, problems, spec, the metres and the lists' fingerprint they were worked out on)} of the codes the
+    purchase history holds (its choices are what the price popup costs), kept until the history changes."""
     st = store.get()
     if st.kind == "files":
         return {}
@@ -1094,8 +1202,7 @@ def _held_fabrics(codes):
     if _held_memo["key"] != key:
         with st.tx() as c:
             fabs = dp.fabrics(c, codes=sorted(codes))
-            met = dp.metres(c, [f["id"] for f in fabs.values()])
-        val = {code: (f["choices"], f["problems"], f["spec"], float(met.get(f["id"]) or 0)) for code, f in fabs.items()}
+        val = {code: (f["choices"], f["problems"], f["spec"], f["choices_metres"], f["choices_lists"]) for code, f in fabs.items()}
         _held_memo.update(key=key, val=val, digest=hashlib.sha256(json.dumps(val, sort_keys=True, default=str).encode()).hexdigest())
     return _held_memo["val"]
 
@@ -1107,7 +1214,15 @@ def _costed_on(sel):
     """The choices a costing rests on (not the code, its description, the supplier or the price)."""
     return None if sel is None else {k: v for k, v in sel.items() if k not in ("Fabric code", "Description", "Supplier", "Quoted price (Rs/m)", "Order quantity (m)",
                                                                          "Rate card quantity", "Order size")}
-# the columns of a purchase-order row that follow its costing choices (when its specification changed since the pilot)
+def _differs(a, b):
+    """What differs between two sets of costing choices, in words: 'Finish: Normal to F- ETI Easy to Iron; EPI: 96 to 100'."""
+    show = lambda v: f"{v:g}" if isinstance(v, float) else ("blank" if v in (None, "") else str(v))
+    out = [f"{k}: {show(a.get(k))} to {show(b.get(k))}" for k in sorted(set(a or {}) | set(b or {}), key=str)
+           if str((a or {}).get(k)) != str((b or {}).get(k))]
+    return "; ".join(out[:4]) + (f"; and {len(out) - 4} more" if len(out) > 4 else "") if out else "the same values written differently"
+
+
+# the columns of a purchase-order row that follow its costing choices (when they differ from the pilot's)
 FROM_CHOICES = {"Route": "Route", "Weave": "Weave", "Finish": "Finish", "Warp yarn": "Warp yarn", "Weft yarn": "Weft yarn", "EPI": "EPI",
                 "PPI": "PPI", "Finished width (in)": "Finished width (in)", "PLM pattern": "Pattern", "Print method": "Print method",
                 "Weft (yarn dyed)": "Weft (yarn dyed)"}
@@ -1146,10 +1261,12 @@ def pilot_rows():
     the rates, the history or the PLM list change."""
     digest, by_code, _ = bought_lines()
     src = lines_source()
+    fp = lists_fingerprint()
     st = store.get()
     codes = {str(r["Fabric code"]) for r in pilot_records()}
     held = _held_fabrics(codes)
-    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS))
+    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS),
+           src["history"], src["shipped_loaded"], fp)
     if _rows_memo["key"] == key:
         return _rows_memo["val"]
     m = common.get_masters()
@@ -1166,31 +1283,37 @@ def pilot_rows():
         value = sum(x[5] * x[6] for x in regular)
         price = round(value / metres, 2) if metres else None
         h = held.get(code)
-        if h is not None and abs(h[3] - metres) < 1e-6:
+        if h is not None and h[3] is not None and abs(h[3] - metres) < 1e-6 and h[4] == fp:
             sel, problems = h[0], h[1]
-        else:
+        else:                   # not held, or held choices not worked out on these metres or these lists: worked out here
+            if h is not None and h[4] != fp and _refresh["fp"] != fp:
+                refresh_choices()               # and the history's are worked out again in the background
             sel, problems = costing_choices(code, h[2] if h is not None else specs.get(code), metres, m, ctx, patterns)
-        quoted = lambda s: None if s is None else dict(s, **({"Quoted price (Rs/m)": price} if price is not None else {}))
+        # the choices Right cost opens in Cost a fabric: with the row's supplier as written (the pilot's, or the one most of
+        # its metres were bought from) and the price paid
+        quoted = lambda s, sup: None if s is None else dict(s, Supplier=sup, **({"Quoted price (Rs/m)": price} if price is not None else {}))
         pilots = rightcost._pilot_choices(dict(r, **{"PO price Rs/m": None}), patterns, contents)
         same = (not zl and len(regular) == r["PO lines"] and abs(metres - float(r["PO metres"] or 0)) < 1e-6
                 and price is not None and r["PO price Rs/m"] is not None and abs(price - round(float(r["PO price Rs/m"]), 2)) < 0.005
                 and _costed_on(sel) == _costed_on(pilots))
         if same:
-            out.append(dict(r, **{"Costing choices": quoted(sel), "Outliers (ZLOI)": [], "Worked out again": None}))
+            out.append(dict(r, **{"Costing choices": quoted(sel, r["Supplier"]), "Outliers (ZLOI)": [], "Worked out again": None}))
             continue
         nr = dict(r)
         band, slab = quantity_terms(r["Route"], metres, m)
         top = {}
         for x in regular:
             top[x[4]] = top.get(x[4], 0) + x[5]
-        why = [("ZLOI lines left out" if zl else "purchases since the pilot")] if (zl or len(regular) != r["PO lines"] or abs(metres - float(r["PO metres"] or 0)) >= 1e-6
+        why = [("ZLOI lines left out (the pilot's figures included them)" if zl else "purchases since the pilot")] if (zl or len(regular) != r["PO lines"] or abs(metres - float(r["PO metres"] or 0)) >= 1e-6
                                                                                   or price is None or abs(price - round(float(r["PO price Rs/m"] or 0), 2)) >= 0.005) else []
-        if _costed_on(sel) != _costed_on(pilots):
-            why.append("its PLM specification changed since the pilot" if sel else "not costed now: " + "; ".join(problems or ["no costing choices"]))
+        if _costed_on(sel) != _costed_on(pilots):     # what differs, never why (its specification or the rate master's lists)
+            why.append(("costed on choices that differ from the pilot's: " + _differs(_costed_on(pilots), _costed_on(sel))) if sel
+                       else "not costed now: " + "; ".join(problems or ["no costing choices"]))
         if not ls and src["history"]:           # the purchase history holds files, and none has this code
             why[:1] = [NOT_IN_HISTORY + ("" if src["shipped_loaded"] else NOT_LOADED)]
+        sup = max(top, key=lambda s: (top[s], s)) if top else r["Supplier"]
         nr.update({"PO metres": metres or None, "PO price Rs/m": price, "PO lines": len(regular), "Rate card quantity": band, "Order size": slab,
-                   "Supplier": max(top, key=lambda s: (top[s], s)) if top else r["Supplier"], "Outliers (ZLOI)": zl, "Costing choices": quoted(sel),
+                   "Supplier": sup, "Outliers (ZLOI)": zl, "Costing choices": quoted(sel, sup),
                    "Worked out again": "; ".join(why) + ("; no other purchase, so no price paid" if not regular and ls else "")})
         if sel is None:                         # nothing to cost: the row says why, with no should-cost
             nr.update({"Should-cost Rs/m": None, "Should-cost Rs/kg": None, "PO minus should-cost Rs/m": None, "PO above should-cost %": None, "Excess Rs": None})
@@ -1204,7 +1327,7 @@ def pilot_rows():
             nr["Weave group"] = group_of.get(sel.get("Weave"), r["Weave group"])
             nr.update({"Rate card quantity": sel.get("Rate card quantity"), "Order size": sel.get("Order size")})
         try:
-            res = masters.cost(quoted(sel), m)
+            res = masters.cost(quoted(sel, sup), m)
         except Exception as e:                  # a choice no longer on today's lists
             nr["Worked out again"] += f"; not costed on today's rates: {e}"
             out.append(nr)

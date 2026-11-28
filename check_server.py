@@ -837,6 +837,33 @@ def _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl):
           and counted("9900000057") == {"10": (130.0, "BO")} and not any(x["rows_disagree"] for x in both) and not any(x["summary"]["disagreements"] for x in both)
           and all(v == (u_late, "2026-11-26T08:00:00") for po in ("9900000056", "9900000057") for v in state_of(po).values()),
           f"{err_[-300:]} {held('9900000056')} {held('9900000057')} {state_of('9900000056')}")
+    # a line the newest file leaves out of its order, shown deleted by an older file, then live in a third (the second review,
+    # 28 Nov 2026): the deleted line's mark takes the newest file's word, so the third brings nothing back
+    tri = lambda po, item, day, price, **kw: row(po, item, b1, day, nsl, 100, price, **kw)
+    for po_, files_ in ((9900000080, ("B", "A", "C")), (9900000081, ("B", "C"))):
+        made = {"B": _stage2_file([tri(po_, 10, "2026-11-20", 150)], saved="2026-11-25T08:00:00"),
+                "A": _stage2_file([tri(po_, 10, "2026-11-01", 140), tri(po_, 20, "2026-11-01", 140, **{"Deletion Indicator": "L"})], saved="2026-11-02T08:00:00"),
+                "C": _stage2_file([tri(po_, 10, "2026-11-05", 145), tri(po_, 20, "2026-11-05", 999)], saved="2026-11-06T08:00:00")}
+        for f_ in files_:
+            wait(c.post("/api/purchases/upload", files={"file": (f"order {po_}, file {f_}.xlsx", io.BytesIO(made[f_]))}).json()["id"])
+    mark_state = st._read(lambda cur: cur.one("SELECT removed_why FROM purchase_line WHERE po_number = '9900000080' AND item = '20'"))
+    check(f"{k} the newest file leaves a line out of its order; an older one shows it deleted (before any file gave its figures), a third, between "
+          "them, has it live: the deleted line's mark keeps the newest file's word, so the third brings nothing back, as when the older one is not read",
+          counted("9900000080") == {"10": (150.0, "BO")} and counted("9900000081") == {"10": (150.0, "BO")} and "order 9900000080, file B.xlsx" in (mark_state[0] or ""),
+          f"{held('9900000080')} {held('9900000081')} {mark_state}")
+    # a mistyped document date in the future (a year on) does not date the file: its saved date still puts it in order
+    ahead = (_dt.date.today() + _dt.timedelta(days=400)).isoformat()
+    newest = _stage2_file([tri(9900000082, 10, "2026-11-20", 150), tri(9900000082, 20, "2026-11-20", 160, **{"Deletion Indicator": "L"})], saved="2026-11-28T08:00:00")
+    typo = _stage2_file([tri(9900000082, 10, "2026-11-20", 140), tri(9900000082, 20, "2026-11-20", 160),
+                         tri(9900000082, 30, ahead, 170, **{"Deletion Indicator": "L"})], saved="2026-11-25T08:00:00")
+    wait(c.post("/api/purchases/upload", files={"file": ("saved last.xlsx", io.BytesIO(newest))}).json()["id"])
+    u_ty = wait(c.post("/api/purchases/upload", files={"file": ("a date typed a year on.xlsx", io.BytesIO(typo))}).json()["id"])
+    det_ty = c.get(f"/api/purchases/uploads/{u_ty['id']}").json()
+    check(f"{k} a row dated a year on ({ahead}) in a file saved 25 Nov: the date is in the future, so it does not date the file; its saved date "
+          "is used, the file saved 28 Nov stays newer (its price, its deletion), and the upload lists the row",
+          counted("9900000082") == {"10": (150.0, "BO")} and u_ty["covers_from"] == "2026-11-20T00:00:00" and u_ty["covers_to"] == "2026-11-25T08:00:00"
+          and "dated in the future" in u_ty["file_date_from"] and det_ty["summary"]["future_count"] == 1 and det_ty["summary"]["future"][0]["date"] == ahead,
+          f"{held('9900000082')} {({x: u_ty[x] for x in u_ty if x.startswith(('covers', 'file'))})}")
     rep = _stage2_file([dict(row(9900000062, 10, b1, "2026-08-21", nsl, 100, 150), **{"Report Date": pd.Timestamp("2026-12-02")})], saved="2026-11-01T00:00:00", extra=["Report Date"])
     u_rep = wait(c.post("/api/purchases/upload", files={"file": ("with a report date.xlsx", io.BytesIO(rep))}).json()["id"])
     check(f"{k} a report date the file carries is when it was taken (before its saved date or its latest order)",
@@ -1070,13 +1097,33 @@ def stage2_checks(c, check):
           all(abs((po_h[x]["metres"] or 0) - pops[x]["metres"]) < 0.01 and pops[x]["should"] is not None and abs(po_h[x]["should"] - pops[x]["should"]) < 0.005
               for x in (a1, a2, b1)) and po_h[a1]["metres"] == 4900 and priced_h == {x for x in (a1, a2, b1, inc) if x in po_h}
           and po_h[absent]["price"] is None and po_h[absent]["band"] == "No price" and "is not loaded" in (po_h[absent]["worked_out_again"] or "")
-          and sh1["loaded"] is False and sh1["history"] is True,
+          and sh1["loaded"] is False and sh1["history"] is True
+          and "in no file of the purchase history (the purchase file that came with the code is not loaded)" in (c.get("/api/pilot").json().get("as_run") or ""),
           str({x: (po_h[x]["metres"], po_h[x]["should"], pops[x]["metres"], pops[x]["should"]) for x in (a1, a2, b1)}) + f" {len(priced_h)} {po_h[absent]['worked_out_again']}")
     # the newest file wins, whatever order the files come in
     u2 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders again.xlsx", io.BytesIO(data))}).json()["id"])
     n_lines = c.get("/api/purchases/status").json()["counts"]
     check(f"{k} the same file uploaded twice: each order line is one line", u2["status"] == "done" and u2["rows_new"] == 0 and u2["rows_same"] == 12
           and n_lines["lines"] == 11 and n_lines["outliers"] == 1 and u2["fabrics_new"] == 0 and u2["groups_new"] == 0, str(u2))
+    # a restart part-way through an upload (or an upload that failed after writing its lines) leaves choices never worked out:
+    # the next reading finds every line "the same" and works them out all the same (the second review, 28 Nov 2026)
+    choice_of = lambda: dict(st._read(lambda cur: cur.all("SELECT code, choices FROM fabric WHERE code IN (%s, %s, %s)", (a1, a2, b1))))
+    had = choice_of()
+    with st.tx(write=dp.KIND) as cur:
+        cur.run("UPDATE fabric SET choices = NULL, problems = '[]', choices_lists = NULL, choices_metres = NULL, choices_spec = NULL WHERE code IN (%s, %s)", (a1, a2))
+    u2b = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders, read again after a restart.xlsx", io.BytesIO(data))}).json()["id"])
+    check(f"{k} costing choices a restart left never worked out are worked out at the next reading of the file, though every line reads the same",
+          u2b["rows_same"] == 12 and all(had.values()) and choice_of() == had and not purchases.stale(st), str({x: (v or "")[:60] for x, v in choice_of().items()}))
+    with st.tx(write=dp.KIND) as cur:                   # as if worked out on the rate master's lists as they were
+        cur.run("UPDATE fabric SET choices_lists = 'lists as they were' WHERE code = %s", (b1,))
+    stale_b1 = purchases.stale(st)
+    purchases.refresh_choices(wait=True)
+    m_ = rules_common.get_masters()
+    m2 = dict(m_, Finishing_Rates=pd.concat([m_["Finishing_Rates"], m_["Finishing_Rates"].iloc[:1].assign(Finish="F- A finish added for the check")], ignore_index=True))
+    check(f"{k} choices worked out on the rate master's lists as they were are worked out again in the background; the lists' fingerprint "
+          "changes when a finish is added",
+          len(stale_b1) == 1 and not purchases.stale(st) and choice_of() == had
+          and purchases.lists_fingerprint(m2) != purchases.lists_fingerprint(m_) == purchases.lists_fingerprint(), str(stale_b1))
     rows2 = [dict(r) for r in rows]
     rows2[5]["Net Price"] = 121.2                       # 9900000013/10: the price 20% up
     rows2[6]["Deletion Indicator"] = "L"                # 9900000014/10: deleted in SAP
@@ -1367,6 +1414,10 @@ def stage2_checks(c, check):
           "moves says a new code joined the widths, not that the way its fields are tidied changed",
           apart["ZZW1A"] != apart["ZZW1B"] and len({x["group"]["code"] for x in joined.values()}) == 1 and "120 to 120.7 in" in joined["ZZW1D"]["group"]["name"]
           and mv == ["a new code joined the widths (ZZW1D at 120.35 in): its group now runs 120 to 120.7 in"], f"{apart} {mv}")
+    src_ = open(os.path.join(HERE, "rules", "purchases.py"), encoding="utf8").read() + open(os.path.join(HERE, "data_purchases.py"), encoding="utf8").read()
+    check(f"{k} every list of codes or ids sent to the database goes a few hundred at a time (no statement over the 32,766 or 65,535 values a "
+          "statement can carry, however many codes a file has)", all("store._in(len(part))" in x for x in re.findall(r"store\._in\(len\([^)]*\)\)", src_)),
+          str(set(re.findall(r"store\._in\(len\([^)]*\)\)", src_))))
     page_js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
     check(f"{k} the page's words: no stray separator on a group of ZLOI lines only, one ZLOI line in the singular, the PLM extract said to be "
           "the one deployed with the code",
@@ -1411,6 +1462,12 @@ def _stage2_right_cost(c, check, kind, when, popup=False):
         changed += r["worked_out_again"] is not None
     ins = dashboard.insights()["pilot"]
     with_price = sum(1 for r in po.values() if r["price"] is not None)
+    sup_off = [x for x, r in po.items() if r["choices"] is not None and not (r["choices"].get("Supplier")
+                                                                             and re.sub(r"^\d+\s+", "", str(r["choices"]["Supplier"])).title() == r["supplier"])]
+    told = [x for x, r in po.items() if "specification changed since the pilot" in (r["worked_out_again"] or "")]
+    check(f"[{kind}] Stage 2, Right cost {when}: every purchase-order row's costing choices carry its supplier as written (Open in Cost a fabric, "
+          "the cost sheet and a list row saved from it keep the mill); no row says its specification changed when only its choices differ",
+          not sup_off and not told and sum(1 for r in po.values() if r["choices"]) > 1000, f"{sup_off[:5]} {told[:5]}")
     check(f"[{kind}] Stage 2, Right cost {when}: every purchase-order row's price paid, metres and order month (stage 5) are its lines' own, ZLOI left "
           f"out; a code bought only on ZLOI shows no price and its outliers ({len(zl_only)} such codes, {changed} rows worked out again)",
           len(po) == 1696 and not bad and zl_only and all(po[x]["price"] is None and po[x]["band"] == "No price" and po[x]["outliers"] for x in zl_only)

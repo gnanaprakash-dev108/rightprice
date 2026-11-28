@@ -645,7 +645,7 @@ function fields(r) {
     [r.source === "Purchase orders" ? "Paid against should-cost, Rs" : "Quote against should-cost, Rs (not paid)", r.excess === null || r.excess === undefined ? "" : `${n0(Math.abs(r.excess))} ${r.excess >= 0 ? "above" : "below"}`],
     ["Duplicate of", r.duplicate_of || ""], ["Fab group", r.fab_group ? `${r.fab_group}: ${r.fab_group_name}` : r.fab_group_name ? "Not grouped: " + r.fab_group_name : ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
     ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")],
-    ["Worked out again", r.worked_out_again ? (/^not in the purchase history/.test(r.worked_out_again) ? r.worked_out_again.charAt(0).toUpperCase() + r.worked_out_again.slice(1) : `From the purchase lines: ${r.worked_out_again} (the pilot's figures included them)`) : ""], ["Outliers (ZLOI)", (r.outliers || []).length ? `${r.outliers.length}, left out of every figure (listed below)` : ""]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
+    ["Worked out again", r.worked_out_again ? r.worked_out_again.charAt(0).toUpperCase() + r.worked_out_again.slice(1) : ""], ["Outliers (ZLOI)", (r.outliers || []).length ? `${r.outliers.length}, left out of every figure (listed below)` : ""]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
   document.querySelectorAll(".side").forEach(e => e.remove());

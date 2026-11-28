@@ -61,7 +61,7 @@ def add_aliases(c, rows, at):
 
 
 # ------------------------------------------------------------------ fabrics
-FABRIC = "id, code, description, fab_group_id, not_grouped, signature, spec, spec_sha, choices, problems"
+FABRIC = "id, code, description, fab_group_id, not_grouped, signature, spec, spec_sha, choices, problems, choices_lists, choices_metres, choices_spec"
 
 
 def _fabric(r):
@@ -132,9 +132,34 @@ def set_fabrics(c, rows, at):
 
 
 def set_choices(c, rows, at):
-    """rows: dicts with id, choices and problems: the costing choices worked out again."""
-    _many(c, "UPDATE fabric SET choices = %s, problems = %s, updated_at = %s WHERE id = %s",
-          [(None if r["choices"] is None else json.dumps(r["choices"], default=str), json.dumps(r["problems"]), at, r["id"]) for r in rows])
+    """rows: dicts with id, choices, problems and what they were worked out on (lists: the fingerprint of the rate master's
+    lists, metres, spec: the specification's SHA-256): the costing choices worked out again."""
+    _many(c, "UPDATE fabric SET choices = %s, problems = %s, choices_lists = %s, choices_metres = %s, choices_spec = %s, updated_at = %s WHERE id = %s",
+          [(None if r["choices"] is None else json.dumps(r["choices"], default=str), json.dumps(r["problems"]), r.get("lists"), r.get("metres"),
+            r.get("spec"), at, r["id"]) for r in rows])
+
+
+def choices_basis(c, ids=None):
+    """{fabric id: (lists fingerprint, metres, spec SHA-256 the choices were worked out on, the specification's SHA-256 now)}
+    for these fabrics, or every one."""
+    sql = "SELECT id, choices_lists, choices_metres, choices_spec, spec_sha FROM fabric"
+    if ids is None:
+        return {r[0]: tuple(r[1:]) for r in c.all(sql)}
+    out = {}
+    for part in _chunks(ids):
+        out.update({r[0]: tuple(r[1:]) for r in c.all(sql + f" WHERE id IN {store._in(len(part))}", part)})
+    return out
+
+
+def top_suppliers(c, fabric_ids):
+    """{fabric id: the supplier as written on most of its metres still counted, ZLOI left out}"""
+    best = {}
+    for part in _chunks(sorted(set(fabric_ids))):
+        for f, sup, q in c.all(f"SELECT l.fabric_id, l.supplier, sum(l.qty_m) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER} "
+                               f"AND l.fabric_id IN {store._in(len(part))} GROUP BY l.fabric_id, l.supplier", part):
+            if f not in best or (q, sup) > best[f]:
+                best[f] = (q, sup)
+    return {f: sup for f, (q, sup) in best.items()}
 
 
 def add_regroups(c, rows, at, upload_id):

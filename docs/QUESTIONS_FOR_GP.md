@@ -85,6 +85,11 @@ S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rat
   offers it). The Suppliers tab of Right cost counts as the supplier list does (a code bought only on ZLOI is not
   counted). A code that moves group says what changed in its specification, or that a new code joined its widths; a
   code not costed now shows its specification as it is now.
+- **Found and fixed in the second review of 28 Nov:** a line the newest file leaves out of an order no longer comes back
+  through an older file that showed it deleted; a document date in the future (a mistyped year) no longer dates a file
+  as newer than every export; costing choices a restart left half-done, or worked out on the rate master's lists as they
+  were, are worked out again; Right cost's purchase-order rows keep their supplier in the choices they open in Cost a
+  fabric. A row whose choices differ from the pilot's says what differs, not that its specification changed.
 - A code bought only on ZLOI orders is not counted as bought on the supplier list and pages; a group's mill with only
   ZLOI lines is listed, not counted; Pilot results says it is the pilot as run, ZLOI included (1,696 fabrics), beside
   the 1,512 every other page counts.
