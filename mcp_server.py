@@ -12,7 +12,10 @@ GP's decision, 27 Nov 2026: "if I ask something through the MCP connector it sho
 admin role". The token is an admin key: its fixed role, "AI assistant" (rules/access.py ASSISTANT_ALLOWED), holds the
 Admin role's permissions. So there is a tool for every change an Admin can make in the app: rate tables, cotton prices,
 Bring in prices, dated yarn rates (stage 5), uploads to the fabric list and removing its rows, mill cost sheets and their
-drafts, quote alerts seen, tracker steps, drafts to mills, and users and roles. Every change is recorded as "AI assistant" where the screens record
+drafts, quote alerts seen, tracker steps, drafts to mills, and users and roles. Two things stay with a person (GP, 28 Nov
+2026): switching off an admin or taking Admin away (rules/access.py change_person), and bringing in prices from a price
+service, which takes the service's key, and a key is never given in a chat (NOT_MIRRORED below; the screen keeps it).
+Every change is recorded as "AI assistant" where the screens record
 the signed-in person (rate versions, list rows added or removed, cost sheet rows, alerts seen, tracker steps, the users'
 change record). Every tool that changes shared data is marked as writing and destructive, so a client asks the person
 before it runs, and its description says what it changes and that the person must confirm. A tool that changes a rate
@@ -70,7 +73,9 @@ mcp = MCPServer(
         "person exactly what will change and get their yes. NEVER CHANGE A RATE (edit_rate_table, add_cotton_price, intake_add_rows, "
         "apply_cost_sheet_drafts, and the dated yarn rates: add_dated_rate, remove_dated_rate, load_market_dated_rates, "
         "intake_add_dated_rates) unless the person has explicitly asked for that change, and state the old and the new figure first; "
-        "never change a rate to make a costing match a price. Every change is recorded as \"AI assistant\"."))
+        "never change a rate to make a costing match a price. Every change is recorded as \"AI assistant\". "
+        "Never ask for or take a key or password in this chat (not in a web address either): prices from a price service, which "
+        "needs its key, are brought in by the person on the screen (Prices > Bring in prices)."))
 
 
 MIRRORS = {}        # each tool and the screen's address it mirrors: its permission is that address's (rules/access.py)
@@ -82,6 +87,8 @@ NOT_MIRRORED = {
     "GET /classic": "the earlier screens (Streamlit) in a browser; what they change, the rate tables, edit_rate_table changes",
     "* /classic/{path:path}": "the earlier screens' own requests (Streamlit), for a browser only",
     "WS /classic/{path:path}": "the earlier screens' web socket (Streamlit), for a browser only",
+    "POST /api/intake/api": "bringing in prices from a price service takes the service's key, and a key is never given in a chat "
+                            "(GP, 28 Nov 2026): a person does it on the screen (Prices > Bring in prices)",
 }
 
 
@@ -984,24 +991,15 @@ def intake_page(url: str) -> dict:
     intake_map_columns, or, with no tables, the price-like lines in its text. RIGHTPRICE'S SERVER FETCHES THAT ADDRESS
     ITSELF: confirm the address with the person first. Only public http or https addresses are read (never this machine,
     a private network or the cloud's own link-local addresses); a page behind a login cannot be read. Nothing is added to
-    the rates here."""
+    the rates here. Never put a key in the address: a price service that needs a key is brought in by the person on the
+    screen (a key is never given in a chat)."""
     return _intake(_s().rates.intake_link({"url": url}))
-
-
-@tool(mirrors="POST /api/intake/api", writes=True, destructive=False, outside=True)
-def intake_api(url: str, header_name: str = "", header_value: str = "") -> dict:
-    """Bring in prices, step 1, from a JSON endpoint: its reply comes back as a table with a token for intake_map_columns.
-    RIGHTPRICE'S SERVER CALLS THAT ADDRESS ITSELF, with the header given: confirm the address with the person first. Only
-    public http or https addresses (as intake_page); sign-in, cookie and host headers are never sent. header_name and
-    header_value: a key the endpoint asks for, used for this one call and not stored. A key given here passes through this
-    conversation: for a secret key, the person should use the screen instead. Nothing is added here."""
-    return _intake(_s().rates.intake_api({"url": url, "header_name": header_name or None, "header_value": header_value or None}))
 
 
 @tool(mirrors="POST /api/intake/map")
 def intake_map_columns(token: str, table: str, count_column: str, rate_column: str, high_rate_column: str = "",
                        yarn_column: str = "", date_column: str = "") -> dict:
-    """Bring in prices, step 2: which columns of a table read by intake_file, intake_page or intake_api hold the count and
+    """Bring in prices, step 2: which columns of a table read by intake_file or intake_page hold the count and
     the rate (Rs per kg; with a high rate column, the rate column is the low end), and the yarn and the date if the table
     has them. The rows read come back to check with the person (a row without a rate is dropped). Nothing is added here.
     token and table: as step 1 gave them."""
