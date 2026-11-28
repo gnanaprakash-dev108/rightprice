@@ -318,8 +318,9 @@
     };
     const row = u => {
       const counts = u.status === "done" || u.rows_loaded !== null ? [u.rows_total !== null ? `${n0(u.rows_total)} rows` : null, u.rows_loaded !== null ? `${n0(u.rows_loaded)} order lines kept (` + [`${n0(u.rows_new || 0)} new`, `${n0(u.rows_changed || 0)} changed`, `${n0(u.rows_same || 0)} already in`,
-          u.rows_older ? `${n0(u.rows_older)} not used: a newer file has them` : null, u.rows_disagree ? `${n0(u.rows_disagree)} not used: the history disagrees and which is newer cannot be told` : null].filter(Boolean).join(", ") + ")" : null,
-        (u.summary || {}).disagreements ? `${n0(u.summary.disagreements)} ${u.summary.disagreements === 1 ? "disagreement" : "disagreements"} with the history listed (open the upload)` : null, u.rows_removed ? `${n0(u.rows_removed)} removed (this newer file shows them deleted, blocked or no longer bulk)` : null,
+          u.rows_older ? `${n0(u.rows_older)} not used: a newer file has them (newer by what it covers, or saved later)` : null, u.rows_disagree ? `${n0(u.rows_disagree)} not used: the history disagrees and which is newer cannot be told, nor by when they were saved` : null].filter(Boolean).join(", ") + ")" : null,
+        savedNote(u),
+        (u.summary || {}).disagreements ? `${n0(u.summary.disagreements)} ${u.summary.disagreements === 1 ? "disagreement" : "disagreements"} with the history listed for an admin (open the upload)` : null, u.rows_removed ? `${n0(u.rows_removed)} removed (this newer file shows them deleted, blocked or no longer bulk)` : null,
         u.rows_dropped ? `${n0(u.rows_dropped)} removed (not in this newer file, which has the rest of their orders)` : null, u.rows_outliers ? `${n0(u.rows_outliers)} ZLOI lines, kept apart` : null,
         u.rows_skipped !== null ? `${n0(u.rows_skipped)} left out` : null].filter(Boolean).join(" · ") : "";
       return h("tr", { class: files.open === u.id ? "picked" : null },
@@ -336,15 +337,33 @@
       !may("do:upload_purchases") ? h("p", { class: "note" }, `Your role${typeof RPA !== "undefined" && RPA.me && RPA.me.role ? " (" + RPA.me.role + ")" : ""} may look at the uploads but not upload: that is an admin action.`) :
       h("section", { class: "sec" }, h("h2", {}, "Upload a purchase-order file"), h("div", { class: "uprow" }, input, h("button", { type: "button", class: "btn fill", onclick: send }, "Upload")),
         d.shipped.available ? [h("h3", {}, "Or load the file that came with the code"),
-          h("p", { class: "muted" }, "inputs/Fabric _ 3Months_4746.xlsx: the purchase orders of 1 Aug to 23 Nov 2026 that the pilot was run on, as SAP exported them on 23 Nov 2026. Each order line is kept once, and it never undoes a newer file."),
+          h("p", { class: "muted" }, "inputs/Fabric _ 3Months_4746.xlsx: the purchase orders of 1 Aug to 23 Nov 2026 that the pilot was run on, as SAP exported them on 23 Nov 2026. Each order line is kept once, and it never undoes a newer file, nor one covering the same orders saved later."),
           h("button", { type: "button", class: "btn line", onclick: shipped }, "Load the purchase file that came with the code")] : null),
       h("section", { class: "sec" }, h("h2", {}, "Uploads"),
         d.uploads.length ? h("div", { class: "gridscroll sup pgt" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Upload", "File", "Where it stands", "What was read"].map(t => h("th", {}, t)))), h("tbody", {}, d.uploads.map(row))))
           : h("p", { class: "muted" }, "No file uploaded yet."),
         det ? skippedView(det) : null),
-      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins, and which is newer is read from what a file covers, not from when it was saved: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved. One file is newer than another only when it was taken after the other for certain. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre, or left out of an order the file has; an older file never changes it or brings it back. Where a file and the history disagree and which is newer cannot be told, the history stands and the upload lists the disagreement, to keep or to take the file's figures (an admin action). A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification (data/plm_specs_for_po.csv) and Fab group; a code whose specification is missing or incomplete is not grouped."));
+      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026); a saved date counts only when it is not before the file's latest order, and a report date a file carries counts in its place. The upload's page says which file won and why, with both saved times. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre, or left out of an order the file has; an older or earlier-saved file never changes it or brings it back. Only where even the saved dates cannot tell (both saved at the same moment, or either file without a saved date that can be used) and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification (data/plm_specs_for_po.csv) and Fab group; a code whose specification is missing or incomplete is not grouped."));
   }
-  // what a file and the history disagree on (which is newer could not be told): listed, to keep or to take the file's
+  // what the saved date decided (GP, 28 Nov 2026): where what two files cover cannot tell which is newer, the file saved
+  // later wins; the upload's page says which won and why, with both saved times
+  const savedWhen = x => x.report_date ? `taken on ${x.report_date.slice(0, 10)}, the report date it carries` : x.saved_at ? `saved ${x.saved_at.slice(0, 16).replace("T", " ")} UTC` : "no saved date";
+  const upName = x => `upload #${x.id}${x.filename ? " (" + x.filename + ")" : ""}`;
+  const nLines = k => `${n0(k)} ${k === 1 ? "line" : "lines"}`;
+  function savedNote(u) {
+    const s = u.summary || {}, won = (s.saved_later_than || []).reduce((a, x) => a + x.lines, 0), lost = (s.saved_earlier_than || []).reduce((a, x) => a + x.lines, 0);
+    return won || lost ? [won ? `saved later than another file covering the same orders: its word taken on ${nLines(won)}` : null,
+      lost ? `${nLines(lost)} where a file covering the same orders, saved later, stands` : null].filter(Boolean).join("; ") + " (open the upload)" : null;
+  }
+  function savedView(u) {
+    const s = u.summary || {}, later = s.saved_later_than || [], earlier = s.saved_earlier_than || [];
+    if (!later.length && !earlier.length) return null;
+    return [h("h3", {}, "Decided by when the files were saved"),
+      h("p", { class: "muted" }, "What these files cover cannot tell which is newer (each could have been taken before the other), so the file saved later wins, as a newer file does: its figures, the lines it shows deleted or no longer bulk, and the lines it leaves out of an order (GP's decision, 28 Nov 2026)."),
+      later.map(x => h("p", {}, `This file won on ${nLines(x.lines)} over ${upName(x)}, because it was saved later: this file ${savedWhen(u)}; ${upName(x)} ${savedWhen(x)}. This file's word replaced that one's.`)),
+      earlier.map(x => h("p", {}, `${upName(x)} won on ${nLines(x.lines)} where this file says otherwise, because it was saved later: ${upName(x)} ${savedWhen(x)}; this file ${savedWhen(u)}. Its word stands there; this file's is not used.`))];
+  }
+  // what a file and the history disagree on (which is newer could not be told, nor by the saved dates): listed, to keep or to take the file's
   const side = x => x.code ? `${x.code} · ${day(x.date)} · ${x.type} · ${x.mill} · ${n0(x.metres)} m at Rs ${n2(x.price)}` + (x.removed ? ` (not counted: ${x.removed})` : "") : `not counted: ${x.removed || "no figures"}`;
   function disagreeView(u) {
     if (!u.disagree_count) return null;
@@ -354,14 +373,14 @@
       catch (e) { toast(e.message, false); }
     };
     return [h("h3", {}, `This file and the history disagree on ${n0(u.disagree_count)} ${u.disagree_count === 1 ? "line" : "lines"}`),
-      h("p", { class: "muted" }, "Which of the two is newer could not be told from what they cover (their latest document dates, a report date, when they were saved), so nothing was guessed: the history's figures were kept." + (u.disagree_open ? " An admin can keep them, or take this file's." : " Settled.")),
+      h("p", { class: "muted" }, "Which of the two is newer could not be told: not from what they cover (their latest document dates, a report date), and not from when they were saved, because they were saved at the same moment or one of them has no saved date that can be used (none, or one before its latest order). So nothing was guessed: the history's figures were kept." + (u.disagree_open ? " An admin can keep them, or take this file's." : " Settled.")),
       u.disagree_open && may("do:upload_purchases") ? h("div", { class: "acts" }, h("button", { type: "button", class: "btn line", onclick: () => settle("kept") }, "Keep the history's figures"), h("button", { type: "button", class: "btn fill", onclick: () => settle("file") }, "Take this file's figures")) : null,
       table(["Order", "Item", "Kept (from)", "This file says", "Settled"], u.disagreements.map(x => [x.po, x.item, wide(side(x.kept) + (x.kept.file ? ` [${x.kept.file}]` : "")), wide(side(x.file)), x.settled_at ? `${day(x.settled_at)}${x.settled_by ? " by " + x.settled_by : ""}: ${x.settled_as === "file" ? "this file's taken" : "the history's kept"}` : "open"]), []),
       u.disagree_count > u.disagreements.length ? h("p", { class: "muted" }, `The first ${u.disagreements.length} are shown; settling covers all ${n0(u.disagree_count)}.`) : null];
   }
   function skippedView(u) {
     const s = u.summary || {};
-    return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`), disagreeView(u),
+    return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`), savedView(u), disagreeView(u),
       u.status === "done" ? h("p", {}, `Order lines dated ${day(s.first)} to ${day(s.last)}, from ${n0(s.mills)} ${s.mills === 1 ? "spelling of a mill" : "mill spellings"}, for ${n0(s.fabrics)} fabric codes: ${n0(s.grouped)} in Fab groups, ${n0(s.costed)} costed.` +
         (s.not_grouped && s.not_grouped.length ? ` Not grouped: ${s.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")}.` : "")) : null,
       u.skipped_count ? [h("p", {}, `Left out: ${n0(u.skipped_count)} rows. ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",
