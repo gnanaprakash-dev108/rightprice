@@ -284,7 +284,7 @@ function yarnWhatIf(ins, list) {
 PAGES.dashboard = async () => {
   const [ins, list] = await Promise.all([getJSON("/api/insights"), (await postJSON("/api/list", {})).json()]);
   state.list = list;
-  const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (every usual range comes from them); panel 3 is the cotton price history; panel 5 is from published accounts." + (ins.pilot_rates ? " " + ins.pilot_rates.replace(/^Panels 1, 2 and 4 are[^.]*\. */, "") : ""))];          // stage 5: and beside Right cost's rates
+  const p = ins.pilot, nodes = [...pageHead("Dashboard", "What you pay against what it should cost, where the money goes, and what to ask before you negotiate. Panels 1, 2 and 4 are your purchase orders as Right cost costs them now: on the rates in use (the order month's dated yarn rate where there is one), worked out again at every rate edit or applied cost-sheet draft (every usual range comes from them); panel 3 is the cotton price history; panel 5 is from published accounts." + (ins.pilot_rates ? " " + ins.pilot_rates.replace(/^Panels 1, 2 and 4 are[^.]*\. */, "") : ""))];          // stage 5: and beside Right cost's rates
   // first: newly quoted fabrics that need a look before their price is accepted
   try {
     const box = h("div", { class: "card alerts", hidden: true });
@@ -1478,6 +1478,7 @@ PAGES.pilot = async () => {
   const stat = (lbl, val, note) => h("div", { class: "card stat" }, h("div", { class: "lbl" }, lbl), h("div", { class: "val num" }, val), h("div", { class: "note" }, note));
   const sect = (title, key, sub, open) => p[key] ? h("details", { class: "card", open: open || null }, h("summary", {}, title), sub ? h("p", { class: "sub" }, sub) : null, dataTable(p[key], { label: title, filter: p[key].rows.length > 15 })) : null;
   return [...pageHead("Pilot results", "100% cotton wovens costed with the current rate master and compared with the price paid. Gap is the purchase price above should-cost."),
+    p.as_run ? h("div", { class: "notice info" }, p.as_run) : null,          // stage 2: the pilot as run, ZLOI included
     h("div", { class: "grid g4" },
       stat("Fabrics costed", fmt(v(all, "Fabrics"), 0), `${fmt(v(hb, "Fabrics"), 0)} held back as the fair test`),
       stat("Median gap", v(all, "Median gap %").toFixed(1) + "%", `Held-back third ${v(hb, "Median gap %").toFixed(1)}%`),

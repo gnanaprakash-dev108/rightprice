@@ -114,7 +114,7 @@ def near_count(x):
 def main():
     from rules import dated
     m0, inp, _, _ = pilot.build_inputs()
-    months, lines = dated.order_months(), dated.po_lines()
+    months, lines = dated.pilot_order_months(), dated.po_lines()       # the pilot's own lines, ZLOI included
     inp = inp.copy()
     inp["Construction"] = inp.apply(signature, axis=1)
     inp["Order month"] = inp["Fabric code"].astype(str).map(lambda c: (months.get(c) or {}).get("month"))

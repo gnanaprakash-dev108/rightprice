@@ -9,6 +9,57 @@
   the checks now test those guards on the screen's address. The assistant has 45 tools.
 - The two tracker remove tools (the assistant's own step; any step): **both kept**. Nothing changed.
 
+## Answered 28 Nov 2026 (stage 2's second review: purchase files whose order cannot be told; widths)
+
+- **Purchase files whose order cannot be told from what they cover: "Saved later wins"** (GP chose this over "an admin
+  settles, as built"). What a file covers still decides first: a file was taken no earlier than its latest document date
+  (or a report date it carries) and no later than it was saved, and one taken after the other for certain is newer.
+  Only where that cannot tell (a correction covering the same orders, the same file saved again), **the file saved later
+  replaces the history's figures automatically**, with no admin's choice: its figures, the lines it shows deleted or no
+  longer bulk, exactly as a certainly newer file. So the first file saved again later now wins over the correction. A
+  file whose saved date cannot be used is dated by its upload (see the date rules below). The upload's page says which
+  file won and why ("saved later", with both saved times). An earlier-saved file read after, or at the same moment in
+  another server process, brings nothing back. **What is left with no way to tell** (two files with the very same dates,
+  to the second) keeps the earlier behaviour for that remainder only: the history stands and the disagreement is listed
+  on the upload for an admin to keep or to take the file's figures (Purchase files, and the assistant's
+  settle_purchase_disagreements). Done.
+- **The history starts from the purchase file that came with the code** ("load it for entire analysis"; GP will upload
+  the past 10 years himself). When the first file of any kind is uploaded and that one is not in yet, it is loaded
+  first, as its own upload by the same person, and the uploaded one after it; the usual rules put them in order. The
+  Load button stays. Done.
+- **A line simply not in a newer file of the same order is kept** ("keep it"): never taken as cancelled or dropped.
+  Only a line a file shows deleted, blocked, no longer bulk, not in rupees or per metre, or with other figures is
+  changed or removed. So a later download covering a longer span (July to date after August to date) takes each line
+  once; the upload says how many were already in and lists the ones it updated. Done.
+- **Every purchase order is loaded, whatever its construction details**: a code with no PLM specification (or an
+  incomplete one) is counted in its prices like any other, with its construction blank; the upload and the price popup
+  say "No PLM specification". Done. (Sample and yardage order types: still being asked; the kept types are unchanged.)
+- **File size: one file per year or per 6 months.** A file over the limit (40 MB now; the limit itself is still to be
+  decided) is refused on the screen as soon as it is chosen, before anything is sent, naming the limit and saying to
+  split it by 6 months or by year. Done.
+- **Dates a file carries (GP's rule taken literally, set by the build lead on 28 Nov after three rounds of review; to tell
+  GP):** a file covers from its latest order (or its report date, when that is later) to when it was saved; with no
+  saved date that can be used, to when it was uploaded. A row dated after the file was saved (a forward-dated order or a
+  typo; or after the upload, with no saved date) is left out, listed on the upload as "dated after the file was saved:
+  check it in SAP", and the saved date stays usable; a saved date after the upload (a clock set wrong) is not used; a
+  report date counts only between the latest order and the saved date. A file newer for certain wins; otherwise, when
+  both have a saved date that can be used, the one saved later wins (report-dated or not); otherwise (the same saved
+  moment, or a file without a saved date that can be used) the history stands and the disagreement is listed for an
+  admin: such a file never wins by a saved date. Document dates are days in India, saved times UTC.
+- **Right cost's purchase-order costings follow the rates in use** (or the order month's dated yarn rate): every rate
+  edit or applied cost-sheet draft works them out again, so Right cost, the price popup, the Fab group pages and Create
+  cost agree. Kept as built; the Dashboard and Pilot results now say so (only the Pilot results page keeps the pilot's
+  own figures). (One cost-sheet draft moved 232 purchase-order should-costs and 191 verdicts in the review.)
+- **A price to check in SAP (the build lead's data-validity guard, 28 Nov; to tell GP):** a bulk line priced more than
+  ten times, or under a tenth of, the median of its code's other counted lines (with fewer than two others, with its Fab
+  group's lines too) is held apart: stored, counted nowhere (as ZLOI), listed on the upload, beside the fabric (price
+  popup) and beside the mill (supplier page); an admin can count it after checking SAP, or hold it apart again. In GP's
+  one-year file it holds exactly one line: PO 3310092944/10, Rs 71,158.75 a metre on 1,751 m, where the same order was
+  raised again at Rs 755 (two lines a tenfold apart with nothing else to tell: the higher is held).
+- **Width tolerance: chain, as built.** Codes alike in the other eight fields whose widths are within half an inch of
+  each other, directly or through other codes, are one group, so a group can run over more than half an inch from end
+  to end (57, 57.4 and 57.8 in are one group). Kept; no change.
+
 ## Answers given 25 Nov 2026, night
 
 - Data: the 1,696 purchase-order costings (plus the fabric list). Done.
@@ -48,6 +99,58 @@ S5-8. **The calibration draft, tested fairly.** On cloth it was not fitted on, a
       weaving rate. 3. Wait for the July to November yarn prices and test again on dated rates.
 S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rate of the rate master with no data behind
       it: the brief and the verdicts treat it as unsure. 1. As now. 2. Refuse a typed rate with no source.
+
+## Built 28 Nov 2026 (the second review of stage 2): which purchase file is newer
+
+- **Which file is newer is read first from what it covers**: a file was taken no earlier than its latest document date
+  (every row with a date, kept or not), or the report date it carries in a column of its own (Report Date, Export Date,
+  Extracted On, Run Date, As of), and no later than it was saved. One file is newer than another for certain when it
+  was taken after the other for certain: a later SAP export, with orders dated after the earlier one was saved, is.
+  SAP's own export carries no report date. Where that cannot tell, the file saved later wins (GP, 28 Nov 2026, above).
+- **Every order line keeps the word of the newest file that covered it**: its figures, or that it was deleted, blocked,
+  no longer bulk, not in rupees or per metre, even before any file gave its figures. So an older file read after a newer
+  one (or at the same time, in two server processes) brings nothing back.
+- **Right cost's purchase-order rows read the purchase history alone once it holds a file**, as the price popup and the
+  Fab group pages do, so the two never disagree. Before any file is loaded they show the pilot's purchases as the
+  purchase file that came with the code has them; the first upload loads that file first (GP, 28 Nov 2026, above). The Suppliers tab of Right cost counts as the supplier list does (a code bought only on ZLOI is not
+  counted). A code that moves group says what changed in its specification, or that a new code joined its widths; a
+  code not costed now shows its specification as it is now.
+- **Found and fixed in the second review of 28 Nov:** an older file's deletion never overrides a newer file's figures;
+  a document date in the future (a mistyped year) no longer dates a file
+  as newer than every export; costing choices a restart left half-done, or worked out on the rate master's lists as they
+  were, are worked out again; Right cost's purchase-order rows keep their supplier in the choices they open in Cost a
+  fabric. A row whose choices differ from the pilot's says what differs, not that its specification changed.
+- A code bought only on ZLOI orders is not counted as bought on the supplier list and pages; a group's mill with only
+  ZLOI lines is listed, not counted; Pilot results says it is the pilot as run, ZLOI included (1,696 fabrics), beside
+  the 1,512 every other page counts.
+- A code whose PLM specification changes is costed again at the next upload; a group whose codes all changed keeps its
+  code, is renamed, and its page says what changed (merges and undone merges are recorded there too, with who). Right
+  cost's purchase-order rows cost each code on the choices the price popup costs (the purchase history's, from the PLM
+  specification), so the two cannot disagree.
+
+## Answered 27 Nov 2026 (stage 2's review: purchase history and Fab groups)
+
+- **ZLOI order lines: kept out of every calculation, everywhere** ("Yes, everywhere"). 402 of the 1,377 priced ZLOI lines
+  are at exactly Rs 550; 661 are followed by a regular BO order for the same code and mill (239 with the same metres); they
+  made Rs 2.61 crore of the Rs 3.24 crore "above the range". They stay in the database and are shown apart as "Outliers
+  (ZLOI)", with date, metres and price: beside the fabric (the price popup, Right cost's fabric page) and beside the mill
+  (the supplier page, the group page's by-mill table). Left out of: price paid, metres, medians, ranges, "above the range",
+  a should-cost's quantity band, and Right cost's purchase-order rows (price paid, metres, should-cost, verdict), so also the
+  supplier pages, alerts, drafts and the dashboard's fit by fabric type. pilot/Pilot_Results.xlsx is not changed or re-run:
+  Right cost works its rows out again from the purchase lines. A code bought only on ZLOI shows no price paid, only its
+  outliers. Done. With stage 5's dated yarn rates, a code's order month leaves ZLOI out too: 155 codes' order month
+  moves, and the 184 codes bought only on ZLOI have no order month, so they are costed on today's rates and say why.
+  The price popup and the Fab group pages cost each code on its order month as Right cost does, so they still agree.
+  (calibrate_splits.py keeps the pilot's own lines, ZLOI included, so its held-back test reads as before.)
+- **Width: within half an inch is one group.** Done as a tolerance (the second review: rounding split 57.4 and 57.5 in):
+  codes alike in the other eight fields whose widths are within half an inch of each other, directly or through other
+  codes, are one group (57 in and 145 cm; 57.4 and 57.5 in). It depends only on the widths held, never on the order files
+  come in; the group's name gives the widths it runs from and to. Through each other, a group can run over more than
+  half an inch (57, 57.4 and 57.8 in are one group): GP confirmed this on 28 Nov 2026 ("chain, as built", above).
+- **A usual range needs purchases on at least 5 separate orders** (distinct order numbers, ZLOI left out), not 5 lines. The
+  price popup draws a group's median only when the group has a range. Done.
+- Finish names written differently ("Normal Soft" and "Soft Finish", "Regular" and "Normal Soft") stay apart unless an
+  admin merges them. Kept.
 
 ## Answered 27 Nov 2026 (for stages 2, 3 and 5)
 

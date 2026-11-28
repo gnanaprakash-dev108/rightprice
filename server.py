@@ -19,12 +19,14 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
 import httpx
 import websockets
 from fastapi import Body, FastAPI, File, Request, UploadFile, WebSocket
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -56,6 +58,8 @@ async def lifespan(_app):
     import anyio.to_thread
     anyio.to_thread.current_default_thread_limiter().total_tokens = 120
     await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
+    from rules import purchases as _purchases       # stage 2: purchase files left half-read by a restart are read again
+    threading.Thread(target=_purchases.resume_at_start, daemon=True).start()
     if os.environ.get("RIGHTPRICE_NO_CLASSIC") != "1":
         _classic = subprocess.Popen(
             [sys.executable, "-m", "streamlit", "run", os.path.join(HERE, "app.py"),
@@ -255,7 +259,9 @@ def store_status():
 def rightcost_page():
     """The earlier address of Right cost: it is now a page of the shell."""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/#rightcost", status_code=307)
+    # no '#' in the address given: the browser keeps the one asked for (/rightcost#group/Fab-0001), and the shell opens
+    # Right cost when there is none
+    return RedirectResponse("/?from=rightcost", status_code=307)
 
 
 def _who(request):
@@ -343,9 +349,20 @@ def pack(options: dict = Body(default={})):
     return pack_rules.pack(options)
 
 
+_costs_body = [(None, None)]           # (the last answer, its JSON), replaced whole
+
+
 @app.get("/api/costs")
 def costs():
-    return rightcost.costs()
+    # the answer is kept while nothing it rests on changes (rightcost.costs): its JSON is kept with it, so a page asking
+    # every half second while the verdicts are worked out does not turn 3 MB into JSON each time (on a slow machine that
+    # took the background work's time: the CI run of 4e1f6f0)
+    val = rightcost.costs()
+    kept, body = _costs_body[0]
+    if kept is not val:
+        body = JSONResponse(jsonable_encoder(val)).body
+        _costs_body[0] = (val, body)
+    return Response(body, media_type="application/json")
 
 
 @app.post("/api/costs/download")
@@ -561,6 +578,77 @@ def users_change(payload: dict = Body(...), request: Request = None):
 @app.post("/api/users/permissions")
 def users_permissions(payload: dict = Body(...), request: Request = None):
     return access.set_permissions(payload, request.headers)
+
+
+# ------------------------------------------------------------------ stage 2: purchase history, Fab groups (on a database only)
+# Who may look and who may upload or merge: rules/access.py (ROUTES).
+from rules import fab_groups, purchases  # noqa: E402
+
+
+@app.get("/api/purchases/status")
+def purchases_status():
+    return purchases.status()
+
+
+@app.get("/api/purchases/uploads")
+def purchase_uploads():
+    return purchases.uploads()
+
+
+@app.post("/api/purchases/upload")
+async def purchase_upload(request: Request, file: UploadFile = File(...)):
+    data = await file.read(purchases.MAX_BYTES + 1)        # never more than the most that is read: a larger file is refused unread
+    return await asyncio.to_thread(purchases.upload, file.filename, data, _who(request))
+
+
+@app.post("/api/purchases/load-shipped")
+def purchase_load_shipped(request: Request = None):
+    return purchases.upload_shipped(who=_who(request))
+
+
+@app.get("/api/purchases/uploads/{upload_id}")
+def purchase_upload_detail(upload_id: int):
+    return purchases.upload_detail(upload_id)
+
+
+@app.post("/api/purchases/disagreements")
+def purchase_settle(payload: dict = Body(...), request: Request = None):
+    return purchases.settle(payload, who=_who(request))
+
+
+@app.post("/api/purchases/price-check")
+def purchase_price_check(payload: dict = Body(...), request: Request = None):
+    return purchases.count_held_price(payload, who=_who(request))
+
+
+@app.get("/api/purchases/skipped/{upload_id}")
+def purchase_upload_skipped(upload_id: int):
+    return _file(purchases.skipped_download(upload_id))
+
+
+@app.get("/api/purchases/history")
+def purchase_history(code: str):
+    return purchases.history(code)
+
+
+@app.get("/api/groups")
+def groups_list():
+    return fab_groups.listing()
+
+
+@app.get("/api/groups/{code}")
+def group_page(code: str):
+    return fab_groups.page(code)
+
+
+@app.post("/api/groups/merge")
+def groups_merge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.merge(payload, who=_who(request))
+
+
+@app.post("/api/groups/unmerge")
+def groups_unmerge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.unmerge(payload, who=_who(request))
 
 
 

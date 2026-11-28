@@ -279,7 +279,8 @@ def main():
         check("The shell is the home page; the earlier screens are served inside it", "rightcost.js?v=" in shell.text and "rightcost.css?v=" in shell.text
               and c.get("/rightcost.js").status_code == 200 and "app.js?v=" in c.get("/?embed=1").text)
         old = c.get("/rightcost", follow_redirects=False)
-        check("The old Right cost address leads to its page in the shell", old.status_code == 307 and old.headers["location"] == "/#rightcost")
+        check("The old Right cost address leads to its page in the shell, keeping any '#' part the browser carries (stage 2: /rightcost#group/Fab-0001)",
+              old.status_code == 307 and old.headers["location"] == "/?from=rightcost" and 'get("from") === "rightcost"' in c.get("/rightcost.js").text)
         check("Right cost: downloads", c.post("/api/costs/download", json={"source": "Purchase orders"}).content[:2] == b"PK")
         for css in ("web/app.css", "web/rightcost.css"):
             txt = open(css, encoding="utf8").read()
@@ -646,15 +647,1126 @@ def main():
         check("Unknown file type refused", c.post("/api/intake/file", files={"file": ("x.exe", io.BytesIO(b"x"))}).status_code == 400)
         stage5 = dated_checks(c, check)         # (called first: `ok &= f()` would read ok before f could clear it)
         ok &= stage5
+        stage2_checks(c, check)         # stage 2: purchase history and Fab groups (last: it loads purchase files)
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
+
+
+# ===================================================================== stage 2: purchase history and Fab groups
+def _stage2_codes():
+    """Real fabric codes for the made-up purchase file: three costed 100% cotton codes of one construction (A1, A2, A3)
+    and one of another (B1) from the pilot; one whose PLM specification is incomplete. Prices and mills are made up."""
+    import pandas as pd
+    from rules import fab_groups, purchases
+    specs = purchases.plm_specs()
+    pilot_codes = pd.read_excel(os.path.join(HERE, "pilot", "Pilot_Results.xlsx"), sheet_name="Fabrics")["Fabric code"].astype(str)
+    by_sig = {}
+    for code in pilot_codes:
+        _, sig, _ = fab_groups.signature_of(specs.get(code))
+        if sig:
+            by_sig.setdefault(sig, []).append(code)
+    sigs = sorted(by_sig, key=lambda s: (-len(by_sig[s]), s))
+    fields = lambda sig: fab_groups.signature_of(specs[by_sig[sig][0]])[0]
+    a = by_sig[sigs[0]]
+    b = by_sig[next(x for x in sigs[1:] if fab_groups.differences(fields(sigs[0]), fields(x)))]      # another cloth, not only another width or finish
+    incomplete = next(code for code in sorted(specs) if "incomplete" in (fab_groups.signature_of(specs[code])[2] or ""))
+    return a[0], a[1], a[2], b[0], incomplete
+
+
+def _stage2_file(rows, saved=None, extra=()):
+    """A purchase-order file in the SAP export's shape, from made-up rows (each a dict over the export's columns); with
+    `saved`, the workbook says it was saved then (as SAP's export does); saved="none": it says nothing of when. `extra`:
+    more columns (a report date)."""
+    import zipfile
+    import pandas as pd
+    cols = ["Purchasing Document", "Plant", "Document Date", "Item", "Material", "Short Text", "Purchasing Doc. Type", "Order Quantity",
+            "Order Unit", "Net Price", "Name of Supplier", "Currency", "Deletion Indicator"] + list(extra)
+    buf = io.BytesIO()
+    pd.DataFrame([{k: r.get(k) for k in cols} for r in rows], columns=cols).to_excel(buf, index=False)
+    if saved is None:
+        return buf.getvalue()
+    src, out = zipfile.ZipFile(io.BytesIO(buf.getvalue())), io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for item in src.infolist():
+            data = src.read(item.filename)
+            if item.filename == "docProps/core.xml":
+                if saved == "none":
+                    data = re.sub(rb"<dcterms:(modified|created)[^>]*>[^<]*</dcterms:(modified|created)>", b"", data)
+                else:
+                    data = re.sub(rb"(<dcterms:(modified|created)[^>]*>)[^<]*(</dcterms:)", rb"\g<1>" + saved.encode() + rb"Z\g<3>", data)
+            z.writestr(item, data)
+    return out.getvalue()
+
+
+def _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl):
+    """The second reviews of stage 2 (27 and 28 Nov 2026) and GP's decisions of 28 Nov: every order line keeps the word of
+    the newest file that covered it, so an older file read after a newer one brings nothing back, one after the other and
+    both at once; which file is newer is read first from what it covers (its latest document date, a report date it
+    carries), and where that cannot tell, from when it was saved (saved later wins); nothing dated after the upload is
+    trusted; a line simply not in a newer file stays; only two files with the very same dates are listed for an admin.
+    Made-up orders 99000000 30 to 82. Every saved date made up here is before 28 Nov 2026, so none is after its upload."""
+    import pandas as pd
+    import store
+    import data_purchases as dp
+    from rules import purchases
+    st = store.get()
+    up = lambda name, data: wait(c.post("/api/purchases/upload", files={"file": (name, io.BytesIO(data))}).json()["id"])
+    detail = lambda u: c.get(f"/api/purchases/uploads/{u['id'] if isinstance(u, dict) else u}").json()
+    held = lambda po: {r[0]: (r[1], r[2], r[3]) for r in st._read(lambda cur: cur.all(
+        "SELECT item, price, doc_type, removed_why FROM purchase_line WHERE po_number = %s ORDER BY item", (str(po),)))}
+    counted = lambda po: {i: (p, t) for i, (p, t, gone) in held(po).items() if gone is None}
+    state_of = lambda po: {r[0]: (r[1], r[2]) for r in st._read(lambda cur: cur.all(
+        "SELECT item, state_upload_id, state_to FROM purchase_line WHERE po_number = %s ORDER BY item", (str(po),)))}
+    by_saved = lambda u, side: [(x["id"], x["saved_at"], x["lines"]) for x in u["summary"].get(side, [])]
+    # N1, one after the other: the newer file read first (item 10 deleted in SAP; item 20 not in it), the older after it
+    p1 = lambda po, item, **kw: row(po, item, a2, "2026-11-05", raj, 400, 110 + item / 10, **kw)
+    newer1 = lambda po: _stage2_file([p1(po, 10, **{"Deletion Indicator": "L"}), p1(po, 30), row(po + 1, 10, a2, "2026-11-24", raj, 50, 112)],
+                                     saved="2026-11-25T08:00:00")
+    older1 = lambda po: _stage2_file([p1(po, 10), p1(po, 20), p1(po, 30, **{"Net Price": 99})], saved="2026-11-12T08:00:00")
+    n1, o1 = up("newer first.xlsx", newer1(9900000030)), up("older after it.xlsx", older1(9900000030))
+    check(f"{k} a newer file read first (a line deleted in SAP), then an older one: the deleted line does not come back, nor the older price; "
+          "the line the newer file does not have stays, from the older one (GP, 28 Nov 2026: a line not in a newer file is not cancelled); "
+          "document dates are days in India, saved times UTC",
+          counted(9900000030) == {"20": (112.0, "BO"), "30": (113.0, "BO")} and o1["rows_older"] == 2 and o1["rows_new"] == 1 and o1["rows_loaded"] == 3
+          and n1["covers_from"] == "2026-11-23T18:30:00" and o1["covers_to"] == "2026-11-12T08:00:00",
+          f"{held(9900000030)} {({x: o1[x] for x in o1 if x.startswith('rows')})} {n1['covers_from']}")
+    # N1, both at once in two server processes (the newer one in the other)
+    for _ in range(200):
+        if purchases._jobs["thread"] is None:
+            break
+        time.sleep(0.1)
+    with st.tx(write=dp.KIND) as cur:
+        u_new = dp.add_upload(cur, "purchase_orders", "newer, at once.xlsx", "check", newer1(9900000040), "n", store._now())
+        u_old = dp.add_upload(cur, "purchase_orders", "older, at once.xlsx", "check", older1(9900000040), "o", store._now())
+    other = subprocess.Popen([sys.executable, "-c", f"from rules import purchases; purchases.run({u_new})"], cwd=HERE, env=dict(os.environ),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    purchases.run(u_old)
+    _, err_ = other.communicate(timeout=300)
+    both = [wait(u_new), wait(u_old)]
+    check(f"{k} the same two files read at once in two server processes: the same outcome, nothing brought back",
+          other.returncode == 0 and all(x["status"] == "done" for x in both) and counted(9900000040) == {"20": (112.0, "BO"), "30": (113.0, "BO")},
+          f"{err_[-300:]} {held(9900000040)}")
+    # an older file's deletion never overrides a newer file's figures (GP, 28 Nov 2026)
+    tri = lambda po, item, day, price, **kw: row(po, item, b1, day, nsl, 100, price, **kw)
+    up("order 9900000080, live at 999 (saved 6 Nov).xlsx", _stage2_file([tri(9900000080, 10, "2026-11-05", 145), tri(9900000080, 20, "2026-11-05", 999)],
+                                                                        saved="2026-11-06T08:00:00"))
+    up("order 9900000080, deleted (saved 2 Nov).xlsx", _stage2_file([tri(9900000080, 10, "2026-11-01", 140), tri(9900000080, 20, "2026-11-01", 140, **{"Deletion Indicator": "L"})],
+                                                                   saved="2026-11-02T08:00:00"))
+    check(f"{k} an older file showing a line deleted, read after a newer one that has it live: the newer figures stand",
+          counted(9900000080) == {"10": (145.0, "BO"), "20": (999.0, "BO")}, str(held(9900000080)))
+    # N2, GP's decision of 28 Nov 2026 ("saved later wins"): a correction covering the same orders as the file it corrects
+    # (what they cover cannot tell which is newer) wins because it was saved later, and so does the first file saved
+    # again after it; the one saved earlier, read after, brings nothing back
+    q = lambda po, price, item=10, **kw: row(po, item, b1, "2026-11-15", nsl, 282, price, **kw)
+    base_rows = [q(9900000050, 282), q(9900000051, 300), q(9900000052, 310, **{"Purchasing Doc. Type": "ZLOI"}), q(9900000053, 280), q(9900000053, 281, item=20)]
+    u_f = up("first.xlsx", _stage2_file(base_rows, saved="2026-11-16T08:00:00"))["id"]
+    corr = _stage2_file([q(9900000050, 292), q(9900000051, 300, **{"Deletion Indicator": "L"}), q(9900000052, 310), q(9900000053, 280)], saved="2026-11-26T08:00:00")
+    u_c = up("correction.xlsx", corr)["id"]
+    det = detail(u_c)
+    now = lambda: [counted(f"99000000{n}") for n in (50, 51, 52, 53)]
+    after_corr = now()
+    check(f"{k} a correction covering the same orders as the first file, saved later: what they cover cannot tell which is newer, so the one saved "
+          "later wins at once, no admin asked: its price, its order type (ZLOI to BO, now counted), the line it shows deleted; the line it does not "
+          "have stays; nothing listed; the upload says it won on 3 lines over the first file, saved later, with both saved times, and lists them",
+          after_corr == [{"10": (292.0, "BO")}, {}, {"10": (310.0, "BO")}, {"10": (280.0, "BO"), "20": (281.0, "BO")}] and det["disagree_count"] == 0
+          and (det["rows_changed"], det["rows_same"], det["rows_removed"], det["rows_dropped"], det["rows_disagree"], det["rows_loaded"]) == (2, 1, 1, 0, 0, 3)
+          and by_saved(det, "saved_later_than") == [(u_f, "2026-11-16T08:00:00", 3)] and det["saved_at"] == "2026-11-26T08:00:00"
+          and sorted((x["po"], x["now"].get("price"), bool(x["now"].get("removed"))) for x in det["summary"]["changed_lines"])
+          == [("9900000050", 292.0, False), ("9900000051", None, True), ("9900000052", 310.0, False)]
+          and all(v == (u_c, "2026-11-26T08:00:00") for po in (9900000050, 9900000051) for v in state_of(po).values())
+          and state_of(9900000053) == {"10": (u_c, "2026-11-26T08:00:00"), "20": (u_f, "2026-11-16T08:00:00")},
+          f"{after_corr} {({x: det[x] for x in det if x.startswith('rows')})} {det['summary'].get('saved_later_than')} {state_of(9900000053)}")
+    u_r = up("first, saved again.xlsx", _stage2_file(base_rows, saved="2026-11-27T08:00:00"))["id"]
+    det_r = detail(u_r)
+    after_r = now()
+    check(f"{k} the first file saved again later now wins over the correction (saved later): its figures replace the correction's (282, the line "
+          "deleted there counted again, ZLOI again); the upload says so with both saved times; each line carries its saved date",
+          after_r == [{"10": (282.0, "BO")}, {"10": (300.0, "BO")}, {"10": (310.0, "ZLOI")}, {"10": (280.0, "BO"), "20": (281.0, "BO")}]
+          and det_r["disagree_count"] == 0 and (det_r["rows_changed"], det_r["rows_same"]) == (3, 2) and by_saved(det_r, "saved_later_than") == [(u_c, "2026-11-26T08:00:00", 3)]
+          and all(v == (u_r, "2026-11-27T08:00:00") for po in (9900000050, 9900000051, 9900000052, 9900000053) for v in state_of(po).values()),
+          f"{after_r} {({x: det_r[x] for x in det_r if x.startswith('rows')})} {det_r['summary'].get('saved_later_than')}")
+    det_c2 = detail(up("correction, read again.xlsx", corr))
+    check(f"{k} the correction read again after it, saved earlier: it brings nothing back nor changes anything; its lines are counted as not used, "
+          "and the upload says the later-saved file stands on the 3 lines where they differ",
+          now() == after_r and det_c2["disagree_count"] == 0 and (det_c2["rows_older"], det_c2["rows_changed"], det_c2["rows_removed"]) == (3, 0, 0)
+          and by_saved(det_c2, "saved_earlier_than") == [(u_r, "2026-11-27T08:00:00", 3)] and not det_c2["summary"].get("saved_later_than"),
+          f"{now()} {({x: det_c2[x] for x in det_c2 if x.startswith('rows')})} {det_c2['summary'].get('saved_earlier_than')}")
+    # what nothing can tell: two files with the very same dates, to the second
+    gp_ = {"X-MS-CLIENT-PRINCIPAL-NAME": "gp@example.com"}            # the sign-in's name (permissions are off in this run)
+    det_s = detail(up("first, edited, saved the same moment.xlsx", _stage2_file([q(9900000050, 289)] + base_rows[1:], saved="2026-11-27T08:00:00")))
+    check(f"{k} a file covering the same orders saved at the very same moment: nothing can tell, so the history stands and the one line it differs "
+          "on is listed for an admin",
+          now() == after_r and det_s["disagree_count"] == 1 and det_s["rows_disagree"] == 1 and det_s["rows_same"] == 4
+          and [(x["po"], x["kept"].get("price"), x["file"].get("price")) for x in det_s["disagreements"]] == [("9900000050", 282.0, 289.0)], str(det_s["disagreements"])[:300])
+    kept = c.post("/api/purchases/disagreements", json={"upload_id": det_s["id"], "take": "kept"}, headers=gp_)
+    twice = c.post("/api/purchases/disagreements", json={"upload_id": det_s["id"], "take": "kept"})
+    bad = [c.post("/api/purchases/disagreements", json=b).status_code for b in ({}, {"upload_id": det_s["id"], "take": "both"}, {"upload_id": 999999, "take": "kept"})]
+    det_s2 = detail(det_s["id"])
+    check(f"{k} keeping the history's figures changes nothing and settles them, with who and how; settling twice, or without saying which upload "
+          "or which way, is refused",
+          kept.status_code == 200 and kept.json()["settled"] == 1 and now() == after_r and det_s2["disagree_open"] == 0
+          and [(x["settled_as"], x["settled_by"]) for x in det_s2["disagreements"]] == [("kept", "gp@example.com")]
+          and twice.status_code == 400 and "nothing left to settle" in twice.json()["detail"] and bad == [400, 400, 404],
+          f"{kept.text[:200]} {twice.status_code} {twice.text[:120]} {bad} {[(x['settled_as'], x['settled_by']) for x in det_s2['disagreements']]}")
+    det_t = detail(up("first, edited again, saved the same moment.xlsx", _stage2_file([base_rows[0], q(9900000051, 305)] + base_rows[2:], saved="2026-11-27T08:00:00")))
+    took = c.post("/api/purchases/disagreements", json={"upload_id": det_t["id"], "take": "file"}, headers=gp_)
+    settled_t = [(x["settled_as"], x["settled_by"]) for x in detail(det_t["id"])["disagreements"]]
+    check(f"{k} an admin takes that file's figures: the line follows it (305), settled as the file's, by whom; the other lines as they were",
+          det_t["disagree_count"] == 1 and took.status_code == 200 and took.json()["settled"] == 1 and counted(9900000051) == {"10": (305.0, "BO")}
+          and [now()[0]] + now()[2:] == [after_r[0]] + after_r[2:] and settled_t == [("file", "gp@example.com")], f"{took.text[:200]} {settled_t} {now()}")
+    # nothing dated after the upload is trusted; a file with no saved date it can be dated by is dated by its upload
+    early = up("an order dated after the file was saved.xlsx", _stage2_file([q(9900000052, 315)], saved="2026-11-10T08:00:00"))
+    early_d = detail(early)
+    check(f"{k} a row dated after its file was saved (a forward-dated order, or a typo): left out and listed (check it in SAP), so the file keeps its "
+          "saved date and nothing changes",
+          early["covers_saved"] == "2026-11-10T08:00:00" and early["rows_loaded"] == 0 and early_d["summary"]["future_count"] == 1
+          and [x["kind"] for x in early_d["skipped"]] == ["Dated after the file was saved"] and "check it in SAP" in early_d["skipped"][0]["why"]
+          and counted(9900000052) == {"10": (310.0, "ZLOI")}, str({x: early[x] for x in early if x.startswith(("rows", "file", "covers"))}))
+    nosave = _stage2_file([row(9900000060, 10, b1, "2026-08-21", nsl, 100, 150), row(9900000061, 10, b1, "2026-08-20", nsl, 100, 151),
+                           row(9900000050, 10, b1, "2026-08-21", nsl, 282, 295)], saved="none")
+    u_n = up("no saved date.xlsx", nosave)
+    check(f"{k} a file with no saved date is taken by its upload at the latest and never wins by a saved date: its new lines are taken, and where "
+          "it differs from the history nothing is lost or guessed: listed for an admin",
+          u_n["file_date"] == "2026-08-21" and u_n["covers_saved"] is None and u_n["covers_to"] > "2026-11-27T08:00:00" and "no saved date it can be dated by" in u_n["file_date_from"]
+          and (u_n["rows_new"], u_n["rows_changed"], u_n["rows_disagree"]) == (2, 0, 1) and counted(9900000060) == {"10": (150.0, "BO")}
+          and counted(9900000050) == {"10": (282.0, "BO")}, str({x: u_n[x] for x in u_n if x.startswith(("rows", "file", "covers"))}))
+    # an order dated a day in India against a saved time in UTC: saved 19:30 UTC on 27 Nov is 01:00 on 28 Nov in India
+    ist = lambda price, saved: _stage2_file([tri(9900000063, 10, "2026-11-28", price)], saved=saved)
+    u_x = up("taken just after midnight in India.xlsx", ist(120, "2026-11-27T19:30:00"))
+    u_y = up("taken that morning.xlsx", ist(125, "2026-11-28T05:00:00"))
+    check(f"{k} an export taken just after midnight in India with that day's orders: its saved date counts (no 'before its latest order'), and the "
+          "one saved later that morning wins",
+          u_x["covers_to"] == "2026-11-27T19:30:00" and "not used" not in u_x["file_date_from"] and counted(9900000063) == {"10": (125.0, "BO")}
+          and u_y["rows_changed"] == 1, f"{u_x['file_date_from']} {held(9900000063)}")
+    # a saved date after the upload (the workbook's clock set wrong) is not used: such a file never wins by a saved date
+    u_fu = up("saved by a clock a year on.xlsx", _stage2_file([tri(9900000064, 10, "2026-11-15", 130)], saved="2027-11-20T00:00:00"))
+    time.sleep(1.5)
+    u_re = up("the real export, saved now.xlsx", _stage2_file([tri(9900000064, 10, "2026-11-15", 135)], saved=purchases.utc_now()))
+    up("a real export saved 25 Nov.xlsx", _stage2_file([tri(9900000083, 10, "2026-11-15", 135), tri(9900000083, 20, "2026-11-15", 140, **{"Deletion Indicator": "L"})],
+                                                       saved="2026-11-25T08:00:00"))
+    u_fu2 = up("saved by a clock a year on, uploaded after it.xlsx", _stage2_file([tri(9900000083, 10, "2026-11-15", 130), tri(9900000083, 20, "2026-11-15", 140)],
+                                                                                   saved="2027-11-20T00:00:00"))
+    check(f"{k} a workbook saved by a clock a year on: that saved date is not used (said on the upload) and the file never wins by a saved date, "
+          "before a real export or after it: where they differ the history stands and an admin is asked; the line the real export deleted stays out",
+          u_fu["covers_saved"] is None and "clock was wrong" in u_fu["file_date_from"] and counted(9900000064) == {"10": (130.0, "BO")} and u_re["rows_disagree"] == 1
+          and counted(9900000083) == {"10": (135.0, "BO")} and u_fu2["rows_disagree"] == 2 and u_fu2["covers_saved"] is None,
+          f"{u_fu['file_date_from']} {held(9900000064)} {held(9900000083)}")
+    # report dates: used only between the latest order and the saved date
+    rpt = lambda rows_, saved, report: _stage2_file([dict(r_, **{"Report Date": pd.Timestamp(report)}) for r_ in rows_], saved=saved, extra=["Report Date"])
+    up("the real export (orders to 15 Nov).xlsx", _stage2_file([tri(9900000065, 10, "2026-11-15", 140), tri(9900000065, 20, "2026-11-15", 150, **{"Deletion Indicator": "L"})],
+                                                                saved="2026-11-20T08:00:00"))
+    u_o = up("an October file, report date typed 2027.xlsx", rpt([tri(9900000065, 10, "2026-10-01", 120), tri(9900000065, 20, "2026-10-01", 150)], "2026-10-05T08:00:00", "2027-10-02"))
+    up("report date before its orders (1 Nov, orders 25 Nov).xlsx", rpt([tri(9900000066, 10, "2026-11-25", 150), tri(9900000066, 20, "2026-11-25", 160, **{"Deletion Indicator": "L"})],
+                                                                        "2026-11-26T08:00:00", "2026-11-01"))
+    up("a later export (orders to 10 Nov).xlsx", _stage2_file([tri(9900000066, 10, "2026-11-10", 140), tri(9900000066, 20, "2026-11-10", 160)], saved="2026-11-12T08:00:00"))
+    up("an export, orders to 22 Nov.xlsx", _stage2_file([tri(9900000067, 10, "2026-11-22", 160)], saved="2026-11-23T08:00:00"))
+    u_late_rep = up("report date after it was saved.xlsx", rpt([tri(9900000067, 10, "2026-11-15", 150)], "2026-11-20T08:00:00", "2026-11-27"))
+    check(f"{k} a report date counts only between the file's latest order and its saved date: one typed a year on, one before its orders, one after "
+          "the file was saved are not used (each said on the upload), and the files are dated by their orders and saved dates: nothing brought back",
+          counted(9900000065) == {"10": (140.0, "BO")} and counted(9900000066) == {"10": (150.0, "BO")} and counted(9900000067) == {"10": (160.0, "BO")}
+          and u_o["report_used"] is None and "is after it was saved: not used" in u_o["file_date_from"] and u_late_rep["report_used"] is None,
+          f"{held(9900000065)} {held(9900000066)} {held(9900000067)} {u_o['file_date_from']}")
+    s1 = rpt([tri(9900000068, 10, "2026-11-20", 170)], "2026-11-21T08:00:00", "2026-11-20")
+    s2 = rpt([tri(9900000068, 10, "2026-11-20", 175)], "2026-11-22T08:00:00", "2026-11-20")
+    u_s1 = up("report date 20 Nov, saved 21 Nov.xlsx", s1)
+    u_s2 = up("report date 20 Nov, saved 22 Nov.xlsx", s2)
+    check(f"{k} two files with the same report date: the one saved later wins, as for any file (no admin asked); the report date is used, from the "
+          "start to the end of that day in India",
+          counted(9900000068) == {"10": (175.0, "BO")} and u_s2["rows_changed"] == 1 and u_s2["rows_disagree"] == 0 and u_s1["report_used"] == "2026-11-20"
+          and (u_s1["covers_from"], u_s1["covers_to"]) == ("2026-11-19T18:30:00", "2026-11-21T08:00:00"), f"{held(9900000068)} {u_s1['covers_from']} {u_s1['covers_to']}")
+    u_e85 = up("an export, orders to 19 Nov, saved 21 Nov.xlsx", _stage2_file([tri(9900000085, 10, "2026-11-19", 150)], saved="2026-11-21T08:00:00"))
+    u_r85 = up("report date 20 Nov, saved 27 Nov.xlsx", rpt([tri(9900000085, 10, "2026-11-20", 155)], "2026-11-27T08:00:00", "2026-11-20"))
+    d85 = detail(u_r85)
+    up("a real export (orders to 15 Nov) saved 25 Nov.xlsx", _stage2_file([tri(9900000084, 10, "2026-11-15", 140), tri(9900000084, 20, "2026-11-15", 150, **{"Deletion Indicator": "L"})],
+                                                                          saved="2026-11-25T08:00:00"))
+    u_n84 = up("report date typed 2027, no saved date.xlsx", _stage2_file([dict(tri(9900000084, 10, "2026-11-15", 120), **{"Report Date": pd.Timestamp("2027-11-02")}),
+                                                                           dict(tri(9900000084, 20, "2026-11-15", 150), **{"Report Date": pd.Timestamp("2027-11-02")})],
+                                                                          saved="none", extra=["Report Date"]))
+    check(f"{k} a report-dated file saved later than a plain export wins over it, and its page says so with both saved times; a report date typed a year on "
+          "in a file with no saved date counts for nothing: the file never wins, the real export's figures and deletion stand",
+          counted(9900000085) == {"10": (155.0, "BO")} and u_r85["rows_changed"] == 1 and [(x["id"], x["saved_at"]) for x in d85["summary"]["saved_later_than"]] == [(u_e85["id"], "2026-11-21T08:00:00")]
+          and counted(9900000084) == {"10": (140.0, "BO")} and u_n84["report_used"] is None and u_n84["rows_disagree"] == 2,
+          f"{held(9900000085)} {d85['summary'].get('saved_later_than')} {held(9900000084)} {u_n84['file_date_from']}")
+    # a forward-dated order in an older export does not throw its good saved date away (the re-review of d438c21)
+    up("N, saved 25 Nov.xlsx", _stage2_file([tri(9900000086, 10, "2026-11-15", 150), tri(9900000086, 20, "2026-11-15", 160, **{"Deletion Indicator": "L"})], saved="2026-11-25T08:00:00"))
+    u_o86 = up("O, saved 20 Nov, with an order dated 24 Nov.xlsx", _stage2_file([tri(9900000086, 10, "2026-11-15", 140), tri(9900000086, 20, "2026-11-15", 160),
+                                                                                  tri(9900000087, 10, "2026-11-24", 170)], saved="2026-11-20T08:00:00"))
+    check(f"{k} an older export with one order dated after it was saved: that row is left out (check it in SAP), the file keeps its saved date, and "
+          "the export saved later stands (its price, its deletion)",
+          counted(9900000086) == {"10": (150.0, "BO")} and held(9900000087) == {} and u_o86["covers_saved"] == "2026-11-20T08:00:00" and u_o86["rows_older"] == 2,
+          f"{held(9900000086)} {({x: u_o86[x] for x in u_o86 if x.startswith(('rows', 'covers'))})}")
+    # a mistyped document date a year on does not date the file: its saved date still puts it in order
+    ahead = (_dt.date.today() + _dt.timedelta(days=400)).isoformat()
+    up("saved last.xlsx", _stage2_file([tri(9900000082, 10, "2026-11-20", 150), tri(9900000082, 20, "2026-11-20", 160, **{"Deletion Indicator": "L"})], saved="2026-11-27T08:00:00"))
+    u_ty = up("a date typed a year on.xlsx", _stage2_file([tri(9900000082, 10, "2026-11-20", 140), tri(9900000082, 20, "2026-11-20", 160),
+                                                          tri(9900000082, 30, ahead, 170, **{"Deletion Indicator": "L"})], saved="2026-11-25T08:00:00"))
+    det_ty = detail(u_ty)
+    check(f"{k} a row dated a year on ({ahead}) in a file saved 25 Nov: it is left out and listed (check it in SAP), so it neither dates the file "
+          "nor counts; its saved date is used, and the file saved 27 Nov stays newer (its price, its deletion)",
+          counted(9900000082) == {"10": (150.0, "BO")} and u_ty["covers_from"] == "2026-11-19T18:30:00" and u_ty["covers_to"] == "2026-11-25T08:00:00"
+          and "left out (check them in SAP)" in u_ty["file_date_from"] and det_ty["summary"]["future_count"] == 1
+          and any(x["kind"] == "Dated after the file was saved" and ahead in x["why"] for x in det_ty["skipped"]) and "30" not in held(9900000082),
+          f"{held(9900000082)} {({x: u_ty[x] for x in u_ty if x.startswith(('covers', 'file'))})}")
+    # saved later wins also when the two are read at the very same moment in two server processes (the later-saved one in the other)
+    sv = lambda po, item, price, **kw: row(po, item, b1, "2026-11-15", nsl, 200, price, **kw)
+    late_saved = _stage2_file([sv(9900000056, 10, 100, **{"Deletion Indicator": "L"}), sv(9900000056, 30, 120), sv(9900000057, 10, 130)], saved="2026-11-26T08:00:00")
+    early_saved = _stage2_file([sv(9900000056, 10, 100), sv(9900000056, 20, 110), sv(9900000056, 30, 99), sv(9900000057, 10, 125)], saved="2026-11-20T08:00:00")
+    for _ in range(200):
+        if purchases._jobs["thread"] is None:
+            break
+        time.sleep(0.1)
+    with st.tx(write=dp.KIND) as cur:
+        u_late = dp.add_upload(cur, "purchase_orders", "saved later, at once.xlsx", "check", late_saved, "l", store._now())
+        u_early = dp.add_upload(cur, "purchase_orders", "saved earlier, at once.xlsx", "check", early_saved, "e", store._now())
+    other = subprocess.Popen([sys.executable, "-c", f"from rules import purchases; purchases.run({u_late})"], cwd=HERE, env=dict(os.environ),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    purchases.run(u_early)
+    _, err_ = other.communicate(timeout=300)
+    both = [wait(u_late), wait(u_early)]
+    s56 = state_of(9900000056)
+    check(f"{k} two files covering the same orders read at once in two server processes: the one saved later wins either way (its price, its "
+          "deletion), nothing brought back, nothing listed; the line only the earlier one has stays; every line, the mark included, carries its saved date",
+          other.returncode == 0 and all(x["status"] == "done" for x in both) and counted(9900000056) == {"20": (110.0, "BO"), "30": (120.0, "BO")}
+          and counted(9900000057) == {"10": (130.0, "BO")} and not any(x["rows_disagree"] for x in both) and not any(x["summary"]["disagreements"] for x in both)
+          and s56["10"] == s56["30"] == state_of(9900000057)["10"] == (u_late, "2026-11-26T08:00:00") and s56["20"] == (u_early, "2026-11-20T08:00:00"),
+          f"{err_[-300:]} {held(9900000056)} {held(9900000057)} {s56}")
+    # GP, 28 Nov 2026: an earlier file (Aug to date), then a later download covering a longer span (Jul to date) that includes it
+    ov = lambda po, day, price: row(po, 10, b1, day, nsl, 300, price)
+    before_ov = c.get("/api/purchases/status").json()["counts"]["lines"]
+    up("August to date.xlsx", _stage2_file([ov(9900000075, "2026-08-05", 100), ov(9900000076, "2026-09-05", 110), ov(9900000077, "2026-10-05", 120)], saved="2026-11-20T08:00:00"))
+    u_jul = up("July to date.xlsx", _stage2_file([ov(9900000074, "2026-07-05", 90), ov(9900000075, "2026-08-05", 100), ov(9900000076, "2026-09-05", 115),
+                                                  ov(9900000077, "2026-10-05", 120)], saved="2026-11-26T08:00:00"))
+    det_jul = detail(u_jul)
+    check(f"{k} an earlier file (August to date), then a later download covering a longer span (July to date): every line in both is one line, "
+          "counted once; the upload says how many were already in (2), which it updated (1: its newer price) and what is new (1)",
+          c.get("/api/purchases/status").json()["counts"]["lines"] == before_ov + 4 and (u_jul["rows_new"], u_jul["rows_same"], u_jul["rows_changed"]) == (1, 2, 1)
+          and [(x["po"], x["was"].get("price"), x["now"].get("price")) for x in det_jul["summary"]["changed_lines"]] == [("9900000076", 110.0, 115.0)]
+          and counted(9900000076) == {"10": (115.0, "BO")}, str({x: u_jul[x] for x in u_jul if x.startswith("rows")}))
+    ups = c.get("/api/purchases/uploads").json()["uploads"]
+    sums = [u["id"] for u in ups if u["status"] == "done" and u["rows_loaded"] != u["rows_new"] + u["rows_changed"] + u["rows_same"] + u["rows_older"] + (u["rows_disagree"] or 0)]
+    check(f"{k} every upload's order lines kept add up in their brackets (new, changed, already in, not used: older, not used: disagreeing)", not sums, str(sums))
+    page_js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+    check(f"{k} Purchase files: a settled disagreement says how it was settled (the file's figures taken, or the history's kept); the uploads with "
+          "open disagreements are always listed, with the count open",
+          "Settled: this file's figures were taken." in page_js and "Settled: the history's figures were kept." in page_js
+          and all("disagree_open" in u for u in ups) and "however old" in page_js)
+    if st.kind == "postgres":
+        # the progress of a file being read waits for the purchase history's own writers, never for adding tables and copying in
+        import psycopg
+        holder = psycopg.connect(st.url, autocommit=False)
+
+        def progress_while(key):
+            holder.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
+            t = threading.Thread(target=lambda: purchases._status(u_s1["id"], step=""))
+            t0 = time.time()
+            t.start()
+            t.join(2)
+            waited = t.is_alive()
+            holder.rollback()
+            t.join(30)
+            return waited, time.time() - t0
+        on_setup = progress_while(store.SqlStore.LOCK_KEY)
+        on_own = progress_while(store.SqlStore.LOCK_KEY + 1 + store.KINDS.index("purchases"))
+        holder.close()
+        check(f"{k} on PostgreSQL a file's progress is written under the purchase history's own lock: it waits for that, never for the lock of "
+              "adding tables and copying the files in", on_setup[0] is False and on_own[0] is True, f"{on_setup} {on_own}")
+
+
+def stage2_checks(c, check):
+    """Purchase files read in the background; one line per order line, the newest file's figures winning; ZLOI lines in no
+    figure anywhere; mills, fabrics and Fab groups (the width rule, regrouping, ranges on separate orders); the price popup;
+    the Fab group page; the merge; Right cost's purchase-order rows worked out again from what was bought. On the files
+    store: a plain refusal, and everything else as before."""
+    import statistics
+    import pandas as pd
+    import store
+    import data_purchases as dp
+    from rules import costing, fab_groups, purchases
+    kind = store.get().kind
+    sha = lambda p: hashlib.sha256(open(os.path.join(HERE, p), "rb").read()).hexdigest()
+    kept_files = {p: sha(p) for p in ("pilot/Pilot_Results.xlsx", "data/Rate_Master.xlsx", "inputs/Fabric _ 3Months_4746.xlsx")}
+    r_before, yarn_before = c.post("/api/cost", json=masters.EXAMPLE_ROW).json(), c.get("/api/table/Yarn_Rates").json()
+    versions = lambda: (c.get("/api/store").json().get("counts") or {}).get("rate versions")
+    versions_before = versions()
+    for css in ("web/purchases.css",):
+        txt = open(os.path.join(HERE, css), encoding="utf8").read()
+        check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
+        loose = [ln for ln in txt.splitlines() if re.match(r"\s*(:root\[[^]]*\]\s*)?\.(note|err|btn)\b", ln)]
+        check(f"{css}: its notes, errors and buttons are styled on stage 2's own pages only (.rp-purch), never on other pages'",
+              not loose and ".rp-purch .note" in txt and ".rp-purch .err" in txt
+              and "fillP(main, " in open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read(), str(loose))
+    if shutil.which("node"):
+        p = subprocess.run(["node", "--check", os.path.join(HERE, "web", "purchases.js")], capture_output=True, text=True)
+        check("web/purchases.js parses", p.returncode == 0, p.stderr[-300:])
+    shell = c.get("/").text
+    check("Stage 2: the shell loads the purchase-history page script before its own", shell.index("purchases.js") < shell.index("rightcost.js")
+          and c.get("/purchases.js").status_code == 200 and c.get("/purchases.css").status_code == 200)
+    # the rules on their own: counts written many ways, widths, ranges on separate orders, dates
+    same = lambda a, b: fab_groups.tidy_count(a) == fab_groups.tidy_count(b)
+    check("Stage 2: a count written several ways is one (40sspandex/40sspx, 20spx/20sspx, 36nm/36snm, 2/50p/v / 2/50pv, 25/1+40d / 25s/1+40d, "
+          "50/1c / 50/1cmd, 24 Ams / 24AMS, 2/80 / 80/2); combed and plain stay apart; finishes written differently stay apart",
+          all(same(a, b) for a, b in (("40sspandex", "40sspx"), ("20spx", "20sspx"), ("36nm", "36snm"), ("2/50p/v", "2/50pv"), ("25/1+40d", "25s/1+40d"),
+                                      ("50/1c", "50/1cmd"), ("24 Ams", "24AMS"), ("2/80", "80/2"), ("40", "40/1")))
+          and not same("40", "cm40") and not same("36nm", "36") and fab_groups.tidy_count("1") is None
+          and fab_groups.tidy_finish("F - Normal Soft") != fab_groups.tidy_finish("F - Soft Finish") and fab_groups.tidy_finish("F - Regular") != fab_groups.tidy_finish("F - Normal Soft"))
+    a1, a2, a3, b1, inc = _stage2_codes()
+    specs = purchases.plm_specs()
+    w = lambda width, uom: fab_groups.signature_of(dict(specs[a1], article_cust_finishedwidth=width, article_cust_finishedwidth_uom=uom))[0]["width_in"]
+    import random
+    widths = [57, 57.09, 57.4, 57.5, 57.9, 59, 61.2]
+    spans = fab_groups.width_spans(widths)
+    mixed = list(widths)
+    random.Random(5).shuffle(mixed)
+    check("Stage 2: widths within half an inch are one group, a tolerance and not rounding: 57 in and 145 cm (57.09 in), 57.4 and 57.5 in join "
+          "(57 to 57.9 in, through each other); 59 and 61.2 stand alone; 57 and 57.6 in alone do not join; the same in any order",
+          w("145", "cm") == 57.09 and w("57", "in") == 57 and all(spans[x] == (57, 57.9) for x in widths[:5]) and spans[59] == (59, 59)
+          and spans[61.2] == (61.2, 61.2) and fab_groups.width_spans(mixed) == spans and fab_groups.width_spans([57, 57.6]) == {57: (57, 57), 57.6: (57.6, 57.6)},
+          str(spans))
+    po_text = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+    check("Stage 2: the group page's closing note says what its should-cost tile says (the yarn rates of the order month), not today's rates alone",
+          "Should-cost is on today's rates" not in po_text and "Should-cost is as Right cost has it" in po_text)
+    rng5 = fab_groups.price_range([(100 + i, "one order") for i in range(6)])
+    rng5b = fab_groups.price_range([(100 + i, f"order {i}") for i in range(5)])
+    check("Stage 2: a usual range needs purchases on at least 5 separate orders, not 5 lines", rng5["enough"] is False and rng5["orders"] == 1 and rng5b["enough"] is True)
+    dates = [purchases._date(x) for x in ("2026-04-03", "05.09.2026", "03/04/2026", "13/04/2026", 46000.0)]
+    check("Stage 2: a date written as text is read as year-month-day; SAP's day.month.year as such; one that could be read two ways is refused with why",
+          dates[0] == ("2026-04-03", None) and dates[1] == ("2026-09-05", None) and dates[2][0] is None and "could be 3 April or 4 March" in dates[2][1]
+          and dates[3] == ("2026-04-13", None) and dates[4][0] == "2025-12-09", str(dates))
+    nw = purchases.newer
+    AT = "2026-11-28T12:00:00"          # an upload time, UTC
+    cov = lambda latest, saved, report=None, at=AT: (lambda x: (x["covers_from"], x["covers_to"], x["covers_saved"]))(purchases.dating(latest, report, saved, at))
+    check("Stage 2: which purchase file is newer: what it covers decides first; where that cannot tell, the file saved later (GP, 28 Nov 2026), "
+          "report-dated or not; a file whose saved date cannot be used (none, after the upload) never wins by a saved date: nothing tells, listed; "
+          "a report date counts only between its latest order and its saved date, and only raises where the file starts",
+          nw(cov("2026-11-24", "2026-11-25T08:00:00"), cov("2026-11-05", "2026-11-12T08:00:00")) == (1, "covers")
+          and nw(cov("2026-11-15", "2026-11-27T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (1, "saved")
+          and nw(cov("2026-11-15", "2026-11-16T08:00:00"), cov("2026-11-15", "2026-11-27T08:00:00")) == (-1, "saved")
+          and nw(cov("2026-11-15", "2026-11-16T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (0, None)
+          and nw(cov("2026-11-15", "2026-11-10T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (0, None)
+          and nw(cov("2026-11-15", None), cov("2026-11-15", "2026-11-16T08:00:00")) == (0, None)
+          and nw(cov("2026-11-15", "2027-11-20T00:00:00"), cov("2026-11-15", "2026-11-28T11:00:00", at="2026-11-28T11:30:00")) == (0, None)
+          and nw(cov("2026-11-15", "2026-11-28T11:00:00", at="2026-11-28T11:30:00"), cov("2026-11-15", "2027-11-20T00:00:00")) == (0, None)
+          and nw(cov("2026-11-20", "2026-11-27T08:00:00", "2026-11-20"), cov("2026-11-19", "2026-11-21T08:00:00")) == (1, "saved")
+          and cov("2026-11-20", "2026-11-27T08:00:00", "2026-11-20")[:2] == ("2026-11-19T18:30:00", "2026-11-27T08:00:00")
+          and cov("2026-11-28", "2026-11-27T19:30:00")[1] == "2026-11-27T19:30:00"
+          and nw(cov("2026-11-20", "2026-11-22T00:00:00", "2026-11-20"), cov("2026-11-20", "2026-11-21T00:00:00", "2026-11-20")) == (1, "saved")
+          and nw(cov("2026-11-25", "2026-11-26T08:00:00", "2026-11-01"), cov("2026-11-10", "2026-11-12T08:00:00")) == (1, "covers")
+          and nw(cov("2026-11-15", "2026-11-20T08:00:00", "2026-11-27"), cov("2026-11-22", "2026-11-23T08:00:00")) == (-1, "covers"))
+    rnd = random.Random(28)
+    day_ = lambda n: (_dt.date(2026, 11, 1) + _dt.timedelta(days=n)).isoformat()
+    files_ = []
+    for _ in range(80):
+        latest, how = rnd.randint(0, 20), rnd.random()
+        saved = None if how < 0.12 else f"{day_(latest + rnd.randint(-2, 9))}T{rnd.randint(0, 23):02d}:00:00"
+        at = f"{day_(latest + rnd.randint(0, 6))}T{rnd.randint(0, 23):02d}:{rnd.choice(('00', '30'))}:00"
+        report = day_(latest + rnd.randint(-2, 3)) if how > 0.8 else None
+        files_.append(cov(day_(latest), saved, report, at))
+    rel = {(i, j): nw(files_[i], files_[j])[0] for i in range(len(files_)) for j in range(len(files_))}
+    # a circle is a chain of "newer than" coming back to where it started: the files can be put in one order (newest last)
+    # exactly when there is none (Kahn's way: take out, again and again, every file no remaining file is newer than)
+    left, circle = set(range(len(files_))), []
+    while left:
+        free = {i for i in left if not any(rel[(j, i)] > 0 for j in left)}
+        if not free:
+            circle = sorted(left)[:6]
+            break
+        left -= free
+    check("Stage 2: put in order that way, purchase files never go round in a circle (80 made-up files: saved dates missing, in the future, before "
+          "the latest order or of the same moment, report dates before, within and after, uploads at any time): they can always be put in one order, "
+          "one way round only, since where a file starts is never after its saved date",
+          not circle and all(rel[(i, j)] == -rel[(j, i)] for i, j in rel) and any(nw(files_[i], files_[j])[1] == "saved" for i, j in rel)
+          and all(f_[0] <= f_[2] for f_ in files_ if f_[2]) and any(not f_[2] for f_ in files_), str(circle[:3]))
+    if kind == "files":
+        answers = [c.get("/api/purchases/uploads"), c.get("/api/groups"), c.get("/api/groups/Fab-0001"), c.get("/api/purchases/history", params={"code": "X"}),
+                   c.post("/api/purchases/load-shipped"), c.post("/api/groups/merge", json={"code": "Fab-0001", "into": "Fab-0002"})]
+        check("Stage 2 on the files store: the purchase history says plainly that it needs the database (503), nothing breaks",
+              all(r.status_code == 503 and "kept in the database" in r.json()["detail"] for r in answers)
+              and c.get("/api/purchases/status").json()["available"] is False)
+    _stage2_right_cost(c, check, kind, "before any purchase file is loaded" if kind != "files" else "on the files")
+    if kind == "files":
+        check("Stage 2: the pilot results, the rate master and the purchase file are untouched", all(sha(p) == v for p, v in kept_files.items()))
+        return
+
+    def wait(uid, limit=300):
+        for _ in range(limit * 4):
+            u = next((x for x in c.get("/api/purchases/uploads").json()["uploads"] if x["id"] == uid), None)
+            if u and u["status"] in ("done", "failed"):
+                return u
+            time.sleep(0.25)
+        raise SystemExit(f"upload {uid} was not read in {limit} s")
+
+    k = f"[{kind}] Stage 2:"
+    s0 = c.get("/api/purchases/status").json()
+    sh0 = c.get("/api/purchases/uploads").json()["shipped"]
+    check(f"{k} the purchase history starts empty; Purchase files knows the file that came with the code is there and not loaded",
+          s0["available"] is True and s0["counts"]["lines"] == 0 and s0["counts"]["groups"] == 0 and sh0["available"] is True and sh0["loaded"] is False
+          and sh0["history"] is False, str(s0) + str(sh0))
+    # the made-up files below are read on a history of their own: the purchase file that came with the code, which the
+    # first upload would load first (GP, 28 Nov 2026), is out of reach until its own section further down (and the
+    # assistant's checks see it loaded first)
+    import pilot
+    shipped_at, pilot.PO_FILE = pilot.PO_FILE, os.path.join(HERE, "inputs", "not here, for the checks.xlsx")
+    arv, arv2 = "1200094    ARVIND LTD", "1200094    Arvind Limited"
+    raj, raj2, nsl = "1208655    RAJAPALAYAM MILLS LIMITE", "1208655    Rajapalayam Mills Limited", "1203290    NSL TEXTILES LIMITED"
+    row = lambda po, item, code, day, sup, qty, price, **kw: dict({"Purchasing Document": float(po), "Item": float(item), "Material": code, "Plant": "F007",
+                                                               "Document Date": pd.Timestamp(day) if re.fullmatch(r"\d{4}-\d\d-\d\d", day) else day,
+                                                               "Name of Supplier": sup, "Order Quantity": qty, "Net Price": price,
+                                                               "Purchasing Doc. Type": "BO", "Currency": "INR", "Order Unit": "M", "Short Text": "made up for the checks"}, **kw)
+    rows = [row(9900000001, 10, a1, "2026-08-03", arv, 1000, 100), row(9900000002, 10, a2, "2026-08-10", arv2, 1200, 550, **{"Purchasing Doc. Type": "ZLOI"}),
+            row(9900000003, 10, a1, "2026-09-01", raj, 800, 102), row(9900000003, 20, a2, "2026-09-01", raj2, 900, 103, **{"Purchasing Doc. Type": "BF"}),
+            row(9900000004, 10, a1, "2026-10-05", arv, 2000, 140), row(9900000013, 10, a2, "2026-10-10", arv2, 700, 101),
+            row(9900000014, 10, a1, "2026-10-20", raj, 600, 104),
+            row(9900000015, 10, a1, "x", arv, 500, 101, **{"Document Date": "2026-04-03"}),        # a date written as text: 3 April, the earliest line
+            row(9900000005, 10, b1, "2026-08-01", nsl, 3000, 150), row(9900000016, 10, b1, "x", nsl, 1000, 151, **{"Document Date": "05.09.2026"}),
+            row(9900000006, 10, inc, "2026-08-05", nsl, 500, 90), row(9900000007, 10, "ZZCHECK001", "2026-08-06", nsl, 600, 95),
+            # left out, each for its own reason
+            row(9900000008, 10, a1, "2026-08-07", arv, 100, 100, **{"Deletion Indicator": "L"}), row(9900000009, 10, a1, "2026-08-07", arv, 100, 100, **{"Purchasing Doc. Type": "BA"}),
+            row(9900000010, 10, a1, "2026-08-07", arv, 100, 1.2, Currency="USD"), row(9900000011, 10, a1, "2026-08-07", arv, 100, 100, **{"Order Unit": "KG"}),
+            row(9900000012, 10, a1, "2026-08-07", arv, 100, 0), row(9900000001, 10, a1, "2026-08-03", arv, 1000, 100),
+            row(9900000017, 10, a1, "x", arv, 100, 100, **{"Document Date": "03/04/2026"}),
+            {"Order Quantity": 9999, "Order Unit": "M"}]                               # a total line at the foot, as SAP writes it
+    data = _stage2_file(rows, saved="2026-11-20T10:00:00")
+    bad = c.post("/api/purchases/upload", files={"file": ("orders.csv", io.BytesIO(b"a,b\n1,2\n"))})
+    big = c.post("/api/purchases/upload", files={"file": ("big.xlsx", io.BytesIO(b"x" * (purchases.MAX_BYTES + 1)))})
+    on_screen = None
+    if shutil.which("node"):            # the page says it at once, before sending the file: its own function, run here
+        js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+        fn = js[js.index("// TOO BIG"):js.index("// END TOO BIG")]
+        run_ = subprocess.run(["node", "-e", fn + f"\nconsole.log(JSON.stringify([tooBig({purchases.MAX_BYTES + 1}, {purchases.MAX_BYTES}, 'big.xlsx'), "
+                                                  f"tooBig({purchases.MAX_BYTES}, {purchases.MAX_BYTES}, 'big.xlsx')]))"], capture_output=True, text=True)
+        on_screen = json.loads(run_.stdout) if run_.returncode == 0 else run_.stderr[-200:]
+        # choosing a file, as the page does it: its own file box under node, with a stand-in for the page's elements
+        box = js[js.index("// FILE BOX"):js.index("// END FILE BOX")]
+        drive = box + fn + r"""
+function h(tag, attrs) {
+  const el = { tag, className: (attrs || {}).class || "", textContent: "", files: [], value: "", attrs: {}, on: {},
+    addEventListener(t, f) { (this.on[t] = this.on[t] || []).push(f); }, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; },
+    fire(t) { (this.on[t] || []).forEach(f => f()); } };
+  return el;
+}
+const files = { max: %d };
+const [inp, note] = fileBox(files, h, tooBig);
+inp.files = [{ size: 1000, name: "orders.xlsx" }]; inp.fire("change");
+const first = [files.uploadError, note.className];
+const [inp2] = fileBox(files, h, tooBig);                   // the page redrawn (every two seconds while a file is read)
+const kept = inp2 === inp && inp2.files.length === 1 && inp2.files[0].name === "orders.xlsx";
+inp.files = [{ size: %d, name: "big.xlsx" }]; inp.fire("change");
+console.log(JSON.stringify({ first, kept, big: [files.uploadError, note.className, note.textContent, note.attrs.role || null] }));
+""" % (purchases.MAX_BYTES, purchases.MAX_BYTES + 1)
+        run_b = subprocess.run(["node", "-e", drive], capture_output=True, text=True)
+        chose = json.loads(run_b.stdout) if run_b.returncode == 0 else {"error": run_b.stderr[-300:]}
+        check(f"{k} Purchase files: a chosen file stays chosen when the page redraws (the cold review of 28 Nov: choosing a file emptied the box, "
+              "so Upload said to choose one); a file too large is said at once, in place, in the server's words",
+              chose.get("first") == [None, "muted"] and chose.get("kept") is True
+              and chose.get("big") == [big.json()["detail"], "err", big.json()["detail"], "alert"], str(chose)[:400])
+    check(f"{k} a file that is not an Excel workbook, or is larger than 40 MB, is refused at once (the large one unread); the page says so on the "
+          "screen as soon as the file is chosen, before sending it, in the server's own words: the limit, and to split it by 6 months or by year",
+          bad.status_code == 400 and ".xlsx" in bad.json()["detail"] and big.status_code == 413 and "40 MB" in big.json()["detail"]
+          and "by 6 months or by year" in big.json()["detail"] and (on_screen is None or on_screen == [big.json()["detail"], None])
+          and c.get("/api/purchases/uploads").json()["max_bytes"] == purchases.MAX_BYTES, f"{big.json()} {on_screen}")
+    up = c.post("/api/purchases/upload", files={"file": ("purchase orders.xlsx", io.BytesIO(data))}).json()
+    check(f"{k} an upload is answered at once and queued for the background", up.get("status") == "queued" and isinstance(up.get("id"), int), str(up))
+    u = wait(up["id"])
+    det = c.get(f"/api/purchases/uploads/{up['id']}").json()
+    why = {s["kind"] for s in det["skipped"]}
+    check(f"{k} the file is read in the background: done, with its counts and what it covers (its latest document date, kept or not; "
+          "the date it was saved is only the latest it can have been taken)", u["status"] == "done" and u["rows_total"] == len(rows) and u["rows_loaded"] == 12
+          and u["rows_new"] == 12 and u["rows_outliers"] == 1 and u["rows_skipped"] == 8 and u["fabrics_new"] == 5 and u["groups_new"] == 2 and u["mills_new"] == 3
+          and u["file_date"] == "2026-10-20" and u["covers_from"] == "2026-10-19T18:30:00" and u["covers_to"] == "2026-11-20T10:00:00"
+          and u["saved_at"] == "2026-11-20T10:00:00" and u["file_date_from"].startswith("orders up to 2026-10-20; saved 2026-11-20 10:00"),
+          str({x: u[x] for x in u if x.startswith("rows") or x.endswith("new") or x.startswith("file")}))
+    check(f"{k} the rows left out say which and why (deleted, not bulk, not rupees, not metres, no price, repeated, a total line, a date that reads two ways)",
+          why == {"Deleted or blocked in SAP", "Not a bulk order", "Not in rupees", "Not per metre", "No price", "Repeated in this file", "No order number", "Date not read"}
+          and any(s["why"].startswith("The same order line as row 2") for s in det["skipped"]) and any("could be 3 April or 4 March" in (s["why"] or "") for s in det["skipped"]),
+          str(det["skipped"])[:400])
+    xl = c.get(f"/api/purchases/skipped/{up['id']}")
+    check(f"{k} every row left out can be downloaded", xl.status_code == 200 and len(pd.read_excel(io.BytesIO(xl.content))) == 8)
+    st = store.get()
+    with st.tx() as cur:
+        mills = cur.all("SELECT m.key, count(a.spelling) FROM mill m JOIN mill_alias a ON a.mill_id = m.id GROUP BY m.key ORDER BY m.key")
+    check(f"{k} one record per mill, every spelling kept (Arvind Ltd and Arvind Limited; a name cut at 24 characters and its full name)",
+          mills == [("arvind", 2), ("nsl textile", 1), ("rajapalayam", 2)], str(mills))
+    hist = c.get("/api/purchases/history", params={"code": a1}).json()
+    h2 = c.get("/api/purchases/history", params={"code": a2}).json()
+    gA, gB = hist["group"]["code"], c.get("/api/purchases/history", params={"code": b1}).json()["group"]["code"]
+    check(f"{k} Fab-0001 onward in order of first appearance (the earliest line, a date written as text); two codes of one construction are one group, across mills",
+          gA == "Fab-0001" and gB == "Fab-0002" and h2["group"]["code"] == gA and {m["name"] for m in hist["group"]["mills"]} == {"Arvind Limited", "Rajapalayam Mills Limited"}, f"{gA} {gB}")
+    ng1, ng2 = (c.get("/api/purchases/history", params={"code": x}).json() for x in (inc, "ZZCHECK001"))
+    ngs = dict(det["summary"]["not_grouped"])
+    check(f"{k} a code whose specification is incomplete, or missing, is not grouped and says why (never guessed); its lines are loaded and "
+          "counted in its prices like any other, with the construction blank (GP, 28 Nov 2026), and the upload says how many such codes",
+          ng1["group"] is None and "incomplete" in ng1["not_grouped"] and ng2["group"] is None and ng2["not_grouped"] == "No PLM specification for this code"
+          and ng2["should"] is None and [(x["price"], x["metres"]) for x in ng2["lines"]] == [(95.0, 600.0)] and [(x["price"], x["metres"]) for x in ng1["lines"]] == [(90.0, 500.0)]
+          and ng2["spec"] is None and ngs.get("No PLM specification for this code") == 1 and ngs.get("PLM specification incomplete") == 1, str(ngs))
+    po_row = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r["code"] == a1)   # the pilot's choices
+    loose = lambda d: {x: v for x, v in d.items() if x not in ("Quoted price (Rs/m)", "Supplier", "Description", "Fabric code", "Order quantity (m)",
+                                                                  "Rate card quantity", "Order size")}
+    with st.tx() as cur:
+        stored = {code: json.loads(ch) for code, ch in cur.all("SELECT code, choices FROM fabric WHERE code IN (%s, %s)", (a1, a2))}
+    check(f"{k} price over time for a code: each purchase with date, mill, metres and price, and its should-cost on today's rates",
+          [(x["date"], x["mill"], x["metres"], x["price"]) for x in hist["lines"]] == [("2026-04-03", "Arvind Limited", 500.0, 101.0), ("2026-08-03", "Arvind Limited", 1000.0, 100.0),
+                                                                                    ("2026-09-01", "Rajapalayam Mills Limited", 800.0, 102.0), ("2026-10-05", "Arvind Limited", 2000.0, 140.0),
+                                                                                    ("2026-10-20", "Rajapalayam Mills Limited", 600.0, 104.0)]
+          and hist["should"] == round(c.post("/api/cost", json=stored[a1]).json()["total_per_m"], 2) and loose(stored[a1]) == loose(po_row["choices"]), str(hist["lines"])[:300])
+    page = c.get(f"/api/groups/{gA}").json()
+    prices = sorted([101, 100, 102, 103, 140, 101, 104])
+    med = statistics.median(prices)
+    q = statistics.quantiles(prices, n=4, method="inclusive")
+    lo, hi = costing.usual_range((q[0] / med - 1) * 100, (q[2] / med - 1) * 100)
+    upper = round(med * (1 + hi / 100), 2)
+    zl = [(o["code"], o["price"], o["metres"]) for o in page["outliers"]]
+    check(f"{k} ZLOI lines are in no figure: not in the price paid, the metres, the median, the range or 'above the range', nor in a fabric's quantity band; "
+          "they are listed apart beside the fabric and beside the mill",
+          [(x["code"], x["price"]) for x in h2["lines"]] == [(a2, 103.0), (a2, 101.0)] and [(o["price"], o["metres"]) for o in h2["outliers"]] == [(550.0, 1200.0)]
+          and zl == [(a2, 550.0, 1200.0)] and 550 not in [x["price"] for x in page["lines"]] and page["purchases"] == 7 and page["metres"] == 6500
+          and stored[a2].get("Order quantity (m)") == 1600 and next(m for m in page["mills"] if m["key"] == "arvind")["outliers"][0]["price"] == 550
+          and next(g for g in c.get("/api/groups").json()["groups"] if g["code"] == gA)["median"] == med, str(page["outliers"])[:200])
+    check(f"{k} the group page: purchases, orders, metres, mills, median price, and the usual range by the brief's own rule (5% to 10% round the median) on 6 separate orders",
+          page["range"]["orders"] == 6 and len(page["mills"]) == 2 and page["range"]["median"] == 102 and page["range"]["enough"]
+          and (page["range"]["lo"], page["range"]["hi"]) == (lo, hi) == (-5.0, 5.0) and page["range"]["upper"] == upper == 107.1
+          and page["should"]["median"] is not None, str(page["range"]))
+    check(f"{k} priced well above the group: only the purchase above the top of the usual range, with the rupees above it",
+          [(x["code"], x["price"], x["above"], x["above_rs"]) for x in page["above"]] == [(a1, 140.0, 32.9, 65800.0)] and page["above_rs"] == 65800, str(page["above"]))
+    pb = c.get("/api/groups/fab-0002").json()
+    check(f"{k} a group with purchases on too few separate orders says so, and calls nothing high", pb["code"] == "Fab-0002" and pb["range"]["enough"] is False
+          and pb["range"]["orders"] == 2 and pb["above"] == [] and pb["min_for_range"] == 5 and [x["date"] for x in pb["lines"]] == ["2026-08-01", "2026-09-05"])
+    # from the first file on, Right cost's purchase-order rows read the purchase history alone, as the price popup does (the
+    # second review, 28 Nov 2026: before, a code bought in the file that came with the code read its lines as well)
+    rc_h = _ready_costs(c, until=lambda d: next((r for r in d["rows"] if r["source"] == "Purchase orders" and r["code"] == a1), {}).get("po_lines") == 5)
+    po_h = {r["code"]: r for r in rc_h["rows"] if r["source"] == "Purchase orders"}
+    pops = {x: c.get("/api/purchases/history", params={"code": x}).json() for x in (a1, a2, b1)}
+    priced_h = {x for x, r in po_h.items() if r["price"] is not None}
+    absent = sorted(x for x in po_h if x not in (a1, a2, a3, b1, inc))[0]
+    sh1 = c.get("/api/purchases/uploads").json()["shipped"]
+    check(f"{k} once the purchase history holds a file (the one that came with the code not loaded), Right cost's purchase-order rows read the "
+          "history alone, as the price popup does: the same metres and should-cost; a pilot fabric in no file uploaded shows no price paid and says "
+          "the file that came with the code is not loaded; Purchase files says so",
+          all(abs((po_h[x]["metres"] or 0) - pops[x]["metres"]) < 0.01 and pops[x]["should"] is not None and abs(po_h[x]["should"] - pops[x]["should"]) < 0.005
+              for x in (a1, a2, b1)) and po_h[a1]["metres"] == 4900 and priced_h == {x for x in (a1, a2, b1, inc) if x in po_h}
+          and po_h[absent]["price"] is None and po_h[absent]["band"] == "No price" and "is not loaded" in (po_h[absent]["worked_out_again"] or "")
+          and sh1["loaded"] is False and sh1["history"] is True
+          and "in no file of the purchase history (the purchase file that came with the code is not loaded)" in (c.get("/api/pilot").json().get("as_run") or ""),
+          str({x: (po_h[x]["metres"], po_h[x]["should"], pops[x]["metres"], pops[x]["should"]) for x in (a1, a2, b1)}) + f" {len(priced_h)} {po_h[absent]['worked_out_again']}")
+    # the newest file wins, whatever order the files come in
+    u2 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders again.xlsx", io.BytesIO(data))}).json()["id"])
+    n_lines = c.get("/api/purchases/status").json()["counts"]
+    check(f"{k} the same file uploaded twice: each order line is one line", u2["status"] == "done" and u2["rows_new"] == 0 and u2["rows_same"] == 12
+          and n_lines["lines"] == 11 and n_lines["outliers"] == 1 and u2["fabrics_new"] == 0 and u2["groups_new"] == 0, str(u2))
+    # a restart part-way through an upload (or an upload that failed after writing its lines) leaves choices never worked out:
+    # the next reading finds every line "the same" and works them out all the same (the second review, 28 Nov 2026)
+    choice_of = lambda: dict(st._read(lambda cur: cur.all("SELECT code, choices FROM fabric WHERE code IN (%s, %s, %s)", (a1, a2, b1))))
+    had = choice_of()
+    with st.tx(write=dp.KIND) as cur:
+        cur.run("UPDATE fabric SET choices = NULL, problems = '[]', choices_lists = NULL, choices_metres = NULL, choices_spec = NULL WHERE code IN (%s, %s)", (a1, a2))
+    u2b = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders, read again after a restart.xlsx", io.BytesIO(data))}).json()["id"])
+    check(f"{k} costing choices a restart left never worked out are worked out at the next reading of the file, though every line reads the same",
+          u2b["rows_same"] == 12 and all(had.values()) and choice_of() == had and not purchases.stale(st), str({x: (v or "")[:60] for x, v in choice_of().items()}))
+    with st.tx(write=dp.KIND) as cur:                   # as if worked out on the rate master's lists as they were
+        cur.run("UPDATE fabric SET choices_lists = 'lists as they were' WHERE code = %s", (b1,))
+    stale_b1 = purchases.stale(st)
+    purchases.refresh_choices(wait=True)
+    m_ = rules_common.get_masters()
+    m2 = dict(m_, Finishing_Rates=pd.concat([m_["Finishing_Rates"], m_["Finishing_Rates"].iloc[:1].assign(Finish="F- A finish added for the check")], ignore_index=True))
+    check(f"{k} choices worked out on the rate master's lists as they were are worked out again in the background; the lists' fingerprint "
+          "changes when a finish is added",
+          len(stale_b1) == 1 and not purchases.stale(st) and choice_of() == had
+          and purchases.lists_fingerprint(m2) != purchases.lists_fingerprint(m_) == purchases.lists_fingerprint(), str(stale_b1))
+    rows2 = [dict(r) for r in rows]
+    rows2[5]["Net Price"] = 121.2                       # 9900000013/10: the price 20% up
+    rows2[6]["Deletion Indicator"] = "L"                # 9900000014/10: deleted in SAP
+    rows2[10]["Currency"] = "USD"                       # 9900000006/10: now in dollars
+    del rows2[3]                                        # 9900000003/20: dropped; the rest of its order (item 10) is still there
+    rows2.append(row(9900000018, 10, a1, "2026-11-22", arv, 300, 105))       # an order dated after the first file was saved: so it is newer
+    newer = _stage2_file(rows2, saved="2026-11-25T09:00:00")
+    k_before = purchases.pilot_rows()[0]
+    # the first pass after this upload fails (as when the store is busy): it is logged and tried again, so the rows never
+    # stay stale with nothing bringing them up to date (the CI run of 4e1f6f0)
+    work_rows, failed = purchases._work_rows, []
+
+    def fails_once(*a):
+        if not failed:
+            failed.append(time.time())
+            raise store.Busy("made to fail once by the checks")
+        return work_rows(*a)
+    purchases._work_rows = fails_once
+    try:
+        u3 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected.xlsx", io.BytesIO(newer))}).json()["id"])
+        # Right cost's rows are worked out again in the background: rows a page got are up to date only if they rest on what
+        # is held now, whatever was asked for meanwhile, by whom (the CI run of d438c21 took old rows for new ones)
+        t_rows = time.time()
+        while time.time() - t_rows < 300:
+            k_now = purchases.pilot_rows()[0]
+            if purchases.rows_up_to_date(k_now):
+                break
+            time.sleep(0.5)
+    finally:
+        purchases._work_rows = work_rows
+    served_old = c.get("/api/costs").json()
+    check(f"{k} after an upload, Right cost's purchase-order rows are worked out again in the background ({time.time() - t_rows:.0f} s): the rows "
+          "from before it are never taken as up to date once new ones exist, and the page says when it is serving rows being brought up to date; "
+          "a pass that fails is tried again",
+          k_now != k_before and not purchases.rows_up_to_date(k_before) and purchases.rows_up_to_date(k_now) and "updating" in served_old
+          and len(failed) == 1, f"{k_now != k_before} {purchases.rows_up_to_date(k_before)} {len(failed)}")
+    # so are the verdicts: a working-out of them that fails is logged and tried again
+    from rules import rightcost
+    verdicts, v_failed = rightcost._verdicts, []
+
+    def v_fails_once(rows_):
+        if not v_failed:
+            v_failed.append(time.time())
+            raise store.Busy("made to fail once by the checks")
+        return verdicts(rows_)
+    rightcost._verdicts = v_fails_once
+    try:
+        probe, few = ("the checks: verdicts tried again", time.time()), [r for r in served_old["rows"] if r["source"] == "Purchase orders"][:3]
+        t_v = time.time()
+        while rightcost._pilot_briefs(few, probe) is None and time.time() - t_v < 600:
+            time.sleep(0.5)
+        got_v = rightcost._pilot_briefs(few, probe, start=False)
+    finally:
+        rightcost._verdicts = verdicts
+    check(f"{k} a working-out of Right cost's verdicts that fails is tried again ({time.time() - t_v:.0f} s)",
+          got_v is not None and set(got_v) == {r["code"] for r in few} and len(v_failed) == 1, f"{got_v is not None} {len(v_failed)}")
+    look = lambda: {(x["po"], x["item"]): x["price"] for code in (a1, a2, inc) for x in c.get("/api/purchases/history", params={"code": code}).json()["lines"]}
+    after3, counts3 = look(), c.get("/api/purchases/status").json()["counts"]
+    check(f"{k} a newer file (it has an order dated after the first was saved): a changed price is taken; lines it shows deleted, or in dollars, are "
+          "removed; the line it does not have stays (GP, 28 Nov 2026: not cancelled); the lines kept add up (new, changed, already in)",
+          u3["rows_changed"] == 1 and u3["rows_removed"] == 2 and u3["rows_dropped"] == 0 and u3["rows_new"] == 1 and after3[("9900000013", "10")] == 121.2
+          and ("9900000014", "10") not in after3 and ("9900000006", "10") not in after3 and after3[("9900000003", "20")] == 103 and counts3["lines"] == 10
+          and u3["rows_loaded"] == 10 == u3["rows_new"] + u3["rows_changed"] + u3["rows_same"] and u3["rows_disagree"] == 0,
+          str({x: u3[x] for x in u3 if x.startswith("rows")}))
+    u4 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders, the old one again.xlsx", io.BytesIO(data))}).json()["id"])
+    check(f"{k} the older file uploaded after it changes nothing: no old price back, no removed line counted again; its 12 lines are "
+          "counted in the brackets as not used (11), or already in (1: the line the newer file does not have, which is still its own)",
+          u4["rows_older"] == 11 and u4["rows_same"] == 1 and u4["rows_changed"] == 0 and u4["rows_removed"] == 0 and look() == after3 and u4["rows_loaded"] == 12
+          and u4["rows_new"] + u4["rows_changed"] + u4["rows_same"] + u4["rows_older"] + u4["rows_disagree"] == 12
+          and c.get("/api/purchases/status").json()["counts"] == counts3, str({x: u4[x] for x in u4 if x.startswith("rows")}))
+    # two uploads read at once, one of them by another server process: the newer file wins either way
+    late_rows = [row(9900000020, 10, b1, "2026-11-01", nsl, 1000, 160)]
+    old_f = _stage2_file(late_rows, saved="2026-11-21T00:00:00")
+    new_f = _stage2_file([dict(late_rows[0], **{"Net Price": 170}), row(9900000021, 10, b1, "2026-11-23", nsl, 100, 165)], saved="2026-11-26T00:00:00")
+    for _ in range(200):                                # the worker of this process idle, so the other process reads one of the two
+        if purchases._jobs["thread"] is None:
+            break
+        time.sleep(0.1)
+    with st.tx(write=dp.STATUS) as cur:
+        u_new = dp.add_upload(cur, "purchase_orders", "newer.xlsx", "check", new_f, "x", store._now())
+        u_old = dp.add_upload(cur, "purchase_orders", "older.xlsx", "check", old_f, "y", store._now())
+    env = dict(os.environ)
+    other = subprocess.Popen([sys.executable, "-c", f"from rules import purchases; purchases.run({u_new})"], cwd=HERE, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    purchases.run(u_old)
+    out_, err_ = other.communicate(timeout=300)
+    both = [wait(u_new), wait(u_old)]
+    late = {(x["po"], x["item"]): x["price"] for x in c.get("/api/purchases/history", params={"code": b1}).json()["lines"]}
+    check(f"{k} two uploads read at once in two server processes: each read once, the newer file's figures kept", other.returncode == 0
+          and all(x["status"] == "done" for x in both) and late.get(("9900000020", "10")) == 170, f"{err_[-300:]} {late}")
+    # a restart in the middle of an upload; uploads waiting at a restart
+    with st.tx(write=dp.STATUS) as cur:
+        u_dead = dp.add_upload(cur, "purchase_orders", "half read.xlsx", "check", data, "z", store._now())
+        cur.run("UPDATE upload SET status = 'working', runner = %s, alive_at = %s WHERE id = %s", (f"{purchases.socket.gethostname()}:999999", store._now(), u_dead))
+        u_wait = dp.add_upload(cur, "purchase_orders", "waiting.xlsx", "check", data, "z", store._now())
+    purchases.resume()
+    again = [wait(u_dead), wait(u_wait)]
+    check(f"{k} an upload a restart left half-read is read again from the start at once, and uploads left waiting are picked up",
+          all(x["status"] == "done" for x in again) and c.get("/api/purchases/status").json()["counts"]["lines"] == counts3["lines"] + 2, str(again)[:300])
+    _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl)
+    bad2 = wait(c.post("/api/purchases/upload", files={"file": ("not orders.xlsx", io.BytesIO(b"PK, but not a workbook"))}).json()["id"])
+    buf = io.BytesIO()
+    pd.DataFrame([{"Fabric": "x", "Price": 1}]).to_excel(buf, index=False)
+    bad3 = wait(c.post("/api/purchases/upload", files={"file": ("other sheet.xlsx", io.BytesIO(buf.getvalue()))}).json()["id"])
+    check(f"{k} a file that cannot be read, or is not a purchase-order export, fails and says why", bad2["status"] == "failed" and "could not be read" in bad2["error"]
+          and bad3["status"] == "failed" and "Purchasing Document" in bad3["error"], f"{bad2['error']} | {bad3['error']}")
+    # regrouping: a specification completed, corrected and corrected back; the way the fields are tidied changed
+    specs["ZZCHECK001"] = dict(specs[a3])               # the PLM list now has ZZCHECK001, as a3's construction
+    specs[b1], b1_spec = dict(specs[a3]), specs[b1]     # and b1's specification corrected to it too
+    try:
+        wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected again.xlsx", io.BytesIO(newer))}).json()["id"])
+        zz, moved_b1 = (c.get("/api/purchases/history", params={"code": x}).json() for x in ("ZZCHECK001", b1))
+        pa, pb2 = c.get(f"/api/groups/{gA}").json(), c.get(f"/api/groups/{gB}").json()
+        specs[b1] = b1_spec                             # corrected back
+        wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected, again.xlsx", io.BytesIO(newer))}).json()["id"])
+    finally:
+        specs.pop("ZZCHECK001", None)
+        specs[b1] = b1_spec
+    back = c.get("/api/purchases/history", params={"code": b1}).json()
+    check(f"{k} a specification completed or corrected regroups its code at the next upload, and both group pages say so",
+          zz["group"]["code"] == gA and moved_b1["group"]["code"] == gA and {m["code"] for m in pa["moved_in"]} == {"ZZCHECK001", b1}
+          and [m["code"] for m in pb2["moved_out"]] == [b1] and "is now complete" in next(m["why"] for m in pa["moved_in"] if m["code"] == "ZZCHECK001"),
+          f"{zz.get('group')} {moved_b1.get('group')} {pa['moved_in']} {pb2['moved_out']}")
+    b1_move = next((m_ for m_ in moved_b1["moved"] if m_["from"] == gB and m_["to"] == gA), {})
+    b1_what = fab_groups._changed(fab_groups.signature_of(b1_spec)[0], fab_groups.signature_of(specs[a3])[0])
+    check(f"{k} a code that moves group because its specification changed says what changed, as a code that stays does ({b1}: {b1_what})",
+          b1_what and b1_move.get("why") == f"its PLM specification changed: {b1_what}; costed again"
+          and any(m_["code"] == b1 and m_["why"] == b1_move.get("why") for m_ in pa["moved_in"]), str(b1_move))
+    check(f"{k} corrected back, the code returns to its group", back["group"]["code"] == gB, str(back.get("group")))
+    with st.tx(write=dp.KIND) as cur:                  # as if the fields of Fab-0002 had been tidied another way when it was made
+        cur.run("UPDATE fab_group SET signature = 'an older way of tidying' WHERE code = %s", (gB,))
+        cur.run("UPDATE fabric SET signature = 'an older way of tidying' WHERE fab_group_id = (SELECT id FROM fab_group WHERE code = %s)", (gB,))
+        n_groups = cur.one("SELECT count(*) FROM fab_group")[0]
+    wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected, once more.xlsx", io.BytesIO(newer))}).json()["id"])
+    back = c.get("/api/purchases/history", params={"code": b1}).json()
+    with st.tx() as cur:
+        sig_b = cur.one("SELECT signature FROM fab_group WHERE code = %s", (gB,))[0]
+        n_groups2 = cur.one("SELECT count(*) FROM fab_group")[0]
+    check(f"{k} a change in how the fields are tidied keeps every group's code: the group takes the new signature, no new group is made",
+          back["group"]["code"] == gB and sig_b == fab_groups.signature_of(b1_spec)[1] and n_groups2 == n_groups, f"{back.get('group')} {sig_b} {n_groups} {n_groups2}")
+    # the merge
+    refusals = [c.post("/api/groups/merge", json={"code": gA, "into": gA}).status_code, c.post("/api/groups/merge", json={"code": "Fab-9999", "into": gA}).status_code]
+    before_m = c.get(f"/api/groups/{gA}").json()["purchases"] + c.get(f"/api/groups/{gB}").json()["purchases"]
+    first = c.post("/api/groups/merge", json={"code": gB, "into": gA}).json()
+    unmerged = c.get(f"/api/groups/{gB}").json()["code"] == gB
+    m = c.post("/api/groups/merge", json={"code": gB, "into": gA, "confirm": True})
+    again = c.post("/api/groups/merge", json={"code": gB, "into": gA, "confirm": True}).status_code
+    pbm, listing = c.get(f"/api/groups/{gB}").json(), c.get("/api/groups").json()
+    check(f"{k} an admin merge of groups that differ in more than width or finish waits for a second yes; then the merged group's purchases count in the other, its code kept",
+          first.get("needs_confirm") is True and first["differences"] and unmerged and m.status_code == 200 and refusals == [400, 404] and again == 409
+          and pbm["code"] == gA and pbm["asked"]["code"] == gB and pbm["purchases"] == before_m
+          and [x["code"] for x in listing["groups"]] == [gA] and listing["merged"][0]["code"] == gB and listing["merged"][0]["into"] == gA, str(first)[:300])
+    check(f"{k} undoing a merge", c.post("/api/groups/unmerge", json={"code": gB}).status_code == 200 and c.get(f"/api/groups/{gB}").json()["code"] == gB
+          and c.post("/api/groups/unmerge", json={"code": gB}).status_code == 409)
+    c.post("/api/groups/merge", json={"code": gB, "into": gA, "confirm": True})
+    # the real purchase file that came with the code, loaded through the app
+    pilot.PO_FILE = shipped_at              # the purchase file that came with the code within reach again
+    counts_before = c.get("/api/purchases/status").json()["counts"]
+    t0 = time.time()
+    real = wait(c.post("/api/purchases/load-shipped").json()["id"], limit=600)
+    took = time.time() - t0
+    import pilot
+    po = pd.read_excel(os.path.join(HERE, "inputs", "Fabric _ 3Months_4746.xlsx"))
+    bulk = po[po["Purchasing Doc. Type"].isin(pilot.BULK_TYPES) & (po["Net Price"] > 0) & po["Deletion Indicator"].isna()
+              & (po["Currency"] == "INR") & (po["Order Unit"] == "M")]
+    counts = c.get("/api/purchases/status").json()["counts"]
+    zloi = int((bulk["Purchasing Doc. Type"] == "ZLOI").sum())
+    check(f"{k} the purchase file that came with the code loads through the app ({took:.0f} s): the pilot's own bulk lines, every material code once, "
+          f"its {zloi} ZLOI lines kept apart; it covers its latest order (23 Nov 2026) up to when SAP saved it (05:48:59 UTC)", real["status"] == "done" and real["rows_total"] == len(po) and real["rows_loaded"] == len(bulk) == 6265
+          and real["rows_new"] == 6265 and real["rows_outliers"] == zloi == 1377 and real["file_date"] == "2026-11-23"
+          and (real["covers_from"], real["covers_to"], real["saved_at"]) == ("2026-11-22T18:30:00", "2026-11-23T05:48:59", "2026-11-23T05:48:59")
+          and c.get("/api/purchases/uploads").json()["shipped"]["loaded"] is True
+          and counts["lines"] == counts_before["lines"] + 6265 - zloi and counts["outliers"] == counts_before["outliers"] + zloi
+          and counts["fabrics"] == len(set(bulk["Material"].astype(str).str.strip()) | {a1, a2, b1, inc, "ZZCHECK001"}), str({x: real[x] for x in real if x.startswith(("rows", "file", "covers", "saved"))}))
+    fab = pd.read_excel(os.path.join(HERE, "pilot", "Pilot_Results.xlsx"), sheet_name="Fabrics")
+    with st.tx() as cur:
+        got = {code: json.loads(ch) for code, ch in cur.all("SELECT code, choices FROM fabric WHERE choices IS NOT NULL")}
+        new_codes = sorted(code for (code,) in cur.all("SELECT code FROM fab_group WHERE upload_id = %s", (real["id"],)))
+        met = {code: q for code, q in cur.all("SELECT f.code, sum(l.qty_m) FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id WHERE l.removed_upload_id IS NULL "
+                                              "AND l.doc_type <> 'ZLOI' GROUP BY f.code")}
+    m_ = rules_common.get_masters()
+    keys = ["Route", "Weave", "Finish", "Warp yarn", "Weft yarn", "EPI", "PPI", "Finished width (in)"]
+    mine = {a1, a2, a3, b1}
+    got.pop("ZZCHECK001", None)                         # made up, with a3's specification
+    same_value = lambda x, y: (float(x) == float(y)) if isinstance(y, (int, float)) and x is not None else str(x) == str(y)
+    differ = [r["Fabric code"] for r in fab.to_dict("records") if not all(same_value(got.get(r["Fabric code"], {}).get(x), r[x]) for x in keys)]
+    wd = [r["Fabric code"] for r in fab.to_dict("records") if r["Route"] == "Yarn Dyed" and got.get(r["Fabric code"], {}).get("Weft (yarn dyed)") != r["Weft (yarn dyed)"]]
+    bands = [r["Fabric code"] for r in fab.to_dict("records") if r["Fabric code"] not in mine
+             and (got.get(r["Fabric code"], {}).get("Rate card quantity"), got.get(r["Fabric code"], {}).get("Order size")) != purchases.quantity_terms(r["Route"], met.get(r["Fabric code"]), m_)]
+    check(f"{k} every fabric the pilot costed has the pilot's costing choices here, by pilot.py's own functions; its quantity band and order size from its metres, ZLOI left out ({len(fab)} fabrics)",
+          not differ and not wd and not bands and len([x for x in got if x in set(fab["Fabric code"])]) == len(fab) and len(got) == len(fab), f"{differ[:5]} {wd[:5]} {bands[:5]} {len(got)}")
+    check(f"{k} new Fab groups go on from the last code ever given: a merged code is never handed out again",
+          new_codes and new_codes[0] == "Fab-0003" and gB not in new_codes, str(new_codes[:3]))
+    _stage2_right_cost(c, check, kind, "after the purchase file is loaded", popup=True)
+    again = wait(c.post("/api/purchases/load-shipped").json()["id"], limit=600)
+    check(f"{k} loading the same purchase file again changes nothing", again["rows_new"] == 0 and again["rows_same"] == 6265 and again["groups_new"] == 0
+          and c.get("/api/purchases/status").json()["counts"] == counts)
+    # ZLOI in no count (the second review): the supplier list and pages, a group's mills, the pilot results page
+    rc = _ready_costs(c)
+    po_rows = [r for r in rc["rows"] if r["source"] == "Purchase orders"]
+    priced = {}
+    for r in po_rows:
+        if r["price"] is not None:
+            priced[r["mill"]] = priced.get(r["mill"], 0) + 1
+    zl_mills = {}
+    for r in po_rows:
+        if r["price"] is None:
+            zl_mills[r["mill"]] = zl_mills.get(r["mill"], 0) + 1
+    sups = {s["key"]: s for s in c.get("/api/suppliers").json()["suppliers"]}
+    wrong = {key: (s["bought"], priced.get(key, 0)) for key, s in sups.items() if s["bought"] != priced.get(key, 0)}
+    zmill = max(zl_mills, key=lambda x: (zl_mills[x], x))
+    sp_z = c.get("/api/supplier", params={"mill": zmill}).json()
+    check(f"{k} a code bought only on ZLOI orders is not counted as bought: the supplier list counts only fabrics with a price paid ({len(zl_mills)} mills have "
+          f"such codes; {zmill}: {zl_mills[zmill]}), and so does each supplier page",
+          not wrong and sp_z["bought"]["fabrics"] == priced.get(zmill, 0) and all(s["bought"] or s["quoted"] for s in sups.values()), str(wrong)[:300])
+    if shutil.which("node"):
+        # Right cost's Suppliers tab counts in the browser: its own counting function, run here on the rows the page gets
+        js = open(os.path.join(HERE, "web", "rightcost.js"), encoding="utf8").read()
+        fn = js[js.index("// SUPPLIER COUNTS"):js.index("// END SUPPLIER COUNTS")]
+        rows_at = os.path.join(tempfile.mkdtemp(prefix="rightprice-suppliers-tab-"), "rows.json")
+        with open(rows_at, "w", encoding="utf8") as f:
+            json.dump(rc["rows"], f, default=str)
+        run_ = subprocess.run(["node", "-e", fn + "\nconst by = supplierCounts(JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')));\n"
+                               "console.log(JSON.stringify(Object.fromEntries(Object.entries(by).map(([k, x]) => [k, [x.counted.length, x.zloi.map(r => r.code).sort()]]))));",
+                               rows_at], capture_output=True, text=True)
+        tab = json.loads(run_.stdout) if run_.returncode == 0 else {}
+        tab.pop("(none)", None)
+        api_n = {key: s_["bought"] + s_["quoted"] for key, s_ in sups.items()}
+        all_n = {}
+        for r in rc["rows"]:
+            all_n[r["mill"]] = all_n.get(r["mill"], 0) + 1
+        z_py = {}                       # each mill's codes it sold on ZLOI and is not counted for, by the ZLOI lines' own mill
+        for r in po_rows:
+            for key in {rules_mills.mill_key(o["mill"]) for o in r["outliers"]}:
+                if not (r["price"] is not None and r["mill"] == key):
+                    z_py.setdefault(key, []).append(r["code"])
+        z_py = {x: sorted(v) for x, v in z_py.items()}
+        moved_z = sorted(r["code"] for r in po_rows if r["price"] is None and r["outliers"] and r["mill"] not in {rules_mills.mill_key(o["mill"]) for o in r["outliers"]})
+        big = max(api_n, key=lambda x: (all_n.get(x, 0) - api_n[x], x)) if api_n else None
+        check(f"{k} Right cost's Suppliers tab counts each mill as the supplier list does: a code bought only on ZLOI orders is not counted, a repeated "
+              f"fabric-list row neither ({big}: {big and api_n[big]} counted of its {big and all_n.get(big)} rows); the codes a mill sold only on ZLOI "
+              f"are named under the ZLOI lines' own mill, not the row's supplier ({len(moved_z)} codes bought only on ZLOI from another mill than the "
+              f"pilot's; {len(set(z_py) - set(api_n))} mills bought from only on ZLOI, listed apart)",
+              run_.returncode == 0 and {x: n for x, (n, z) in tab.items() if n} == api_n and {x for x, (n, z) in tab.items() if not n and z} == set(z_py) - set(api_n)
+              and {x: z for x, (n, z) in tab.items() if z} == z_py and big and api_n[big] < all_n[big],
+              run_.stderr[-300:] + str({x: (tab.get(x), api_n.get(x)) for x in set(tab) | set(api_n) if (tab.get(x) or [0])[0] != api_n.get(x, 0)})[:300])
+    with st.tx() as cur:
+        only_zl = cur.all("SELECT f.fab_group_id, l.mill_id FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id WHERE l.removed_upload_id IS NULL "
+                          "AND f.fab_group_id IS NOT NULL GROUP BY f.fab_group_id, l.mill_id HAVING sum(CASE WHEN l.doc_type = 'ZLOI' THEN 0 ELSE 1 END) = 0")
+        g_zl = cur.one(f"SELECT code FROM fab_group WHERE id = %s", (only_zl[0][0],))[0] if only_zl else None
+    pz = c.get(f"/api/groups/{g_zl}").json() if g_zl else None
+    check(f"{k} a group's mills count only mills with purchases beside ZLOI; a mill with ZLOI lines only is listed, not counted "
+          f"({len(only_zl)} such mill and group pairs; {g_zl}: {pz and pz['mills_bought']} of {pz and len(pz['mills'])} listed)",
+          pz is not None and pz["mills_bought"] == sum(1 for m_ in pz["mills"] if m_["lines"]) < len(pz["mills"])
+          and all(m_["outliers"] for m_ in pz["mills"] if not m_["lines"]), str(pz and pz["mills"])[:300])
+    pil = c.get("/api/pilot").json().get("as_run") or ""
+    check(f"{k} Pilot results says plainly it is the pilot as run, ZLOI included, beside what every other page counts",
+          "1,696 fabrics, ZLOI orders included" in pil and "count the 1,512 fabrics with a price paid" in pil and "184 bought only on ZLOI" in pil, pil)
+    # a specification corrected (the second review): the code is costed again at the next upload; a group whose only code changed keeps its
+    # code, is renamed and says why; the price popup and Right cost cost it on the same choices
+    pilot_codes = set(fab["Fabric code"].astype(str))
+    with st.tx() as cur:
+        single = cur.all("SELECT g.code, min(f.code), count(*) FROM fab_group g JOIN fabric f ON f.fab_group_id = g.id GROUP BY g.code")
+    cand = sorted((g, code) for g, code, n in single if n == 1 and code in pilot_codes and code in specs and code not in mine)
+    g_e, c_e = cand[0]
+    c_w = next(code for g, code in cand[1:] if specs[code].get("article_cust_finishedwidth_uom", "").lower() == "cm")
+    c_n = next(code for g, code in cand[1:] if code != c_w)          # its EPI taken out of the PLM extract: not costed now
+    keep = {x: dict(specs[x]) for x in (c_e, c_w, c_n)}
+    hist_of = lambda x: c.get("/api/purchases/history", params={"code": x}).json()
+    before = {x: hist_of(x) for x in (c_e, c_w)}
+    old_epi, old_w = float(specs[c_e]["article_cust_epi"]), float(specs[c_w]["article_cust_finishedwidth"])
+    specs[c_e] = dict(specs[c_e], article_cust_epi=f"{old_epi + 10:g}")
+    specs[c_w] = dict(specs[c_w], article_cust_finishedwidth=f"{old_w + 1:g}")
+    old_n = {x: specs[c_n].get(f"article_cust_{x}") for x in ("epi", "ppi")}
+    specs[c_n] = dict(specs[c_n], article_cust_epi="0")
+    try:
+        wait(c.post("/api/purchases/upload", files={"file": ("purchase orders, specifications corrected.xlsx", io.BytesIO(newer))}).json()["id"])
+        after = {x: hist_of(x) for x in (c_e, c_w)}
+        pg_e = c.get(f"/api/groups/{g_e}").json()
+        with st.tx() as cur:
+            stored_ = {code: json.loads(ch) for code, ch in cur.all("SELECT code, choices FROM fabric WHERE code IN (%s, %s)", (c_e, c_w))}
+        fresh = {x: round(c.post("/api/cost", json=stored_[x]).json()["total_per_m"], 2) for x in (c_e, c_w)}
+        rc2 = {r["code"]: r for r in _ready_costs(c)["rows"] if r["source"] == "Purchase orders" and r["code"] in (c_e, c_w, c_n)}
+    finally:
+        specs.update(keep)
+    wait(c.post("/api/purchases/upload", files={"file": ("purchase orders, specifications as they were.xlsx", io.BytesIO(newer))}).json()["id"])
+    back = {x: hist_of(x) for x in (c_e, c_w)}
+    rc3 = {r["code"]: r for r in _ready_costs(c)["rows"] if r["source"] == "Purchase orders" and r["code"] == c_n}
+    nc = rc2[c_n]
+    check(f"{k} a code whose PLM specification no longer costs ({c_n}, EPI taken out): its Right cost row is not costed and shows the "
+          "specification as it is now (no EPI), not the pilot's figures beside 'not costed now'; put back, costed again",
+          nc["should"] is None and nc["epi"] is None and float(nc["ppi"]) == float(old_n["ppi"]) and "not costed now: EPI or PPI missing" in (nc["worked_out_again"] or "")
+          and all(v is None for v in (nc["buckets"] or {}).values()) and rc3[c_n]["should"] is not None and float(rc3[c_n]["epi"]) == float(old_n["epi"]),
+          str({x: nc.get(x) for x in ("should", "epi", "ppi", "band", "worked_out_again", "buckets")})[:400])
+    renamed = [x for x in pg_e.get("renamed", []) if f"EPI {old_epi:g} to {old_epi + 10:g}" in x["why"]]
+    check(f"{k} a code's PLM specification corrected ({c_e} EPI {old_epi:g} to {old_epi + 10:g}, the only code of {g_e}; {c_w} {old_w:g} to {old_w + 1:g} cm): "
+          "both are costed again at the next upload; the group keeps its code, is renamed and says why; the code's popup says what changed; "
+          "Right cost and the popup give one should-cost from the same choices; put back, back as they were",
+          after[c_e]["group"]["code"] == g_e and renamed and f"{old_epi + 10:g} x" in renamed[0]["to"]
+          and any(m_["from"] == m_["to"] == g_e and f"EPI {old_epi:g} to {old_epi + 10:g}" in m_["why"] and "costed again" in m_["why"] for m_ in after[c_e]["moved"])
+          and float(stored_[c_e]["EPI"]) == old_epi + 10 and all(after[x]["should"] == fresh[x] != before[x]["should"] for x in (c_e, c_w))
+          and all(rc2[x]["should"] == after[x]["should"] for x in (c_e, c_w)) and float(rc2[c_e]["epi"]) == old_epi + 10
+          and all(back[x]["should"] == before[x]["should"] for x in (c_e, c_w)) and back[c_e]["group"]["code"] == g_e,
+          str({x: (before[x]["should"], after[x]["should"], fresh[x], rc2[x]["should"], back[x]["should"]) for x in (c_e, c_w)}) + str(pg_e.get("renamed"))[:300])
+    big_g = max(c.get("/api/groups").json()["groups"], key=lambda g: g["purchases"])
+    gp = c.get(f"/api/groups/{big_g['code']}").json()
+    r_ = gp["range"]
+    ps = sorted(x["price"] for x in gp["lines"])
+    q2 = statistics.quantiles(ps, n=4, method="inclusive")
+    exp = costing.usual_range((q2[0] / statistics.median(ps) - 1) * 100, (q2[2] / statistics.median(ps) - 1) * 100)
+    check(f"{k} the busiest real group ({big_g['code']}, {gp['purchases']} purchases on {r_['orders']} orders, {len(gp['mills'])} mills): range by the brief's rule; purchases above it listed",
+          (r_["lo"], r_["hi"]) == exp and all(x["price"] > r_["upper"] for x in gp["above"]) and all(x["type"] != "ZLOI" for x in gp["lines"])
+          and len(gp["above"]) == sum(1 for x in gp["lines"] if round(x["price"], 2) > r_["upper"]) and gp["purchases"] == len(gp["lines"]) == big_g["purchases"])
+    live = {g["code"] for g in c.get("/api/groups").json()["groups"]}
+    with st.tx() as cur:
+        groups = [g for g in dp.groups(cur).values() if g["code"] in live]
+    buckets = {}
+    for g in groups:
+        buckets.setdefault(tuple(str(g[x]).lower() for x in fab_groups.FIELDS if x not in fab_groups.MERGE_FREELY), []).append(g)
+    pair = next((b for b in buckets.values() if len(b) > 1), None)
+    if pair:
+        mm = c.post("/api/groups/merge", json={"code": pair[1]["code"], "into": pair[0]["code"]}).json()      # no "confirm"
+        check(f"{k} two groups that differ only in width or finish merge at the first yes ({pair[1]['code']} into {pair[0]['code']})",
+              mm.get("merged") == pair[1]["code"] and c.post("/api/groups/unmerge", json={"code": pair[1]["code"]}).status_code == 200, str(mm)[:200])
+    # a new code whose width bridges two groups (120 and 120.7 in; 120.35 in joins them): the code that moves says a new code joined
+    wide = lambda w: dict(specs[a3], article_cust_finishedwidth=f"{w:g}", article_cust_finishedwidth_uom="in")
+    for code, w in (("ZZW1A", 120), ("ZZW1B", 120.7), ("ZZW1D", 120.35)):
+        specs[code] = wide(w)
+    try:
+        wait(c.post("/api/purchases/upload", files={"file": ("two widths.xlsx", io.BytesIO(_stage2_file(
+            [row(9900000071, 10, "ZZW1A", "2026-11-27", nsl, 100, 150), row(9900000072, 10, "ZZW1B", "2026-11-27", nsl, 100, 151)], saved="2026-11-27T09:00:00")))}).json()["id"])
+        apart = {x: hist_of(x)["group"]["code"] for x in ("ZZW1A", "ZZW1B")}
+        wait(c.post("/api/purchases/upload", files={"file": ("a width between.xlsx", io.BytesIO(_stage2_file(
+            [row(9900000073, 10, "ZZW1D", "2026-11-27", nsl, 100, 152)], saved="2026-11-27T10:00:00")))}).json()["id"])
+        joined = {x: hist_of(x) for x in ("ZZW1A", "ZZW1B", "ZZW1D")}
+    finally:
+        for code in ("ZZW1A", "ZZW1B", "ZZW1D"):
+            specs.pop(code, None)
+    mv = [m_["why"] for m_ in joined["ZZW1B"]["moved"] if m_["from"] == apart["ZZW1B"]]
+    check(f"{k} a new code whose width bridges two groups (120.35 in between 120 and 120.7 in): one group from 120 to 120.7 in; the code that "
+          "moves says a new code joined the widths, not that the way its fields are tidied changed",
+          apart["ZZW1A"] != apart["ZZW1B"] and len({x["group"]["code"] for x in joined.values()}) == 1 and "120 to 120.7 in" in joined["ZZW1D"]["group"]["name"]
+          and mv == ["a new code joined the widths (ZZW1D at 120.35 in): its group now runs 120 to 120.7 in"], f"{apart} {mv}")
+    src_ = open(os.path.join(HERE, "rules", "purchases.py"), encoding="utf8").read() + open(os.path.join(HERE, "data_purchases.py"), encoding="utf8").read()
+    check(f"{k} every list of codes or ids sent to the database goes a few hundred at a time (no statement over the 32,766 or 65,535 values a "
+          "statement can carry, however many codes a file has)", all("store._in(len(part))" in x for x in re.findall(r"store\._in\(len\([^)]*\)\)", src_)),
+          str(set(re.findall(r"store\._in\(len\([^)]*\)\)", src_))))
+    # a mill bought from only on ZLOI, and no row's supplier: the Suppliers tab names it, and its page opens (the re-review of d438c21)
+    zsup = "1299999    REVIEWONLY ZLOI WEAVERS"
+    wait(c.post("/api/purchases/upload", files={"file": ("a ZLOI line from a mill of nothing else.xlsx", io.BytesIO(_stage2_file(
+        [row(9900000090, 10, a1, "2026-11-20", zsup, 100, 550, **{"Purchasing Doc. Type": "ZLOI"})], saved="2026-11-27T11:00:00")))}).json()["id"])
+    rc_z = _ready_costs(c)
+    zkey = rules_mills.mill_key("Reviewonly Zloi Weavers")
+    sp_zl = c.get("/api/supplier", params={"mill": zkey})
+    check(f"{k} a mill bought from only on ZLOI, no row's supplier: the Suppliers tab lists it apart and its page opens: nothing bought, its ZLOI "
+          "lines listed apart",
+          any(o.get("mill_key") == zkey for r in rc_z["rows"] if r["source"] == "Purchase orders" for o in r["outliers"])
+          and zkey not in {s_["key"] for s_ in c.get("/api/suppliers").json()["suppliers"]} and sp_zl.status_code == 200
+          and sp_zl.json()["bought"]["fabrics"] == 0 and [(o["code"], o["price"]) for o in sp_zl.json()["outliers"]] == [(a1, 550.0)], sp_zl.text[:300])
+    # a price slip: a line ten times its code's other purchases (or a tenth) is held apart to check in SAP, counted nowhere
+    # until an admin counts it (the build lead's guard, 28 Nov 2026)
+    before_h = c.get("/api/purchases/history", params={"code": a1}).json()
+    u_slip = wait(c.post("/api/purchases/upload", files={"file": ("a price slip.xlsx", io.BytesIO(_stage2_file(
+        [row(9900000091, 10, a1, "2026-11-21", arv, 300, 15000), row(9900000091, 20, a1, "2026-11-21", arv, 300, 9)], saved="2026-11-27T12:00:00")))}).json()["id"])
+    d_slip = c.get(f"/api/purchases/uploads/{u_slip['id']}").json()
+    h_slip = c.get("/api/purchases/history", params={"code": a1}).json()
+    held_ = {x["item"]: x for x in h_slip["to_check"]}
+    check(f"{k} a price slip (Rs 15,000 a metre, and Rs 9, against a code bought at about Rs 100): both held apart to check in SAP, in no figure "
+          "(price paid, metres, the group), listed on the upload and in the price popup with why",
+          set(held_) == {"10", "20"} and "times the median" in held_["10"]["why"] and "under a tenth" in held_["20"]["why"]
+          and h_slip["metres"] == before_h["metres"] and len(h_slip["lines"]) == len(before_h["lines"]) and len(d_slip["summary"]["price_checks"]) == 2
+          and c.get("/api/purchases/status").json()["counts"]["price_checks"] >= 2, str(h_slip["to_check"])[:400])
+    gp_h = {"X-MS-CLIENT-PRINCIPAL-NAME": "gp@example.com"}
+    counted_ = c.post("/api/purchases/price-check", json={"line_id": held_["10"]["id"], "count": True}, headers=gp_h)
+    h_counted = c.get("/api/purchases/history", params={"code": a1}).json()
+    twice_ = c.post("/api/purchases/price-check", json={"line_id": held_["10"]["id"], "count": True})
+    back_ = c.post("/api/purchases/price-check", json={"line_id": held_["10"]["id"], "count": False})
+    bad_ = [c.post("/api/purchases/price-check", json=b_).status_code for b_ in ({}, {"line_id": held_["10"]["id"], "count": "yes"}, {"line_id": 99999999})]
+    h_back = c.get("/api/purchases/history", params={"code": a1}).json()
+    check(f"{k} an admin counts a held price after checking it in SAP: it is counted (price paid, metres), recorded with who; counting twice, or "
+          "without saying which line or which way, is refused; held apart again, it is out of every figure again",
+          counted_.status_code == 200 and h_counted["metres"] == before_h["metres"] + 300 and any(x["counted_by"] == "gp@example.com" for x in h_counted["to_check"])
+          and twice_.status_code == 409 and back_.status_code == 200 and bad_ == [400, 400, 404] and h_back["metres"] == before_h["metres"],
+          f"{counted_.text[:200]} {twice_.status_code} {bad_}")
+    page_js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+    if shutil.which("node"):            # the Fab groups search, the page's own function: every word, anywhere
+        fn_s = page_js[page_js.index("// GROUP SEARCH"):page_js.index("// END GROUP SEARCH")]
+        g_ = {"code": "Fab-0001", "name": "100% Cotton · Piece Dyed · Twill-2/1 · 40s x 40s · 136 x 90 · 57 in · Normal Soft"}
+        run_s = subprocess.run(["node", "-e", fn_s + f"\nconst g = {json.dumps(g_)};\nconsole.log(JSON.stringify(['Twill 40s', 'twill', '40s', 'fab-0001 soft', 'twill 60s', ''].map(q => groupMatches(g, q))))"],
+                               capture_output=True, text=True)
+        check(f"{k} Fab groups' search finds its own example (Twill 40s): every word, anywhere in the code or the name", run_s.returncode == 0
+              and json.loads(run_s.stdout) == [True, True, True, True, False, True], run_s.stdout + run_s.stderr[-200:])
+    css_ = open(os.path.join(HERE, "web", "purchases.css"), encoding="utf8").read()
+    check(f"{k} the page's words and print: one price for every purchase said once (never 'Rs 208.00 to 208.00'); one group in the singular; a "
+          "printed chart in light colours whatever the theme",
+          "(every purchase)" in page_js and 'rows.length === 1 ? "group" : "groups"' in page_js and "@media print" in css_
+          and css_.index("@media print") < css_.rindex("--pgrid: #ECE8DD"))
+    check(f"{k} the page's words: no stray separator on a group of ZLOI lines only, one ZLOI line in the singular, the PLM extract said to be "
+          "the one deployed with the code",
+          "(only ? ` · ${only} more with ZLOI lines only" not in page_js and '${u.rows_outliers === 1 ? "line" : "lines"}' in page_js
+          and "in the code's own folder, not the data folder" in page_js and "Fabric codes are matched to their PLM specification (data/plm_specs_for_po.csv)" not in page_js)
+    check(f"{k} the pilot results, the rate master and the purchase file are untouched", all(sha(p) == v for p, v in kept_files.items()))
+    r1 = c.post("/api/cost", json=masters.EXAMPLE_ROW).json()
+    check(f"{k} no rate changed: the example fabric costs what it did before the purchase files (the checks above edited rates on purpose)",
+          r1["total_per_m"] == r_before["total_per_m"] and c.get("/api/table/Yarn_Rates").json() == yarn_before and versions() == versions_before,
+          f"{r1['total_per_m']:.2f}, rate versions {versions_before} then {versions()}")
+
+
+def _stage2_right_cost(c, check, kind, when, popup=False):
+    """Right cost's purchase-order rows: the price paid, metres, quantity band and should-cost worked out again from the
+    lines bought with ZLOI left out (GP, 27 Nov 2026); a code bought only on ZLOI lines shows no price; the dashboard's fit
+    by fabric type counts only rows with a price. With popup: the price popup gives every row's should-cost."""
+    import pandas as pd
+    from rules import dashboard, purchases
+    t0, up_to_date = time.time(), False
+    while time.time() - t0 < 600:        # Right cost works its rows and verdicts out in the background, saying so meanwhile
+        rc = c.get("/api/costs").json()
+        if rc.get("ready") and not rc.get("updating") and not any(r.get("band") == "Working it out" for r in rc["rows"]):
+            up_to_date = True
+            break
+        time.sleep(0.5)
+    waited = time.time() - t0
+    print(f"   (Right cost up to date {when} after {waited:.0f} s)" if up_to_date else f"   (Right cost NOT up to date {when} after {waited:.0f} s)")
+    check(f"[{kind}] Stage 2, Right cost {when}: up to date within ten minutes, saying meanwhile that it is being brought up to date", up_to_date,
+          f"{waited:.0f} s; ready {rc.get('ready')}, updating {rc.get('updating')}")
+    po = {r["code"]: r for r in rc["rows"] if r["source"] == "Purchase orders"}
+    _, by_code, zl_all = purchases.bought_lines()
+    bad, zl_only, changed = [], [], 0
+    pilot_f = {str(r["Fabric code"]): r for r in pd.read_excel(os.path.join(HERE, "pilot", "Pilot_Results.xlsx"), sheet_name="Fabrics").to_dict("records")}
+    for code, r in po.items():
+        ls = by_code.get(code, [])
+        reg = [x for x in ls if x[3] != "ZLOI"]
+        metres = sum(x[5] for x in reg)
+        price = round(sum(x[5] * x[6] for x in reg) / metres, 2) if metres else None
+        if any(x[3] == "ZLOI" for x in ls) and not reg:
+            zl_only.append(code)
+        by_month = {}               # stage 5's order month: the month with most of its metres (the earlier on a tie), ZLOI left out
+        for x in reg:
+            by_month[x[2][:7]] = by_month.get(x[2][:7], 0) + x[5]
+        month = min(by_month, key=lambda k: (-by_month[k], k)) if by_month else None
+        if (r["price"] is None) != (price is None) or (price is not None and abs(r["price"] - price) >= 0.005) or abs((r["metres"] or 0) - metres) > 1e-6 \
+                or len(r["outliers"]) != sum(1 for x in ls if x[3] == "ZLOI") or (r["rates"] or {}).get("month") != month:
+            bad.append(code)
+        changed += r["worked_out_again"] is not None
+    ins = dashboard.insights()["pilot"]
+    with_price = sum(1 for r in po.values() if r["price"] is not None)
+    sup_off = [x for x, r in po.items() if r["choices"] is not None and not (r["choices"].get("Supplier")
+                                                                             and re.sub(r"^\d+\s+", "", str(r["choices"]["Supplier"])).title() == r["supplier"])]
+    told = [x for x, r in po.items() if "specification changed since the pilot" in (r["worked_out_again"] or "")]
+    check(f"[{kind}] Stage 2, Right cost {when}: every purchase-order row's costing choices carry its supplier as written (Open in Cost a fabric, "
+          "the cost sheet and a list row saved from it keep the mill); no row says its specification changed when only its choices differ",
+          not sup_off and not told and sum(1 for r in po.values() if r["choices"]) > 1000, f"{sup_off[:5]} {told[:5]}")
+    check(f"[{kind}] Stage 2, Right cost {when}: every purchase-order row's price paid, metres and order month (stage 5) are its lines' own, ZLOI left "
+          f"out; a code bought only on ZLOI shows no price and its outliers ({len(zl_only)} such codes, {changed} rows worked out again)",
+          len(po) == 1696 and not bad and zl_only and all(po[x]["price"] is None and po[x]["band"] == "No price" and po[x]["outliers"] for x in zl_only)
+          and ins["fabrics"] == with_price and all(r["choices"].get("Quoted price (Rs/m)") == r["price"] for r in po.values() if r["price"] is not None)
+          and all(po[x]["worked_out_again"] is None and po[x]["price"] == round(pilot_f[x]["PO price Rs/m"], 2) and po[x]["metres"] == pilot_f[x]["PO metres"] for x in po if not any(y[3] == "ZLOI" for y in by_code.get(x, []))
+                  and abs(sum(y[5] for y in by_code.get(x, [])) - pilot_f[x]["PO metres"]) < 1e-6),
+          f"{bad[:5]} {len(zl_only)} {ins['fabrics']} {with_price}")
+    if popup:
+        sample = [x for x in po if po[x]["worked_out_again"]] + [x for x in po if not po[x]["worked_out_again"]][:60]
+        differ = []
+        for code in sample:
+            h = c.get("/api/purchases/history", params={"code": code}).json()
+            if h.get("should") is None or abs(h["should"] - po[code]["should"]) >= 0.005 or abs(h["metres"] - (po[code]["metres"] or 0)) > 0.01:
+                differ.append((code, h.get("should"), po[code]["should"], h.get("metres"), po[code]["metres"]))
+        check(f"[{kind}] Stage 2: the price popup and Right cost give one should-cost for a code, from the same metres (ZLOI left out), for the {len(sample)} rows checked "
+              "(every row worked out again, and others)", not differ, str(differ[:3]))
+        # with a dated yarn rate in force (stage 5), both cost a code on its order month's rate, and the popup says so
+        month, yarn = "2026-09", "Cotton 40S"
+        hit = sorted(x for x, r in po.items() if (r["rates"] or {}).get("month") == month and yarn in (r["choices"].get("Warp yarn"), r["choices"].get("Weft yarn")))
+        added = c.post("/api/dated-rates", json={"yarn_key": yarn, "month": month, "rate": 420, "rests_on": "quote", "note": "stage 2 check"})
+        rc2 = _ready_costs(c, until=lambda d: any((r.get("rates") or {}).get("dated") for r in d["rows"]))
+        po2 = {r["code"]: r for r in rc2["rows"] if r["source"] == "Purchase orders"}
+        pops = {x: c.get("/api/purchases/history", params={"code": x}).json() for x in hit[:12]}
+        for e in c.get("/api/dated-rates").json()["entries"]:          # the store left as the rest of the suite found it
+            c.post("/api/dated-rates/remove", json={"id": e["id"]})
+        check(f"[{kind}] Stage 2 with a dated yarn rate: the price popup costs a code on its order month's rate as Right cost does, and says so "
+              f"({len(pops)} of the {len(hit)} {month} orders on {yarn} checked)",
+              added.status_code == 200 and hit and all(po2[x]["rates"]["dated"] and po2[x]["should"] != po[x]["should"] for x in pops)
+              and all(abs(pops[x]["should"] - po2[x]["should"]) < 0.005 and "dated yarn rates of Sep 2026" in pops[x]["should_on"] for x in pops),
+              str([(x, pops[x].get("should"), po2[x]["should"], pops[x].get("should_on")) for x in list(pops)[:3]]))
+        key = next(iter(sorted((x for x in zl_all if x[0] in po), key=lambda x: (x[3], x[1]))), None)
+        if key:
+            from rules import mills as rules_mills_
+            mk = rules_mills_.mill_key(purchases.VENDOR_NO.sub("", key[5]).strip())
+            sp = c.get("/api/supplier", params={"mill": mk})
+            check(f"[{kind}] Stage 2: a mill's ZLOI lines are listed apart on its supplier page", sp.status_code == 200 and any(o["po"] == key[1] for o in sp.json()["outliers"]),
+                  str(sp.status_code))
 
 
 # ===================================================================== stage 5: dated yarn rates
 def _ready_costs(c, until=lambda d: True):
     for _ in range(600):            # Right cost works its verdicts out in the background
         d = c.get("/api/costs").json()
-        if d.get("ready") and not any(r.get("band") == "Working it out" for r in d["rows"]) and until(d):
+        if d.get("ready") and not d.get("updating") and not any(r.get("band") == "Working it out" for r in d["rows"]) and until(d):
             return d
         time.sleep(0.5)
     raise SystemExit("Right cost's verdicts were not ready after five minutes")
@@ -680,24 +1792,33 @@ def dated_checks(c, check):
     by = {}
     for r in po:
         by[(r["rates"] or {}).get("month")] = by.get((r["rates"] or {}).get("month"), 0) + 1
-    check("Dated rates: every purchase-order costing names its order month, and with no dated rate for it says today's rates are used",
-          len(po) == 1696 and all(r["rates"] and r["rates"]["month"] and not r["rates"]["dated"] and "No dated rate for" in r["rates"]["note"] for r in po)
+    # stage 2 (GP, 27 Nov 2026): ZLOI orders count in no figure, the order month included; a code bought only on them has none
+    zloi_only = {r["code"] for r in po if r["price"] is None and r["outliers"]}
+    check("Dated rates: every purchase-order costing names its order month, and with no dated rate for it says today's rates are used; "
+          "the 184 codes bought only on ZLOI orders have none, and say so",
+          len(po) == 1696 and all(r["rates"] and r["rates"]["month"] and not r["rates"]["dated"] and "No dated rate for" in r["rates"]["note"]
+                                  for r in po if r["code"] not in zloi_only)
+          and len(zloi_only) == 184 and all(r["rates"]["month"] is None and "bought only on ZLOI orders" in r["rates"]["note"]
+                                            and r["outliers"] and all(o["code"] == r["code"] for o in r["outliers"]) for r in po if r["code"] in zloi_only)
           and all(r["rates"]["dated"] is False and r["rates"]["note"].startswith("On today's rates") for r in d["rows"] if r["source"] == "Fabric list"),
           str(sorted((k or "none", v) for k, v in by.items())))
-    months, lines_ = dated_rules.order_months(), dated_rules.po_lines()
+    months, lines_ = dated_rules.order_months(), dated_rules.ordered_lines()
     ties = [k for k, v in months.items() if v["tie"]]
     tied = [r for r in po if r["code"] in set(ties)]
     top = lambda code: (lambda g: sorted(g[g["qty"] == g["qty"].max()]["month"]))(lines_[lines_["Material"] == code])
-    check("Dated rates: a code ordered in two months with the same metres is costed on the earlier of them, and says so",
-          len(tied) == 60 and all("the most metres in two months alike; costed on the earlier" in r["rates"]["note"] for r in tied)
-          and all(len(top(r["code"])) >= 2 and r["rates"]["month"] == top(r["code"])[0] for r in tied), f"{len(tied)} tied")
+    check("Dated rates: a code ordered in two months with the same metres is costed on the earlier of them, and says so (ZLOI orders left out)",
+          len(tied) == 11 and all("the most metres in two months alike; costed on the earlier" in r["rates"]["note"] for r in tied)
+          and all(len(top(r["code"])) >= 2 and r["rates"]["month"] == top(r["code"])[0] for r in tied)
+          and not set(lines_["Material"]) & zloi_only and all(r["code"] in months for r in po if r["code"] not in zloi_only), f"{len(tied)} tied")
     dl = pd.read_excel(io.BytesIO(c.post("/api/costs/download", json={"keys": [f"Purchase orders|{po[0]['code']}", f"Fabric list|{next(r['id'] for r in d['rows'] if r['source'] == 'Fabric list')}"]}).content))
     ins = c.get("/api/insights").json()
-    check("Dated rates: the list and its spreadsheet say which rates each costing is on; the dashboard says its panels are on today's rates",
-          all(r["rates_of"] == f"{r['rates']['label']}: today's yarn rates (no dated rate)" for r in po)
+    check("Dated rates: the list and its spreadsheet say which rates each costing is on; the dashboard says its panels are on the rates in use, "
+          "worked out again at every rate edit (GP, 28 Nov 2026)",
+          all(r["rates_of"] == (f"{r['rates']['label']}: today's yarn rates (no dated rate)" if r["code"] not in zloi_only else "Today's rates") for r in po)
           and all(r["rates_of"] == "Today's rates" for r in d["rows"] if r["source"] == "Fabric list")
           and list(dl["Rates of"]) == [po[0]["rates_of"], "Today's rates"]
-          and "on today's rates" in ins["pilot_rates"] and "none does yet" in ins["pilot_rates"], str(ins.get("pilot_rates")))
+          and "on the rates in use" in ins["pilot_rates"] and "worked out again at every rate edit" in ins["pilot_rates"] and "none does yet" in ins["pilot_rates"],
+          str(ins.get("pilot_rates")))
     # Bring in prices: the document's own date where it can be read, and where from; never today's for a dated rate
     csv = b"Count,Yarn,Rate\n40s,Combed compact,351\n"
     for name, want in (("circular 21.11.2026.csv", (True, "2026-11-21")), ("circular.csv", (False, None))):
@@ -729,21 +1850,16 @@ def dated_checks(c, check):
           "is not in the purchase file" in dated_rules.po_rates("NOT-A-CODE", months, {"rates_of": {}})["note"])
     if STORE == "files":
         # the proof that nothing moved: every purchase-order costing on its order month equal to the costing without a date,
-        # on the rate master as it ships (read, never saved: the checks above edited this copy's rates on purpose)
-        import mill_sheet
-        import rate_card
-        import store
-        import yarn_seed
-        m = pd.read_excel(store.SHIPPED_MASTER, sheet_name=None)
-        for add_ in (rate_card.apply, yarn_seed.apply, mill_sheet.apply):
-            add_(m)
+        # on the rate master in use (the checks above edited this copy's rates on purpose: a row's should-cost follows the
+        # costing its verdict rests on, so a rate changed since the pilot moves it, as stage 2's checks show)
+        m = rules_common.get_masters()
         t0, same = time.time(), 0
         for r in po:
             a = masters.cost(r["choices"], m)
             b = masters.cost(r["choices"], m, on=r["rates"]["month"])
             same += {k: v for k, v in b.items() if k != "rates_of"} == a and round(a["total_per_m"], 2) == r["should"]
         check(f"Dated rates: all {len(po)} purchase-order costings on their order month equal, line by line, the costing without a date and the "
-              f"should-cost shown before ({time.time() - t0:.0f} s)", same == len(po), f"{same} of {len(po)}")
+              f"should-cost shown, on the rate master in use ({time.time() - t0:.0f} s)", same == len(po), f"{same} of {len(po)}")
         for path, body in (("/api/dated-rates", None), ("/api/dated-rates/market", None), ("/api/dated-rates", {"yarn_key": "Cotton 40S", "month": "2026-09", "rate": 360}),
                            ("/api/dated-rates/remove", {"id": 1}), ("/api/dated-rates/market", {}), ("/api/intake/add-dated", {"rows": []})):
             rr = c.get(path) if body is None else c.post(path, json=body)
@@ -763,7 +1879,8 @@ def dated_checks(c, check):
     chk("Dated rates: the page holds the rule, the yarn master, what a rate may rest on and the purchase orders by month, and no rate yet",
         pg0["rule"] == dated_rules.RULE and pg0["entries"] == [] and pg0["series"] == [] and any(y["key"] == "Cotton 40S" for y in pg0["yarns"])
         and {o["value"] for o in pg0["rests_on"]} == set(dated_rules.RESTS_ON)
-        and [o["fabrics"] for o in pg0["orders"]] == [200, 1047, 336, 113] and all(o["none"] == o["fabrics"] for o in pg0["orders"]), str(pg0["orders"]))
+        # ZLOI orders count in no month (stage 2): 1,512 codes have an order month; the 184 bought only on ZLOI have none
+        and [o["fabrics"] for o in pg0["orders"]] == [197, 732, 459, 124] and all(o["none"] == o["fabrics"] for o in pg0["orders"]), str(pg0["orders"]))
     add = lambda **b: c.post("/api/dated-rates", json=dict({"rests_on": "circular"}, **b))
     bad = [add(yarn_key="Cotton 40S", month="2099-01", rate=360), add(yarn_key="Not a yarn", month="2026-09", rate=360),
            add(yarn_key="Cotton 40S", month="2026-09", rate=3), add(yarn_key="Cotton 40S", month="Sept", rate=360),
@@ -813,8 +1930,9 @@ def dated_checks(c, check):
         and c.get("/api/dated-rates").json()["history"][0]["removed_why"] == "removed")
     # rule 4: a rate typed with no source is a placeholder. On a placeholder yarn at today's figure it changes no verdict,
     # no should-cost and no placeholder column (the cold review saw 117 verdicts flip here before it was fixed)
-    slub = {r["code"] for r in po if r["rates"]["month"] == "2026-09" and "Cotton Slub 20S" in (r["choices"]["Warp yarn"], r["choices"]["Weft yarn"])}
-    ph = add(yarn_key="Cotton Slub 20S", month="2026-09", rate=338, rests_on="none").json()
+    # (Oct 2026: with ZLOI orders in no month, stage 2, the Slub 20S codes once ordered in Sep 2026 are bought only on ZLOI or in Oct)
+    slub = {r["code"] for r in po if r["rates"]["month"] == "2026-10" and "Cotton Slub 20S" in (r["choices"]["Warp yarn"], r["choices"]["Weft yarn"])}
+    ph = add(yarn_key="Cotton Slub 20S", month="2026-10", rate=338, rests_on="none").json()
     d3 = _ready_costs(c, until=lambda x: any((r.get("rates") or {}).get("dated") for r in x["rows"]))
     po3 = {r["code"]: r for r in d3["rows"] if r["source"] == "Purchase orders"}
     m = rules_common.get_masters()
@@ -825,7 +1943,7 @@ def dated_checks(c, check):
     same = [r["code"] for r in po if all(po3[r["code"]][f] == r[f] for f in ("band", "range", "why_unsure"))
             and (all(po3[r["code"]][f] == r[f] for f in ("should", "gap", "gap_pct", "excess", "placeholders")) if r["code"] not in slub else
                  (lambda t: all(po3[r["code"]][f] == t[f] for f in t) and abs(po3[r["code"]]["excess"] - t["gap"] * r["metres"]) < 0.01)(as_today(r)))]
-    chk(f"Dated rates: a rate with no source is a placeholder; on Cotton Slub 20S at today's figure its {len(slub)} Sep 2026 orders say so and no "
+    chk(f"Dated rates: a rate with no source is a placeholder; on Cotton Slub 20S at today's figure its {len(slub)} Oct 2026 orders say so and no "
         "verdict, should-cost or placeholder column moves",
         ph["placeholder"] and len(slub) > 0 and {k for k, r in po3.items() if r["rates"]["dated"]} == slub and len(same) == len(po)
         and all("a placeholder, entered with no source" in po3[k]["rates"]["note"] for k in slub), f"{len(same)} of {len(po)} the same")
@@ -987,6 +2105,14 @@ def front_end_calls(routes):
         per.setdefault(perm, set()).update(reach("PAGES." + pid, app, skip) | boot)
     per.setdefault("page:rightcost", set()).update(calls(read("rightcost.js")))
     per.setdefault("page:users", set()).update(calls(read("access.js")) - {"GET /api/me"})
+    # stage 2, web/purchases.js: the price popup (opened from Right cost and from the Fab group pages), the Fab group pages,
+    # and the purchase files page, each a section of the file
+    pj = read("purchases.js")
+    part = lambda a, b: calls(pj[pj.index("// ---------------------------------------------------------------- " + a):pj.index("// ---------------------------------------------------------------- " + b)])
+    popup = part("the price popup", "#group/")
+    per.setdefault("page:rightcost", set()).update(popup)
+    per.setdefault("page:groups", set()).update(popup | part("#group/", "#purchase-files"))
+    per.setdefault("page:purchase_files", set()).update(part("#purchase-files", "what the shell sees"))
     dj = read("dated.js")           # stage 5: the Yarn prices card (page:prices) and Bring in prices' dated step (do:edit_rates)
     cut = dj.index("async function fromIntake")
     per.setdefault("page:prices", set()).update(calls(dj[:cut]))
@@ -1494,7 +2620,16 @@ def assistant_files_checks():
                    (call("dated_rates"), web("GET", "/api/dated-rates")),
                    (call("add_dated_rate", yarn_key="Cotton 40S", month="2026-09", rests_on="quote", rate=350),
                     web("POST", "/api/dated-rates", json={"yarn_key": "Cotton 40S", "month": "2026-09", "rests_on": "quote", "rate": 350}))]
-        check(tag + "Users and roles and dated rates need the database: refused on the files in the screen's own words",
+        xl_ = _stage2_file([{"Purchasing Document": 1.0, "Item": 10.0, "Material": "X", "Document Date": "2026-11-01"}])
+        need_db += [(call("purchase_upload_status", upload_id=1), web("GET", "/api/purchases/uploads/1")),
+                    (call("upload_purchase_file", file_base64=base64.b64encode(xl_).decode(), file_name="orders.xlsx"),
+                     c.post("/api/purchases/upload", headers=gp, files={"file": ("orders.xlsx", io.BytesIO(xl_))})),
+                    (call("load_shipped_purchase_file"), web("POST", "/api/purchases/load-shipped")),
+                    (call("settle_purchase_disagreements", upload_id=1, take="file"), web("POST", "/api/purchases/disagreements", json={"upload_id": 1, "take": "file"})),
+                    (call("count_price_to_check", line_id=1), web("POST", "/api/purchases/price-check", json={"line_id": 1, "count": True})),
+                    (call("merge_fab_groups", code="Fab-0001", into="Fab-0002"), web("POST", "/api/groups/merge", json={"code": "Fab-0001", "into": "Fab-0002"})),
+                    (call("unmerge_fab_group", code="Fab-0001"), web("POST", "/api/groups/unmerge", json={"code": "Fab-0001"}))]
+        check(tag + "Users and roles, dated rates and the purchase history (stage 2) need the database: refused on the files in the screen's own words",
               all(same_refusal(m, w) and "DATABASE_URL" in m["error"] for m, w in need_db), str([m.get("error", "")[:80] for m, _ in need_db]))
     for k in ("RIGHTPRICE_MCP_TOKEN", "RIGHTPRICE_ADMINS"):
         os.environ.pop(k, None)
@@ -1617,7 +2752,11 @@ def assistant_checks():
                   "apply_cost_sheet_drafts": "POST /api/costsheet/apply", "mark_alerts_seen": "POST /api/alerts/seen",
                   "draft_message_to_mill": "POST /api/draft", "remove_tracker_step": "POST /api/negotiations/remove",
                   "add_person": "POST /api/users/add", "change_person": "POST /api/users/change",
-                  "change_role_permissions": "POST /api/users/permissions"}
+                  "change_role_permissions": "POST /api/users/permissions",
+                  # stage 2: the purchase history and Fab groups
+                  "purchase_upload_status": "GET /api/purchases/uploads/{upload_id}", "upload_purchase_file": "POST /api/purchases/upload",
+                  "load_shipped_purchase_file": "POST /api/purchases/load-shipped", "settle_purchase_disagreements": "POST /api/purchases/disagreements", "count_price_to_check": "POST /api/purchases/price-check",
+                  "merge_fab_groups": "POST /api/groups/merge", "unmerge_fab_group": "POST /api/groups/unmerge"}
         check(tag + "Each tool mirrors the route it really does the work of (pinned here, so a tool cannot quietly name a weaker address; a new "
                     "tool adds its line)", dict(mirrors) == PINNED,
               str({k: (mirrors.get(k), PINNED.get(k)) for k in set(mirrors) | set(PINNED) if mirrors.get(k) != PINNED.get(k)}))
@@ -1675,7 +2814,8 @@ def assistant_checks():
         check(tag + "yarn_master, dashboard, pilot_results and cotton_prices give what the Yarn prices page, the Dashboard, Pilot results and Cotton prices read",
               ym["cotton_yarns_against_the_market"] == web("GET", "/api/dashboard").json()["yarns"] and as_lists(ym["yarns"], yr["columns"]) == yr["rows"]
               and diff is None and db["negotiation_won"] == web("GET", "/api/negotiations/summary").json()
-              and pm["sheets"] == list(pw) and all(as_lists(pm["tables"][k], pw[k]["columns"]) == pw[k]["rows"] for k in pw)
+              and pm["sheets"] == [k for k in pw if k != "as_run"] and all(as_lists(pm["tables"][k], pw[k]["columns"]) == pw[k]["rows"] for k in pw if k != "as_run")
+              and pm["as_run"] == pw["as_run"]
               and [[p["date"], p["price"]] for p in cot_m["prices"]] == cot_w["points"] and cot_m["unit"] == cot_w["unit"], str(diff))
         tpl = web("GET", "/api/template").content
         bm, bw = call("cost_template_file", file_base64=b64(tpl), file_name="t.xlsx"), upload("/api/bulk", "t.xlsx", tpl).json()
@@ -2312,6 +3452,78 @@ def assistant_checks():
               and lb["fabric"]["rupees_above_should_cost"] is None and lp["verdict_on_sheet_price"] == "Check quote" and lp["rupees_above_should_cost"] is None,
               str(disagree[:3]) + str(lq)[:200] + str(lb.get("brief"))[:200])
 
+        # stage 2: the purchase history and Fab groups, each tool beside its web route
+        def read_(uid):
+            for _ in range(2400):
+                u_ = web("GET", f"/api/purchases/uploads/{uid}").json()
+                if u_.get("status") in ("done", "failed"):
+                    return u_
+                time.sleep(0.25)
+            raise SystemExit(f"upload {uid} was not read in ten minutes")
+        a1_, _, _, b1_, _ = _stage2_codes()
+        po_ = lambda n, code, price: {"Purchasing Document": float(n), "Item": 10.0, "Material": code, "Plant": "F007", "Document Date": pd.Timestamp("2026-11-10"),
+                                      "Name of Supplier": "1200094    ARVIND LTD", "Order Quantity": 500, "Net Price": price, "Purchasing Doc. Type": "BO",
+                                      "Currency": "INR", "Order Unit": "M", "Short Text": "made up for the checks"}
+        w_up = read_(upload("/api/purchases/upload", "orders, by the admin.xlsx", _stage2_file([po_(9800000001, a1_, 100), po_(9800000002, b1_, 150)], saved="2026-11-11T00:00:00")).json()["id"])
+        # GP, 28 Nov 2026: the history always starts from the purchase file that came with the code: the first upload loads it first
+        ups_ = web("GET", "/api/purchases/uploads").json()["uploads"]
+        first_ = next((u_ for u_ in ups_ if u_["id"] == w_up["id"] - 1), {})
+
+        class _As:                      # Right cost's checks, asking as the signed-in admin (permissions are on here)
+            get = staticmethod(lambda path, **kw: web("GET", path, **kw))
+            post = staticmethod(lambda path, **kw: web("POST", path, **kw))
+        check(tag + "the first purchase file uploaded goes in after the purchase file that came with the code, loaded first as its own upload by "
+                    "the same person (GP, 28 Nov 2026); both are in the history",
+              first_.get("filename", "").startswith("Fabric _ 3Months_4746.xlsx") and "loaded first" in first_.get("filename", "")
+              and first_.get("uploaded_by") == "gp@example.com" and first_.get("status") == "done" and first_.get("rows_loaded") == 6265
+              and w_up["rows_new"] == 2 and len(ups_) == 2, str([(u_["id"], u_["filename"], u_["uploaded_by"], u_["status"]) for u_ in ups_]))
+        _stage2_right_cost(_As, check, STORE, "after an own export uploaded first (the purchase file that came with the code loaded before it)")
+        m_q = call("upload_purchase_file", file_base64=b64(_stage2_file([po_(9800000003, a1_, 101), po_(9800000004, b1_, 151)], saved="2026-11-11T00:00:00")), file_name="orders, by the assistant.xlsx")
+        m_up = read_(m_q["upload_id"] if "upload_id" in m_q else m_q["id"])
+        st_m, st_w = call("purchase_upload_status", upload_id=m_up["id"]), web("GET", f"/api/purchases/uploads/{m_up['id']}").json()
+        st_w.pop("skipped", None)
+        check(tag + "upload_purchase_file uploads a purchase file as Purchase files does: read in the background, the same counts; uploaded by "
+                    "\"AI assistant\" where the screen records the admin; purchase_upload_status reads what the page reads",
+              m_q.get("status") == "queued" and m_up["status"] == w_up["status"] == "done" and m_up["rows_new"] == w_up["rows_new"] == 2
+              and m_up["uploaded_by"] == AI and w_up["uploaded_by"] == "gp@example.com" and st_m == st_w, str(m_q)[:200] + str(m_up)[:200])
+        # saved at the same moment as the file it corrects: neither what they cover nor when they were saved can tell which is newer
+        u_c = read_(upload("/api/purchases/upload", "orders, corrected.xlsx", _stage2_file([po_(9800000003, a1_, 111), po_(9800000004, b1_, 151)], saved="2026-11-11T00:00:00")).json()["id"])
+        s_m = call("settle_purchase_disagreements", upload_id=u_c["id"], take="file")
+        price_now = sql("SELECT price FROM purchase_line WHERE po_number = '9800000003'")[0][0]
+        by_ = sql("SELECT settled_by, settled_as FROM line_disagreement WHERE upload_id = %s", (u_c["id"],))
+        again_m, again_w = call("settle_purchase_disagreements", upload_id=u_c["id"], take="file"), web("POST", "/api/purchases/disagreements", json={"upload_id": u_c["id"], "take": "file"})
+        check(tag + "settle_purchase_disagreements settles what a file and the history disagree on as Purchase files does (the file's price taken), "
+                    "settled by \"AI assistant\"; settling twice is refused in the screen's words",
+              u_c["rows_disagree"] == 1 and s_m.get("settled") == 1 and price_now == 111 and [tuple(r) for r in by_] == [(AI, "file")] and same_refusal(again_m, again_w),
+              str(s_m)[:200] + str(by_))
+        slip = read_(upload("/api/purchases/upload", "a price slip.xlsx", _stage2_file([po_(9800000009, a1_, 15000)], saved="2026-11-11T00:00:00")).json()["id"])
+        slip_id = (slip.get("summary") or {}).get("price_checks", [{}])[0].get("id") if (slip.get("summary") or {}).get("price_checks") else None
+        if slip_id is None:
+            slip_id = web("GET", f"/api/purchases/uploads/{slip['id']}").json()["summary"]["price_checks"][0]["id"]
+        cnt_m = call("count_price_to_check", line_id=slip_id)
+        by_c = sql("SELECT price_ok_by FROM purchase_line WHERE id = %s", (slip_id,))[0][0]
+        again_c, again_cw = call("count_price_to_check", line_id=slip_id), web("POST", "/api/purchases/price-check", json={"line_id": slip_id, "count": True})
+        check(tag + "count_price_to_check counts a price held apart to check in SAP as the price popup does, counted by \"AI assistant\"; counting "
+                    "twice is refused in the screen's words",
+              cnt_m.get("now") == "counted" and by_c == AI and same_refusal(again_c, again_cw), str(cnt_m)[:200])
+        hist_ = lambda code: web("GET", "/api/purchases/history", params={"code": code}).json()["group"]["code"]
+        ga_, gb_ = hist_(a1_), hist_(b1_)
+        first_m, first_w = call("merge_fab_groups", code=gb_, into=ga_), web("POST", "/api/groups/merge", json={"code": gb_, "into": ga_}).json()
+        merged_m = call("merge_fab_groups", code=gb_, into=ga_, confirm=True)
+        merged_by = sql("SELECT merged_by FROM fab_group WHERE code = %s", (gb_,))[0][0]
+        un_m = call("unmerge_fab_group", code=gb_)
+        un_again_m, un_again_w = call("unmerge_fab_group", code=gb_), web("POST", "/api/groups/unmerge", json={"code": gb_})
+        undone_by = sql("SELECT by_whom FROM fab_group_change WHERE kind = 'unmerged'")
+        check(tag + "merge_fab_groups waits for a second yes where the groups differ in more than width or finish, as Fab groups does, then merges, "
+                    "merged by \"AI assistant\"; unmerge_fab_group undoes it, recorded as \"AI assistant\"; undoing twice is refused in the screen's words",
+              first_m.get("needs_confirm") is True and first_m.get("differences") == first_w.get("differences") and merged_m.get("merged") == gb_
+              and merged_by == AI and un_m.get("unmerged") == gb_ and [tuple(r) for r in undone_by] == [(AI,)] and same_refusal(un_again_m, un_again_w),
+              str(first_m)[:200] + str(merged_m)[:100] + str(un_m)[:100])
+        sh_m = call("load_shipped_purchase_file")
+        sh_up = read_(sh_m["upload_id"] if "upload_id" in sh_m else sh_m["id"])
+        check(tag + "load_shipped_purchase_file loads the purchase file that came with the code as Purchase files does, uploaded by \"AI assistant\"",
+              sh_up["status"] == "done" and sh_up["rows_loaded"] == 6265 and sh_up["uploaded_by"] == AI, str(sh_up)[:300])
+
         # every tool that only reads, called for real, watched: the store does not move
         fresh_tok = call("intake_file", file_base64=b64(csv), file_name="list.csv")["token"]
         READ = {"list_choices": {}, "cost_fabric": {"choices": dict(masters.EXAMPLE_ROW)}, "find_fabrics": {"search": "AI"}, "fabric_brief": {"key": key3},
@@ -2319,7 +3531,8 @@ def assistant_checks():
                 "store_status": {}, "rate_table": {"sheet": "Yarn_Rates"}, "yarn_master": {}, "dashboard": {}, "pilot_results": {}, "cotton_prices": {},
                 "list_suppliers": {}, "fabric_list": {"yarn_move_pct": {"*": 5}}, "mill_cost_sheets": {}, "users_and_roles": {},
                 "cost_template_file": {"file_base64": b64(tpl), "file_name": "t.xlsx"}, "dated_rates": {}, "dated_market_preview": {},
-                "intake_map_columns": {"token": fresh_tok, "table": sheet, "count_column": "Count", "rate_column": "Rate"}}
+                "intake_map_columns": {"token": fresh_tok, "table": sheet, "count_column": "Count", "rate_column": "Rate"},
+                "purchase_upload_status": {"upload_id": m_up["id"]}}
         read_only = {n for n in names if ann[n].get("readOnlyHint")}
         errs = {n: str(call(n, **READ.get(n, {})).get("error"))[:80] for n in sorted(read_only & set(READ))}
         changing = {n for n in names if ann[n].get("destructiveHint") and not ann[n].get("readOnlyHint")}

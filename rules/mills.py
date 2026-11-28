@@ -18,23 +18,31 @@ def _mill_base(name):
     return " ".join((w[:-1] if len(w) > 4 and w.endswith("s") else w) for w in (keep or words))
 
 
-def mill_key(name):
+def mill_key(name, aliases=None):
     """One key for a mill however its name is written: "Arvind", "Arvind Ltd" and "ARVIND LIMITED" are one mill.
     Purchase-order names are cut at 24 characters ("Rajapalayam Mills Limite", "Nahar Industrial Enterpr"), so a cut-off
-    Limited goes, and a cut-off name that is the start of exactly one fuller name is that mill."""
+    Limited goes, and a cut-off name that is the start of exactly one fuller name is that mill. `aliases` (from
+    mill_aliases) in place of the names Right cost last learned."""
     k = _mill_base(name)
-    return _mill_alias.get(k, k)
+    return (_mill_alias if aliases is None else aliases).get(k, k)
 
 
-def _learn_mill_names(names):
-    """Names cut short at 23 or 24 characters that are the start of exactly one other mill's name."""
-    bases = {}
+def mill_aliases(names):
+    """Names cut short at 23 or 24 characters that are the start of exactly one other mill's name: {cut key: full key}."""
+    bases, out = {}, {}
     for n in names:
         if n:
             bases.setdefault(_mill_base(n), set()).add(str(n).strip())
-    _mill_alias.clear()
     for k, raw in bases.items():
         if len(k) >= 10 and any(len(r) >= 23 for r in raw):
             longer = [k2 for k2 in bases if k2 != k and k2.startswith(k)]
             if len(longer) == 1:
-                _mill_alias[k] = longer[0]
+                out[k] = longer[0]
+    return out
+
+
+def _learn_mill_names(names):
+    """Names cut short at 23 or 24 characters that are the start of exactly one other mill's name."""
+    learned = mill_aliases(names)
+    _mill_alias.clear()
+    _mill_alias.update(learned)

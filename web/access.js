@@ -13,7 +13,8 @@ const can = perm => !RPA.me || (RPA.me.allowed || []).includes(perm);
 const canAny = (...perms) => perms.some(can);
 // which permission each page of the shell, and each costing screen of the "New cost" popup, needs
 const PAGE_NEEDS = { dashboard: "page:dashboard", pilot: "page:pilot", yarn: "page:prices", cotton: "page:prices", rates: "page:prices", ratecard: "page:prices",
-  settings: "page:prices", costsheets: "page:costsheets", intake: "do:edit_rates", rightcost: "page:rightcost", item: "page:rightcost", supplier: "page:rightcost", users: "page:users" };
+  settings: "page:prices", costsheets: "page:costsheets", intake: "do:edit_rates", rightcost: "page:rightcost", item: "page:rightcost", supplier: "page:rightcost", users: "page:users",
+  group: "page:groups", groups: "page:groups", "purchase-files": "page:purchase_files" };       // stage 2: web/purchases.js
 const TAB_NEEDS = { cost: "page:cost", compare: "page:cost", bulk: "page:list", pack: "page:pack" };
 const ACTION_TABS = { "Create cost": "cost", "Compare": "compare", "Bulk upload": "bulk", "Negotiation pack": "pack" };
 
@@ -38,7 +39,7 @@ function applyMenus() {
   mod.moreActions = o.moreActions.filter(a => !ACTION_TABS[a] || can(TAB_NEEDS[ACTION_TABS[a]]));
 }
 function pageNeed() {
-  const id = state.users ? "users" : state.frame ? state.frame.split("/")[0] : state.library ? null : state.supplier ? "supplier" : state.detail ? "item" : "rightcost";
+  const id = state.users ? "users" : state.page ? state.page.id : state.frame ? state.frame.split("/")[0] : state.library ? null : state.supplier ? "supplier" : state.detail ? "item" : "rightcost";
   return id ? PAGE_NEEDS[id] : null;
 }
 // not let in at all (the server serves the shell without asking the database, then refuses every call for data):
