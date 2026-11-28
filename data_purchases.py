@@ -473,3 +473,20 @@ def counts(c):
             "mills": one("SELECT count(*) FROM mill"),
             "first": one(f"SELECT min(l.doc_date) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER}"),
             "last": one(f"SELECT max(l.doc_date) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER}")}
+
+
+# ------------------------------------------------------------------ the usual range over time (GP, 28 Nov 2026)
+def span(c):
+    """(first, last) document date of the lines still counted, ZLOI left out: the months the history holds."""
+    return tuple(c.one(f"SELECT min(l.doc_date), max(l.doc_date) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER}"))
+
+
+def prices_by_group_dated(c, since, until):
+    """{Fab group id of the fabric: [(price, order number)]} over the lines still counted dated from `since` to `until`
+    (ISO days, both included), ZLOI left out."""
+    out = {}
+    for g, p, po in c.all("SELECT f.fab_group_id, l.price, l.po_number FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id "
+                          f"WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER} AND f.fab_group_id IS NOT NULL AND l.doc_date >= %s AND l.doc_date <= %s",
+                          (since, until)):
+        out.setdefault(g, []).append((p, po))
+    return out

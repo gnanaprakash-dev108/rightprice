@@ -200,7 +200,8 @@ def brief(res, m, quantity=None, notes=(), sel=None):
     if cat is None:
         band_why = "5% either side of should-cost" + ("" if ins and ins[1] else " (there is no purchase history on this server to set it from)")
     else:
-        fit = (f"half of the {cat['fabrics']} {typ} fabrics you bought were priced between {cat['p25']:+.1f}% and "
+        when = (ins[1].get("period") or {}).get("label")         # what we usually pay: the last 12 months (GP, 28 Nov 2026)
+        fit = (f"half of the {cat['fabrics']} {typ} fabrics you bought{' in ' + when if when else ''} were priced between {cat['p25']:+.1f}% and "
                f"{cat['p75']:+.1f}% against should-cost (dashboard panel 1, middle half)").replace("-", "\u2212").replace("should\u2212cost", "should-cost")
         adjusted = (lo, hi) != (cat["p25"], cat["p75"])
         band_why = fit + (f"; kept at least {BAND_MIN:.0f}% and at most {BAND_MAX:.0f}% either way, so here {lo:+.1f}% to {hi:+.1f}%".replace("-", "\u2212") if adjusted else "")

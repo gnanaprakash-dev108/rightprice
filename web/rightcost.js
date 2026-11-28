@@ -313,8 +313,9 @@ function openFly(name, anchor, hover, keep) {
       h("div", { class: "g" }, "Settings"),
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
       can("page:prices") ? [link("Calculation settings", "#settings"), link("Rate tables", "#rates")] : null,
-      canAny("page:groups", "page:purchase_files") ? h("div", { class: "g" }, "Purchase history") : null,      // stage 2: web/purchases.js
-      can("page:groups") ? link("Fab groups", "#groups") : null, can("page:purchase_files") ? link("Purchase files", "#purchase-files") : null,
+      canAny("page:groups", "page:purchase_files", "page:fab_library") ? h("div", { class: "g" }, "Purchase history") : null,      // stage 2: web/purchases.js
+      can("page:groups") ? link("Fab groups", "#groups") : null, can("page:fab_library") ? link("Fab library", "#fab-library") : null,   // web/library.js
+      can("page:purchase_files") ? link("Purchase files", "#purchase-files") : null,
       h("div", { class: "g" }, "Account"), profileExtras(),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
@@ -342,7 +343,7 @@ function route() {
   if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || tabMemo(rest.join("/")) || "item", editing: false }; }
   else state.detail = null;
   state.users = id === "users";            // Users and roles (web/access.js)
-  state.page = typeof RP_PAGES !== "undefined" && RP_PAGES[id] ? { id, arg: rest.join("/") } : null;      // stage 2: web/purchases.js
+  state.page = typeof RP_PAGES !== "undefined" && RP_PAGES[id] ? { id, arg: rest.join("/") } : null;      // stage 2: web/purchases.js; the Fab library: web/library.js
   if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
   else if (CONFIG.frames[id]) state.frame = hsh;
   else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.users && !state.page) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }

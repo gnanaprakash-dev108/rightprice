@@ -40,6 +40,9 @@ if STORE:
         os.environ["RIGHTPRICE_DATA"] = tempfile.mkdtemp(prefix="rightprice-check-")
     if STORE != "files":
         os.environ["DATABASE_URL"] = os.environ["RIGHTPRICE_CHECK_URL"]
+    # what we usually pay rests on the last 12 months ending today (GP, 28 Nov 2026): the checks fix today, so their figures
+    # (purchases of Aug to Nov 2026, made-up years) read the same whenever they run
+    os.environ.setdefault("RIGHTPRICE_TODAY", "2026-11-28")
 
     from fastapi.testclient import TestClient  # noqa: E402
 
@@ -656,6 +659,8 @@ def main():
         stage5 = dated_checks(c, check)         # (called first: `ok &= f()` would read ok before f could clear it)
         ok &= stage5
         stage2_checks(c, check)         # stage 2: purchase history and Fab groups (last: it loads purchase files)
+        period_checks(c, check)         # the usual range over time (GP, 28 Nov 2026): first on the history as it is, then over years
+        library_checks(c, check)        # the Fab library (GP, 28 Nov 2026): after stage 2's, which change the deployed extract in memory
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
 
@@ -1602,6 +1607,402 @@ def _stage2_right_cost(c, check, kind, when, popup=False):
                   str(sp.status_code))
 
 
+# ===================================================================== the Fab library (GP's decision, 28 Nov 2026)
+REAL_LIBRARY = os.environ.get("RIGHTPRICE_CHECK_PLM_LIST", "/home/user/plm-input/PLM_fabric_list_slim.zip")     # never in the repository
+
+
+def _library_csv(rows, columns=None):
+    """A PLM fabric code list as a .csv, as plm_extract.py writes it (every value as text), from rows (dicts)."""
+    import pandas as pd
+    from rules import fab_library
+    cols = columns or fab_library.COLUMNS
+    buf = io.StringIO()
+    pd.DataFrame([{k: r.get(k, "") for k in cols} for r in rows], columns=cols).to_csv(buf, index=False)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def _zip_of(name, data, more=()):
+    import zipfile
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(name, data)
+        for n, d in more:
+            z.writestr(n, d)
+    return out.getvalue()
+
+
+def library_checks(c, check):
+    """The Fab library: the PLM fabric code list uploaded (a .csv, a .zip holding one, an .xlsx), refused at once when it is
+    not the list or too large, read in the background (a restart reads it again; an older list never undoes a later one),
+    every code found with its construction, Fab group and purchases; the purchase history takes its specifications from
+    it once it holds a list (before, the deployed file, so nothing changes until then), and a list that gives a code a
+    specification, or corrects one, groups and costs it again at once; the real list (when present) holds exactly the
+    deployed file's values. On the files store: a plain refusal."""
+    import pandas as pd
+    import plm_extract
+    import store
+    from rules import fab_library, purchases
+    kind = store.get().kind
+    k = f"[{kind}] Fab library:"
+    check(f"{k} it keeps exactly the 26 columns plm_extract.py keeps", fab_library.COLUMNS == plm_extract.KEEP)
+    if shutil.which("node"):            # the page says a list is too large at once, before sending it: its own function, run here
+        js = open(os.path.join(HERE, "web", "library.js"), encoding="utf8").read()
+        fn = js[js.index("  function tooBig"):js.index("  // END TOO BIG")]
+        size = 250 * 1048576
+        p = subprocess.run(["node", "-e", fn + f"; console.log(tooBig({size}, {fab_library.MAX_BYTES}, 'list.csv')); console.log(String(tooBig(5, {fab_library.MAX_BYTES}, 'x')))"],
+                           capture_output=True, text=True)
+        out = p.stdout.splitlines()
+        check(f"{k} a list over the limit ({fab_library.MAX_BYTES // 1048576} MB, large enough for the real one unzipped, 80 MB) is refused on the "
+              "screen as soon as it is chosen, in the server's own words", len(out) == 2 and out[0] == fab_library.too_big(size, "list.csv") and out[1] == "null"
+              and fab_library.MAX_BYTES >= 200 * 1048576, p.stdout + p.stderr)
+        p = subprocess.run(["node", "--check", os.path.join(HERE, "web", "library.js")], capture_output=True, text=True)
+        check("web/library.js parses", p.returncode == 0, p.stderr[-300:])
+    shell = c.get("/").text
+    check(f"{k} the shell loads the page's script after the purchase-history one and before its own",
+          shell.index('src="purchases.js') < shell.index('src="library.js') < shell.index('src="rightcost.js') and c.get("/library.js").status_code == 200)
+    if kind == "files":
+        answers = [c.get("/api/fab-library/search", params={"q": "x"}), c.get("/api/fab-library/code/X"), c.get("/api/fab-library/uploads/1"),
+                   c.post("/api/fab-library/upload", files={"file": ("list.csv", io.BytesIO(b"x"))})]
+        s0 = c.get("/api/fab-library").json()
+        check(f"{k} on the files store it says plainly it needs the database (503); the specifications come from the file deployed with the code",
+              all(r.status_code == 503 and "kept in the database" in r.json()["detail"] for r in answers) and s0["available"] is False
+              and purchases.plm_specs() is purchases.deployed_specs() and fab_library.source() is None, str([r.status_code for r in answers]))
+        return
+    st = store.get()
+
+    def wait(uid, limit=900):
+        for _ in range(limit * 4):
+            u = c.get(f"/api/fab-library/uploads/{uid}").json()
+            if u["status"] == "failed" or (u["status"] == "done" and (u["summary"] or {}).get("regroup")):
+                return u
+            time.sleep(0.25)
+        raise SystemExit(f"list {uid} was not read in {limit} s")
+
+    def wait_po(uid, limit=300):
+        for _ in range(limit * 4):
+            u = c.get(f"/api/purchases/uploads/{uid}").json()
+            if u["status"] in ("done", "failed"):
+                return u
+            time.sleep(0.25)
+        raise SystemExit(f"upload {uid} was not read in {limit} s")
+
+    def send(name, data):
+        return c.post("/api/fab-library/upload", files={"file": (name, io.BytesIO(data))})
+
+    def snapshot():
+        with st.tx() as cur:
+            fabs = {code: (sig, ch) for code, sig, ch in cur.all("SELECT f.code, g.signature, f.choices FROM fabric f LEFT JOIN fab_group g ON g.id = f.fab_group_id")}
+            n_groups = cur.one("SELECT count(*) FROM fab_group")[0]
+        rows = {r["code"]: (r["should"], r["price"], r["band"], r["fab_group"], r["range"]) for r in _ready_costs(c)["rows"] if r["source"] == "Purchase orders"}
+        return fabs, n_groups, rows
+
+    def same_but(a, b, but=()):
+        fa, fb = ({x: v for x, v in s.items() if x not in but} for s in (a[0], b[0]))
+        return fa == fb and a[2] == b[2], [x for x in set(fa) | set(fb) if fa.get(x) != fb.get(x)][:5] + [x for x in a[2] if a[2][x] != b[2].get(x)][:5]
+
+    hist = lambda code: c.get("/api/purchases/history", params={"code": code}).json()
+    s0 = c.get("/api/fab-library").json()
+    check(f"{k} before any list is uploaded it is empty and the specifications come from the file deployed with the code, as before (nothing "
+          "changes on the live site until GP uploads the list)", s0["available"] and s0["codes"] == 0 and s0["latest"] is None
+          and "deployed with the code" in s0["source"] and fab_library.source() is None and purchases.plm_specs() is purchases.deployed_specs(), str(s0)[:300])
+    shipped = purchases.deployed_specs()
+    a1, a2, a3, b1, inc = _stage2_codes()
+    base = [dict(shipped[x]) for x in sorted(shipped)]               # the deployed extract's rows, as they are
+    mk = lambda code, src, **kw: dict(dict(shipped[src]), article_code=code, **kw)
+    zz1 = mk("ZZLIB001", a3)            # bought before the library has it: no specification until the list gives it one
+    zz2 = mk("ZZLIB002", a3, article_cust_epi="", article_cust_ppi="", article_cust_finishedwidth="", article_cust_yarndetails_name="NA")
+    zz3 = mk("ZZLIB003", a1)            # never bought: its construction is a1's group's
+    rows1 = base + [zz1, zz2, zz3, dict(zz3, article_cust_epi="999"), {"article_code": ""}]
+    po = lambda n, code, day, price, **kw: dict({"Purchasing Document": float(n), "Item": 10.0, "Material": code, "Plant": "F007", "Document Date": pd.Timestamp(day),
+                                                 "Name of Supplier": "1200094    ARVIND LTD", "Order Quantity": 1000, "Net Price": price, "Purchasing Doc. Type": "BO",
+                                                 "Currency": "INR", "Order Unit": "M", "Short Text": "made up for the checks"}, **kw)
+    u_po = wait_po(c.post("/api/purchases/upload", files={"file": ("orders before the library.xlsx", io.BytesIO(_stage2_file(
+        [po(9700000001, "ZZLIB001", "2026-11-02", 120), po(9700000002, "ZZLIB004", "2026-11-02", 121)], saved="2026-11-27T10:00:00")))}).json()["id"])
+    h_before = hist("ZZLIB001")
+    check(f"{k} (before it) a code bought whose specification the deployed file does not have is loaded, not grouped, not costed",
+          u_po["status"] == "done" and h_before["group"] is None and "No PLM specification" in (h_before["not_grouped"] or "") and h_before["should"] is None,
+          str(h_before)[:300])
+    snap0 = snapshot()
+    # refused at once, before anything is kept: not the list, two files in a .zip, empty, too large (the limit lowered for this)
+    n_up = lambda: len(c.get("/api/fab-library").json()["uploads"])
+    csv1 = _library_csv(rows1)
+    bad = {"ending": send("list.txt", b"x"), "columns": send("list.csv", _library_csv([zz1], columns=fab_library.COLUMNS[:20])),
+           "two": send("list.zip", _zip_of("a.csv", csv1, [("b.csv", csv1)])), "empty": send("list.csv", b""), "zip": send("list.zip", b"PK not a zip")}
+    lim = fab_library.MAX_BYTES
+    fab_library.MAX_BYTES = 4096
+    try:
+        small = _library_csv(base[:40])
+        bad["big"], bad["big zip"] = send("big list.csv", small), send("big list.zip", _zip_of("list.csv", small))
+        said = (fab_library.too_big(len(small), "big list.csv"), fab_library.too_big(len(small), "The list inside big list.zip (list.csv)"))
+    finally:
+        fab_library.MAX_BYTES = lim
+    words = {x: r.json().get("detail", "") for x, r in bad.items()}
+    check(f"{k} refused at once, nothing kept: another ending, a file without the 26 columns (they are named), a .zip of two files or not a .zip, "
+          "an empty file, a list over the limit (a .zip's list counted unzipped), each in plain words",
+          [r.status_code for r in bad.values()] == [400, 400, 400, 400, 400, 413, 413] and "article_cust_yarndetails_name" in words["columns"]
+          and "should hold one .csv" in words["two"] and (words["big"], words["big zip"]) == said and n_up() == 0,
+          str({x: (r.status_code, words[x][:90]) for x, r in bad.items()}))
+    # the first list, as a .zip: the deployed extract's codes with their values, and three made up
+    t0 = time.time()
+    r1 = send("PLM list, made up from the deployed extract.zip", _zip_of("list.csv", csv1)).json()
+    queued = r1.get("status") == "queued"
+    u1 = wait(r1["id"])
+    took = time.time() - t0
+    lib = purchases.plm_specs(set(shipped) | {"ZZLIB001", "ZZLIB002", "ZZLIB003"})
+    blanks = sum(1 for r in base + [zz1, zz2, zz3] if not r["article_cust_epi"].strip() or not r["article_cust_ppi"].strip())
+    check(f"{k} a list is answered at once and read in the background ({took:.0f} s for {len(base) + 3:,} codes): every row counted, a code repeated "
+          "read once (the first row, as pilot.py does), a row without a code left out, the codes with blank EPI or PPI counted and kept with the blanks",
+          queued and u1["status"] == "done" and u1["rows_total"] == len(rows1) and u1["codes_total"] == u1["codes_new"] == len(base) + 3
+          and u1["rows_repeated"] == 1 and u1["rows_no_code"] == 1 and u1["no_epi_ppi"] == blanks and u1["codes_changed"] == 0,
+          str({x: u1.get(x) for x in ("status", "error", "rows_total", "codes_total", "codes_new", "rows_repeated", "rows_no_code", "no_epi_ppi")}))
+    check(f"{k} once it holds a list the purchase history takes every code's specification from it: each of the deployed file's {len(shipped):,} codes "
+          "with exactly the deployed values; a blank stays blank and a cell pandas reads as empty ('NA') is blank, as pilot.py reads the file",
+          fab_library.source() == r1["id"] and all(lib.get(x) == shipped[x] for x in shipped) and lib["ZZLIB002"]["article_cust_epi"] == ""
+          and lib["ZZLIB002"]["article_cust_yarndetails_name"] == "" and lib["ZZLIB003"]["article_cust_epi"] == shipped[a1]["article_cust_epi"]
+          and purchases.plm_specs() is not shipped, str([x for x in shipped if lib.get(x) != shipped[x]][:3]))
+    h1, h3 = hist("ZZLIB001"), hist(a3)
+    with st.tx() as cur:
+        ch1 = cur.one("SELECT choices FROM fabric WHERE code = 'ZZLIB001'")[0]
+    snap1 = snapshot()
+    good, diff = same_but(snap0, snap1, ("ZZLIB001",))
+    check(f"{k} a code bought before the list gave it a specification is grouped and costed when the list is read, without another purchase "
+          "upload (GP, 28 Nov 2026); its popup says why it moved; one still not in the list stays as it was",
+          h1["group"] and h1["group"]["code"] == h3["group"]["code"] and ch1 and h1["should"] is not None
+          and any("now complete" in m["why"] for m in h1["moved"]) and "No PLM specification" in (hist("ZZLIB004")["not_grouped"] or "")
+          and u1["summary"]["regroup"]["grouped_now"] == 1 and u1["summary"]["regroup"]["costed_again"] >= 1, str(h1)[:300] + str(u1["summary"])[:300])
+    check(f"{k} the deployed file's values from the list change nothing else: every other code's group and costing choices, the Fab groups, and every "
+          "Right cost purchase-order row (should-cost, price, verdict, group, range) as before", good and snap0[1] == snap1[1], str(diff))
+    # found, with its construction, Fab group and purchases
+    s_code = c.get("/api/fab-library/search", params={"q": a1.lower()}).json()
+    s_zz = c.get("/api/fab-library/search", params={"q": "zzlib00"}).json()
+    s_words = c.get("/api/fab-library/search", params={"q": f"zzlib {shipped[a1]['article_cust_weavetype_name']} {shipped[a1]['article_cust_epi'].strip()}"}).json()
+    p3, p2, pa1, miss = (c.get(f"/api/fab-library/code/{x}") for x in ("ZZLIB003", "ZZLIB002", a1, "NOT-A-CODE"))
+    p3, p2, pa1 = p3.json(), p2.json(), pa1.json()
+    ga1 = hist(a1)["group"]["code"]
+    check(f"{k} every code can be found: by its code (typed in small letters, it comes first) or by words of its construction; each with its "
+          "construction, its Fab group and its purchases",
+          s_code["results"][0]["code"] == a1 and s_code["results"][0]["group"]["code"] == ga1 and s_code["results"][0]["group"]["how"] == "in"
+          and s_code["results"][0]["bought"]["lines"] >= 1 and {r["code"] for r in s_zz["results"]} == {"ZZLIB001", "ZZLIB002", "ZZLIB003"} and not s_zz["more"]
+          and "ZZLIB003" in {r["code"] for r in s_words["results"]} and s_code["codes"] == len(base) + 3, str(s_code["results"][:1])[:300] + str(s_words)[:200])
+    check(f"{k} a code's page: its 26 values, which list gave them; a code never bought shows the Fab group its construction is; a code with "
+          "blanks is not grouped and says why; a code not in the library: 404",
+          len(p3["values"]) == 26 and p3["group"] == {"code": ga1, "name": p3["group"]["name"], "how": "construction"} and p3["bought"] is None
+          and p3["spec_from"]["id"] == r1["id"] and p3["in_latest"] is True and pa1["group"]["how"] == "in" and pa1["bought"]["lines"] >= 1
+          and p2["group"]["code"] is None and "EPI" in (p2["group"]["why"] or "") and next(v["value"] for v in p2["values"] if v["column"] == "article_cust_epi") == ""
+          and miss.status_code == 404, str(p3)[:300] + str(p2.get("group")))
+    # a second list, as a .csv: one code corrected (its EPI), one new, one left out
+    old_epi = float(shipped[b1]["article_cust_epi"])
+    b_before = hist(b1)
+    rows2 = [r for r in base if r["article_code"] != b1] + [dict(shipped[b1], article_cust_epi=f"{old_epi + 10:g}"), zz1, zz3, mk("ZZLIB005", a3)]
+    r2 = send("PLM list, one EPI corrected.csv", _library_csv(rows2)).json()
+    u2 = wait(r2["id"])
+    b_after, pb1, p2b = hist(b1), c.get(f"/api/fab-library/code/{b1}").json(), c.get("/api/fab-library/code/ZZLIB002").json()
+    with st.tx() as cur:
+        b1_choices = json.loads(cur.one("SELECT choices FROM fabric WHERE code = %s", (b1,))[0])
+    rc_b1 = next(r for r in _ready_costs(c)["rows"] if r["source"] == "Purchase orders" and r["code"] == b1)
+    what = f"EPI {shipped[b1]['article_cust_epi']} to {old_epi + 10:g}"
+    check(f"{k} a later list that corrects a code ({b1}: {what}) regroups and costs it again at once (stage 2's own path), and says so on the "
+          "popup, on the code's page and on the list's; Right cost's row follows",
+          u2["status"] == "done" and u2["codes_changed"] == 1 and u2["codes_new"] == 1 and u2["codes_kept"] == 1 and u2["codes_same"] == len(rows2) - 2
+          and float(b1_choices["EPI"]) == old_epi + 10 and b_after["should"] != b_before["should"] and rc_b1["should"] == b_after["should"]
+          and any(what in m["why"] for m in b_after["moved"]) and what in pb1["changes"][0]["what"] and pb1["spec_from"]["id"] == r2["id"]
+          and u2["summary"]["regroup"]["respecified"] >= 1 and any(x["code"] == b1 for x in c.get(f"/api/fab-library/uploads/{r2['id']}").json()["changes"]),
+          str({x: u2.get(x) for x in ("codes_changed", "codes_new", "codes_kept", "codes_same")}) + str(b_after["moved"][:2]) + str(pb1["changes"][:1]))
+    check(f"{k} a code missing from the later list keeps the specification it had, and its page says it is not in the latest list",
+          p2b["in_latest"] is False and p2b["last_in"]["id"] == r1["id"] and next(v["value"] for v in p2b["values"] if v["column"] == "article_cust_ppi") == ""
+          and "ZZLIB002" in purchases.plm_specs(["ZZLIB002"]))
+    # the list first, then the purchase file: a code the deployed file never had is grouped and costed at its first purchase
+    u_po5 = wait_po(c.post("/api/purchases/upload", files={"file": ("orders after the library.xlsx", io.BytesIO(_stage2_file(
+        [po(9700000005, "ZZLIB005", "2026-11-03", 122)], saved="2026-11-27T11:00:00")))}).json()["id"])
+    h5 = hist("ZZLIB005")
+    check(f"{k} the list first, then a purchase file: a code only the library has is grouped and costed as its purchase is read",
+          u_po5["status"] == "done" and h5["group"] and h5["group"]["code"] == h3["group"]["code"] and h5["should"] is not None, str(h5)[:300])
+    # an older list read again (as after a restart) never undoes a later one
+    with st.tx(write="library_status") as cur:
+        cur.run("UPDATE fab_library_upload SET status = 'working', alive_at = '2000-01-01T00:00:00', runner = 'gone:1' WHERE id = %s", (r1["id"],))
+    fab_library.resume()
+    u1b = wait(r1["id"])
+    pb1b = c.get(f"/api/fab-library/code/{b1}").json()
+    check(f"{k} a list a restart left half-read is read again from the start; an older list read again never undoes a later one ({b1} keeps the "
+          "later list's EPI; the codes the later list has are counted as not used)",
+          u1b["status"] == "done" and u1b["codes_new"] == u1["codes_new"] and u1b["codes_older"] == len(base) + 2 and pb1b["spec_from"]["id"] == r2["id"]
+          and float(json.loads(st._read(lambda cur: cur.one("SELECT choices FROM fabric WHERE code = %s", (b1,))[0]))["EPI"]) == old_epi + 10
+          and fab_library.source() == r2["id"], str({x: u1b.get(x) for x in ("status", "codes_new", "codes_older", "error")}))
+    # an .xlsx is read the same way; then the deployed values again: everything back as it was
+    xbuf = io.BytesIO()
+    pd.DataFrame([{x: zz3.get(x, "") for x in fab_library.COLUMNS}], columns=fab_library.COLUMNS).to_excel(xbuf, index=False)
+    ux = wait(send("PLM list, one code.xlsx", xbuf.getvalue()).json()["id"])
+    u3 = wait(send("PLM list, as deployed.csv", _library_csv(base)).json()["id"])
+    snap3 = snapshot()
+    good3, diff3 = same_but(snap0, snap3, ("ZZLIB001", "ZZLIB005"))
+    check(f"{k} an .xlsx list is read the same way (a code with the same values: the same); a list with the deployed values again puts {b1} back: "
+          "every code's group and choices, and every Right cost row, as before any list",
+          ux["status"] == "done" and ux["codes_same"] == 1 and ux["codes_changed"] == 0 and u3["status"] == "done" and u3["codes_changed"] == 1 and good3,
+          str(diff3) + str({x: ux.get(x) for x in ("status", "error", "codes_same", "codes_changed")}))
+    up_rows = c.get("/api/fab-library").json()["uploads"]
+    check(f"{k} every list is kept with who sent it, when, and its counts, newest first", [u["id"] for u in up_rows][:4] == [u3["id"], ux["id"], r2["id"], r1["id"]]
+          and all(u["uploaded_at"] and u["status"] == "done" and u["codes_total"] for u in up_rows), str(up_rows[:2])[:300])
+    # the real list, when it is on this machine (never in the repository; on GitHub it is not there)
+    if not os.path.exists(REAL_LIBRARY):
+        print(f"{k} the real PLM fabric code list is not on this machine ({REAL_LIBRARY}): its checks are skipped")
+        return
+    real = open(REAL_LIBRARY, "rb").read()
+    t0, slow, polls = time.time(), 0.0, 0
+    rid = send(os.path.basename(REAL_LIBRARY), real).json()["id"]
+    while True:
+        t = time.time()
+        u = c.get(f"/api/fab-library/uploads/{rid}").json()
+        c.get("/api/purchases/status")
+        slow, polls = max(slow, time.time() - t), polls + 1
+        if u["status"] == "failed" or (u["status"] == "done" and (u["summary"] or {}).get("regroup")):
+            break
+        if time.time() - t0 > 1800:
+            raise SystemExit("the real list was not read in half an hour")
+        time.sleep(0.5)
+    took = time.time() - t0
+    lib = purchases.plm_specs()
+    snap4 = snapshot()
+    good4, diff4 = same_but(snap0, snap4, ("ZZLIB001", "ZZLIB005"))
+    check(f"{k} the real list ({os.path.basename(REAL_LIBRARY)}, {u['rows_total'] or 0:,} codes) is read through the app in {took:.0f} s, pages answering "
+          f"meanwhile (the slowest of {polls} answers {slow:.1f} s): 8,741 codes without EPI or PPI and 23,267 without a width kept with the blanks; each of "
+          f"the deployed file's {len(shipped):,} codes has exactly its values; nothing in the purchase history or Right cost changes",
+          u["status"] == "done" and u["rows_total"] == u["codes_total"] == 418877 and u["no_epi_ppi"] == 8741 and u["no_width"] == 23267
+          and all(lib.get(x) == shipped[x] for x in shipped) and good4 and slow < 10, str({x: u.get(x) for x in ("status", "error", "rows_total", "no_epi_ppi", "no_width")}) + str(diff4))
+    print(f"   the real list on {kind}: {took:.0f} s ({u['summary'].get('seconds')}), the slowest page {slow:.2f} s")
+
+
+def period_checks(c, check):
+    """The usual range over time (GP, 28 Nov 2026): what we usually pay (a Fab group's and a fabric type's usual range, median and
+    "priced above") rests by default on the last 12 months, ending today; the group page and the price popup choose another period
+    (a view only); older purchases stay on the chart. With the history of Aug to Nov 2026 nothing changes; a made-up history over
+    years counts only the last 12 months by default."""
+    import pandas as pd
+    import store
+    from rules import dashboard, fab_groups, purchases
+    kind = store.get().kind
+    k = f"[{kind}] The usual range over time:"
+    real_today = os.environ.pop(fab_groups.TODAY_ENV, None)
+    try:
+        now = fab_groups.today()
+    finally:
+        if real_today:
+            os.environ[fab_groups.TODAY_ENV] = real_today
+    india = (_dt.datetime.now(_dt.timezone.utc).replace(tzinfo=None) + _dt.timedelta(hours=5, minutes=30)).date()
+    check(f"{k} the last 12 months end today, a day in India (the checks fix today at {os.environ.get(fab_groups.TODAY_ENV)} so their figures do not "
+          "move with the date); 29 February looks back to 1 March", now == india and fab_groups.default_period(_dt.date(2026, 11, 28)) == ("2025-11-29", "2026-11-28")
+          and fab_groups.default_period(_dt.date(2028, 2, 29)) == ("2027-03-01", "2028-02-29") and fab_groups.period("2026-03", "2026-08")["to"] == "2026-08-31"
+          and c.get("/api/groups/Fab-0001", params={"from": "2026-09-01", "to": "2026-08-01"}).status_code in (400, 404, 503), str(now))
+    if kind == "files":
+        return
+    st = store.get()
+    listing = c.get("/api/groups").json()
+    first, last = listing["counts"]["first"], listing["counts"]["last"]
+    busy = sorted(listing["groups"], key=lambda g: (-g["purchases"], g["code"]))[:25]
+    pages = {g["code"]: (c.get(f"/api/groups/{g['code']}").json(), c.get(f"/api/groups/{g['code']}", params={"from": "2000-01-01", "to": "2100-12-31"}).json()) for g in busy}
+    keys = ("purchases", "orders", "metres", "range", "mills", "above", "above_rs", "should")
+    ins = c.get("/api/insights").json()["pilot"]
+    _, rows_ = purchases.pilot_rows()
+    priced = [r for r in rows_ if r["PO price Rs/m"] is not None and r["Should-cost Rs/m"] is not None]
+    check(f"{k} with the history held now ({first} to {last}, within the last 12 months) nothing changes: the {len(busy)} busiest Fab groups' figures "
+          "on the default period are those of every purchase; every fabric type's range rests on every fabric bought, none left out",
+          first >= fab_groups.default_period()[0] and all(all(a[x] == b[x] for x in keys) and a["outside_period"] == 0 and a["period"]["default"]
+                                                          for a, b in pages.values())
+          and ins["period"]["outside"] == 0 and ins["period"]["fabrics"] == len(priced) and dashboard.in_period(priced, fab_groups.period()) == priced,
+          str([g for g, (a, b) in pages.items() if any(a[x] != b[x] for x in keys)][:3]) + str(ins.get("period")))
+    big = busy[0]["code"]
+    g_all = pages[big][1]
+    # a period chosen on the page (a view only): its figures for that period, every purchase still on the chart
+    sep = c.get(f"/api/groups/{big}", params={"from": "2026-09", "to": "2026-09"}).json()
+    in_sep = [l for l in g_all["lines"] if "2026-09-01" <= l["date"] <= "2026-09-30"]
+    want = fab_groups.price_range([(l["price"], l["po"]) for l in in_sep])
+    rc_before = {r["code"]: (r["band"], r["range"]) for r in _ready_costs(c)["rows"]}
+    check(f"{k} the slider runs over the months held ({', '.join(pages[big][0]['months'])}); a period chosen (September 2026) works the group's "
+          f"figures out again on its purchases ({len(in_sep)} of {len(g_all['lines'])}) and keeps every purchase on the chart, the others marked outside; "
+          "it changes no verdict anywhere", pages[big][0]["months"] == fab_groups.months_held(first, last) and sep["purchases"] == len(in_sep)
+          and sep["range"] == want and len(sep["lines"]) == len(g_all["lines"]) and sum(1 for l in sep["lines"] if l["inside"]) == len(in_sep)
+          and sep["period"] == {"from": "2026-09-01", "to": "2026-09-30", "default": False, "label": "the period chosen (1 Sep 2026 to 30 Sep 2026)"}
+          and {r["code"]: (r["band"], r["range"]) for r in _ready_costs(c)["rows"]} == rc_before, str(sep["range"]) + str(want))
+    code = next(f["code"] for f in g_all["fabrics"] if f["lines"])
+    pop, pop_sep = hist_ = (c.get("/api/purchases/history", params={"code": code}).json(),
+                            c.get("/api/purchases/history", params={"code": code, "from": "2026-09", "to": "2026-09"}).json())
+    check(f"{k} the price popup takes the period too: its group's range for it, this code's own figures in it, every purchase in its table",
+          pop["group"]["range"] == pages[big][0]["range"] and pop_sep["group"]["range"] == want and len(pop_sep["lines"]) == len(pop["lines"])
+          and pop_sep["in_period"]["lines"] == sum(1 for l in pop["lines"] if "2026-09-01" <= l["date"] <= "2026-09-30") and pop["in_period"]["lines"] == len(pop["lines"]),
+          str(pop_sep.get("in_period")))
+    bad = c.get(f"/api/groups/{big}", params={"from": "2026-10-01", "to": "2026-09-01"})
+    check(f"{k} a period that ends before it starts, or a date that is not one, is refused in plain words",
+          bad.status_code == 400 and "after its end" in bad.json()["detail"] and c.get(f"/api/groups/{big}", params={"from": "May"}).status_code == 400)
+    # a made-up history over years: a group of its own (a construction no other code has), bought in 2023, 2024, 2025 and 2026
+    shipped = purchases.deployed_specs()
+    a1, a2, a3, b1, inc = _stage2_codes()
+    spec = dict(shipped[a3], article_cust_epi="333", article_cust_ppi="222")
+    codes = ["ZZYEAR01", "ZZYEAR02", "ZZYEAR03"]
+    saved = {x: shipped.get(x) for x in codes}
+    for x in codes:
+        shipped[x] = dict(spec, article_code=x)
+    from rules import fab_library
+    lib_on = fab_library.source() is not None
+    if lib_on:                          # the library is the source by now: the codes go in through a list, as GP's would
+        lib_rows = [dict(spec, article_code=x) for x in codes]
+        r = c.post("/api/fab-library/upload", files={"file": ("PLM list, three codes.csv", io.BytesIO(_library_csv(lib_rows)))}).json()
+        for _ in range(3600):
+            u = c.get(f"/api/fab-library/uploads/{r['id']}").json()
+            if u["status"] == "failed" or (u["status"] == "done" and (u["summary"] or {}).get("regroup")):
+                break
+            time.sleep(0.25)
+    po = lambda n, code, day, price: {"Purchasing Document": float(n), "Item": 10.0, "Material": code, "Plant": "F007", "Document Date": pd.Timestamp(day),
+                                      "Name of Supplier": "1200094    ARVIND LTD", "Order Quantity": 1000, "Net Price": price, "Purchasing Doc. Type": "BO",
+                                      "Currency": "INR", "Order Unit": "M", "Short Text": "made up for the checks"}
+    old = [(9600000001 + i, codes[i % 3], d, p) for i, (d, p) in enumerate([("2023-03-10", 90), ("2023-09-12", 92), ("2024-02-01", 95), ("2024-08-20", 97),
+                                                                             ("2025-01-15", 99), ("2025-06-03", 101), ("2025-11-28", 300)])]
+    recent = [(9600000101 + i, codes[i % 3], d, p) for i, (d, p) in enumerate([("2025-11-29", 110), ("2026-01-10", 111), ("2026-03-05", 112), ("2026-05-21", 113),
+                                                                                ("2026-07-07", 114), ("2026-09-09", 115), ("2026-11-02", 140)])]
+    try:
+        up = c.post("/api/purchases/upload", files={"file": ("orders over four years.xlsx", io.BytesIO(_stage2_file([po(*x) for x in old + recent], saved="2026-11-27T12:00:00")))}).json()
+        for _ in range(1200):
+            u = c.get(f"/api/purchases/uploads/{up['id']}").json()
+            if u["status"] in ("done", "failed"):
+                break
+            time.sleep(0.25)
+        h = c.get("/api/purchases/history", params={"code": "ZZYEAR01"}).json()
+        gy = h["group"]["code"] if h["group"] else None
+        page = c.get(f"/api/groups/{gy}").json() if gy else {}
+        every = c.get(f"/api/groups/{gy}", params={"from": "2000-01-01", "to": "2100-12-31"}).json() if gy else {}
+        y24 = c.get(f"/api/groups/{gy}", params={"from": "2024-01", "to": "2024-12"}).json() if gy else {}
+        want12 = fab_groups.price_range([(p_, str(n)) for n, _, _, p_ in recent])
+        want_all = fab_groups.price_range([(p_, str(n)) for n, _, _, p_ in old + recent])
+        lst = next((g for g in c.get("/api/groups").json()["groups"] if g["code"] == gy), {})
+    finally:
+        for x in codes:
+            if saved[x] is None:
+                shipped.pop(x, None)
+            else:
+                shipped[x] = saved[x]
+    check(f"{k} a made-up history over four years (2023 to 2026, one group of its own): by default the group page counts only the last 12 months "
+          "(29 Nov 2025 to 28 Nov 2026: 7 purchases, not the 7 before, a day short included): its median, its usual range, the purchases above it; "
+          "the list of groups gives that median; every purchase stays on the chart",
+          u["status"] == "done" and gy and page["purchases"] == 7 and page["outside_period"] == 7 and page["range"] == want12 and page["range"]["median"] == 113
+          and every["purchases"] == 14 and every["range"] == want_all and len(page["lines"]) == 14 and sum(1 for l in page["lines"] if l["inside"]) == 7
+          and [a["price"] for a in page["above"]] == ([140] if want12["enough"] and 140 > want12["upper"] else []) and lst.get("median") == 113
+          and page["months"][0] == "2023-03" and page["months"][-1] == "2026-11", str({x: page.get(x) for x in ("purchases", "outside_period", "range")})[:400] + str(u.get("error")))
+    check(f"{k} the slider's period over 2024 works the figures out on 2024's purchases alone", y24.get("purchases") == 2
+          and y24["range"] == fab_groups.price_range([(95, "9600000003"), (97, "9600000004")]) and h["in_period"]["lines"] == sum(1 for n, x, _, _ in recent if x == "ZZYEAR01"),
+          str(y24.get("range")))
+    # a fabric type's range on the last 12 months: a pilot code bought also long ago counts only its purchases of the last 12 months
+    rows_now = [r for r in purchases.pilot_rows()[1] if r["PO price Rs/m"] is not None and r["Should-cost Rs/m"] is not None]
+    sep_p = fab_groups.period("2026-09", "2026-09")
+    in_sep = dashboard.in_period(rows_now, sep_p)
+    _, by_code, _ = purchases.bought_lines()
+    def sep_lines(code):
+        return [x for x in by_code.get(code, []) if x[3] not in purchases.OUTLIER_TYPES and "2026-09-01" <= x[2] <= "2026-09-30"]
+    some = [r for r in in_sep if r["PO lines"] != next(x for x in rows_now if x["Fabric code"] == r["Fabric code"])["PO lines"]][:20]
+    check(f"{k} a fabric type's range on a period: a fabric bought only outside it is left out ({len(rows_now) - len(in_sep):,} of {len(rows_now):,} for "
+          "September 2026), one bought in it and outside counts its price and metres in it alone, costed for those metres",
+          0 < len(in_sep) < len(rows_now) and all(sep_lines(str(r["Fabric code"])) for r in in_sep) and some
+          and all(abs(r["PO price Rs/m"] - round(sum(x[5] * x[6] for x in sep_lines(str(r["Fabric code"]))) / sum(x[5] for x in sep_lines(str(r["Fabric code"]))), 2)) < 0.005
+                  and r["PO lines"] == len(sep_lines(str(r["Fabric code"]))) for r in some), str(len(in_sep)) + str(len(some)))
+
+
 # ===================================================================== stage 5: dated yarn rates
 def _ready_costs(c, until=lambda d: True):
     for _ in range(600):            # Right cost works its verdicts out in the background
@@ -1955,6 +2356,8 @@ def front_end_calls(routes):
     per.setdefault("page:rightcost", set()).update(popup)
     per.setdefault("page:groups", set()).update(popup | part("#group/", "#purchase-files"))
     per.setdefault("page:purchase_files", set()).update(part("#purchase-files", "what the shell sees"))
+    # the Fab library, web/library.js: its page (the price popup it opens is purchases.js's, which needs page:groups or page:rightcost)
+    per.setdefault("page:fab_library", set()).update(calls(read("library.js")))
     dj = read("dated.js")           # stage 5: the Yarn prices card (page:prices) and Bring in prices' dated step (do:edit_rates)
     cut = dj.index("async function fromIntake")
     per.setdefault("page:prices", set()).update(calls(dj[:cut]))
@@ -2453,8 +2856,14 @@ def assistant_files_checks():
                     (call("load_shipped_purchase_file"), web("POST", "/api/purchases/load-shipped")),
                     (call("settle_purchase_disagreements", upload_id=1, take="file"), web("POST", "/api/purchases/disagreements", json={"upload_id": 1, "take": "file"})),
                     (call("merge_fab_groups", code="Fab-0001", into="Fab-0002"), web("POST", "/api/groups/merge", json={"code": "Fab-0001", "into": "Fab-0002"})),
-                    (call("unmerge_fab_group", code="Fab-0001"), web("POST", "/api/groups/unmerge", json={"code": "Fab-0001"}))]
-        check(tag + "Users and roles, dated rates and the purchase history (stage 2) need the database: refused on the files in the screen's own words",
+                    (call("unmerge_fab_group", code="Fab-0001"), web("POST", "/api/groups/unmerge", json={"code": "Fab-0001"})),
+                    # the Fab library (GP, 28 Nov 2026)
+                    (call("fab_library_code", code="X"), web("GET", "/api/fab-library/code/X")),
+                    (call("find_in_fab_library", search="x"), web("GET", "/api/fab-library/search", params={"q": "x", "limit": 20})),
+                    (call("fab_library_upload_status", upload_id=1), web("GET", "/api/fab-library/uploads/1")),
+                    (call("upload_fab_library", file_base64=base64.b64encode(b"x").decode(), file_name="list.csv"),
+                     c.post("/api/fab-library/upload", headers=gp, files={"file": ("list.csv", io.BytesIO(b"x"))}))]
+        check(tag + "Users and roles, dated rates, the purchase history (stage 2) and the Fab library need the database: refused on the files in the screen's own words",
               all(same_refusal(m, w) and "DATABASE_URL" in m["error"] for m, w in need_db), str([m.get("error", "")[:80] for m, _ in need_db]))
     for k in ("RIGHTPRICE_MCP_TOKEN", "RIGHTPRICE_ADMINS"):
         os.environ.pop(k, None)
@@ -2581,7 +2990,10 @@ def assistant_checks():
                   # stage 2: the purchase history and Fab groups
                   "purchase_upload_status": "GET /api/purchases/uploads/{upload_id}", "upload_purchase_file": "POST /api/purchases/upload",
                   "load_shipped_purchase_file": "POST /api/purchases/load-shipped", "settle_purchase_disagreements": "POST /api/purchases/disagreements",
-                  "merge_fab_groups": "POST /api/groups/merge", "unmerge_fab_group": "POST /api/groups/unmerge"}
+                  "merge_fab_groups": "POST /api/groups/merge", "unmerge_fab_group": "POST /api/groups/unmerge",
+                  # the Fab library (GP, 28 Nov 2026)
+                  "fab_library_code": "GET /api/fab-library/code/{code}", "find_in_fab_library": "GET /api/fab-library/search",
+                  "fab_library_upload_status": "GET /api/fab-library/uploads/{upload_id}", "upload_fab_library": "POST /api/fab-library/upload"}
         check(tag + "Each tool mirrors the route it really does the work of (pinned here, so a tool cannot quietly name a weaker address; a new "
                     "tool adds its line)", dict(mirrors) == PINNED,
               str({k: (mirrors.get(k), PINNED.get(k)) for k in set(mirrors) | set(PINNED) if mirrors.get(k) != PINNED.get(k)}))
@@ -3339,6 +3751,35 @@ def assistant_checks():
         check(tag + "load_shipped_purchase_file loads the purchase file that came with the code as Purchase files does, uploaded by \"AI assistant\"",
               sh_up["status"] == "done" and sh_up["rows_loaded"] == 6265 and sh_up["uploaded_by"] == AI, str(sh_up)[:300])
 
+        # the Fab library (GP, 28 Nov 2026): the upload beside the page's, and the reading tools beside the page's addresses
+        from rules import fab_library, purchases as purchases_
+        dep = purchases_.deployed_specs()
+        lib_rows = [dict(dep[x]) for x in sorted(dep)[:300]] + [dict(dep[a1_], article_code="ZZAI0001")]
+        lib_w = upload("/api/fab-library/upload", "PLM list, by the admin.csv", _library_csv(lib_rows)).json()
+
+        def read_lib(uid):
+            for _ in range(2400):
+                u_ = web("GET", f"/api/fab-library/uploads/{uid}").json()
+                if u_.get("status") == "failed" or (u_.get("status") == "done" and (u_.get("summary") or {}).get("regroup")):
+                    return u_
+                time.sleep(0.25)
+            raise SystemExit(f"list {uid} was not read in ten minutes")
+        lw = read_lib(lib_w["id"])
+        lib_m = call("upload_fab_library", file_base64=b64(_zip_of("list.csv", _library_csv(lib_rows))), file_name="PLM list, by the assistant.zip")
+        lm = read_lib(lib_m.get("id"))
+        st_lm, st_lw = call("fab_library_upload_status", upload_id=lm["id"]), web("GET", f"/api/fab-library/uploads/{lm['id']}").json()
+        code_m, code_w = call("fab_library_code", code="ZZAI0001"), web("GET", "/api/fab-library/code/ZZAI0001").json()
+        find_m, find_w = call("find_in_fab_library", search="zzai0001"), web("GET", "/api/fab-library/search", params={"q": "zzai0001", "limit": 20}).json()
+        bad_m, bad_w = (call("upload_fab_library", file_base64=b64(b"a,b\n1,2\n"), file_name="list.csv"),
+                        upload("/api/fab-library/upload", "list.csv", b"a,b\n1,2\n"))
+        check(tag + "upload_fab_library uploads the PLM fabric code list as the Fab library page does (a .zip here, a .csv there): read in the "
+                    "background, the same counts; uploaded by \"AI assistant\" where the page records the admin; fab_library_upload_status, "
+                    "fab_library_code and find_in_fab_library read what the page reads; a file that is not the list is refused in the page's words",
+              lib_m.get("status") == "queued" and lw["status"] == lm["status"] == "done" and lw["codes_total"] == lm["codes_total"] == 301
+              and lm["codes_same"] == 301 and lw["uploaded_by"] == "gp@example.com" and lm["uploaded_by"] == AI and st_lm == st_lw and code_m == code_w
+              and code_m["code"] == "ZZAI0001" and len(code_m["values"]) == 26 and find_m == find_w and find_m["results"][0]["code"] == "ZZAI0001"
+              and same_refusal(bad_m, bad_w) and fab_library.source() == lm["id"], str(lib_m)[:200] + str(lm)[:200] + str(bad_m)[:200])
+
         # every tool that only reads, called for real, watched: the store does not move
         fresh_tok = call("intake_file", file_base64=b64(csv), file_name="list.csv")["token"]
         READ = {"list_choices": {}, "cost_fabric": {"choices": dict(masters.EXAMPLE_ROW)}, "find_fabrics": {"search": "AI"}, "fabric_brief": {"key": key3},
@@ -3347,7 +3788,8 @@ def assistant_checks():
                 "list_suppliers": {}, "fabric_list": {"yarn_move_pct": {"*": 5}}, "mill_cost_sheets": {}, "users_and_roles": {},
                 "cost_template_file": {"file_base64": b64(tpl), "file_name": "t.xlsx"}, "dated_rates": {}, "dated_market_preview": {},
                 "intake_map_columns": {"token": fresh_tok, "table": sheet, "count_column": "Count", "rate_column": "Rate"},
-                "purchase_upload_status": {"upload_id": m_up["id"]}}
+                "purchase_upload_status": {"upload_id": m_up["id"]}, "fab_library_upload_status": {"upload_id": lm["id"]},
+                "fab_library_code": {"code": "ZZAI0001"}, "find_in_fab_library": {"search": "zzai"}}
         read_only = {n for n in names if ann[n].get("readOnlyHint")}
         errs = {n: str(call(n, **READ.get(n, {})).get("error"))[:80] for n in sorted(read_only & set(READ))}
         changing = {n for n in names if ann[n].get("destructiveHint") and not ann[n].get("readOnlyHint")}

@@ -59,7 +59,20 @@
 .fgcell { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; }
 .fgcell .ib.pib { width: 24px; height: 24px; flex: none; }
 .fgcell .ib.pib svg { width: 15px; height: 15px; }
+/* the period "what we usually pay" rests on, and its slider (GP, 28 Nov 2026) */
+.pbar { border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px; margin: 8px 0 10px; background: var(--panel2); max-width: 900px; }
+.pbar .prow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.pbar .prow + .prow { margin-top: 4px; }
+.pbar .pwords { font-weight: 600; }
+.pbar .btn { min-height: 28px; padding-top: 3px; padding-bottom: 3px; }
+.pbar .pslide { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-top: 6px; }
+.pbar .pslide label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.pbar .pslide input[type=range] { flex: 1; min-width: 0; accent-color: var(--s1); }
+.pbar .pnote { margin: 4px 0 0; font-size: 12px; }
+.pchart .pt.out .dotm { opacity: .32; }
+.plegend .dot.faded { opacity: .32; }
 @media (max-width: 700px) {
+  .pbar .pslide { grid-template-columns: 1fr; }
   .ptitle { font-size: 20px; }
   .mergerow input { width: 100px; }
 }

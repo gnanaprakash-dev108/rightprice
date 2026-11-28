@@ -397,7 +397,7 @@ def read_po_file(data, filename="", at=None):
 _plm = {"key": None, "rows": None}
 
 
-def plm_specs():
+def deployed_specs():
     """{material code: its row of the PLM extract deployed with the code (pilot.PLM_SPECS: data/plm_specs_for_po.csv in the
     code's own folder, not the data folder; a corrected extract goes in with a code change), as received}, read again only
     when the file changes."""
@@ -411,6 +411,26 @@ def plm_specs():
                 rows[str(r[code]).strip()] = r
         _plm.update(key=key, rows=rows)
     return _plm["rows"]
+
+
+def plm_specs(codes=None):
+    """{material code: its PLM specification, as received} for these codes (None: the codes of the file deployed with the
+    code). From the Fab library once it holds an upload read in full (rules/fab_library.py, GP's decision of 28 Nov 2026):
+    every code it has, with the latest upload's specification; before any upload, from the PLM extract deployed with the
+    code (deployed_specs), as before. A code the source does not have is simply not in the answer."""
+    from rules import fab_library
+    shipped = deployed_specs()
+    want = set(shipped) if codes is None else {str(c) for c in codes}
+    lib = fab_library.specs_for(want)
+    if lib is not None:
+        return lib
+    return shipped if codes is None else {c: shipped[c] for c in want if c in shipped}
+
+
+def plm_key():
+    """What the specifications rest on now: the deployed extract's time, and the library's latest upload read in full."""
+    from rules import fab_library
+    return common._mtime(pilot.PLM_SPECS), fab_library.source()
 
 
 def quantity_terms(route, metres, m):
@@ -706,9 +726,9 @@ def _load(st, uid):
         k = (l.date, l.po, l.item)
         if l.code not in first or k < first[l.code]:
             first[l.code] = k
-    specs = plm_specs()
     with _job_tx(st) as c:                                  # the signatures are worked out before the store is held for writing
         codes = set(dp.fabric_index(c)) | set(first)
+    specs = plm_specs(codes)                                # from the Fab library once it holds an upload, else the deployed file
     ready = fab_groups.signatures(specs, codes)
     with _job_tx(st, KIND) as c:
         held = dp.ids_of(c, list(first))
@@ -1060,14 +1080,18 @@ def skipped_download(uid):
     return common.Download(buf.getvalue(), f"Rows left out of upload {up['id']}.xlsx")
 
 
-def history(code):
+def history(code, frm=None, to=None):
     """Price over time for one fabric code: each purchase (date, mill, metres, price) and its should-cost as Right cost
     has it (on the yarn rates of its order month, today's where none is dated); and, since most codes were ordered once,
     its Fab group's purchases (every code of the same construction). ZLOI lines are in none of it: they are listed
-    apart, as outliers."""
+    apart, as outliers. What we usually pay (the group's median and usual range, and this code's own figures beside it)
+    rests on the purchases of the period asked for, by default the last 12 months ending today (GP, 28 Nov 2026: the
+    popup's time slider); every purchase stays on the chart and in the table."""
     st = need_db()
     code = str(code or "").strip()
+    p = fab_groups.period(frm, to)
     with st.tx() as c:
+        first_, last_ = dp.span(c)
         fab = dp.fabrics(c, codes=[code]).get(code)
         if fab is None:
             raise common.Refused(404, f"No purchase of {code} is in the purchase history yet." + (
@@ -1079,11 +1103,15 @@ def history(code):
         gid = fab_groups.final(groups, fab["fab_group_id"]) if fab["fab_group_id"] is not None else None
         got = fab_groups.gather(c, gid, groups) if gid is not None else None
         moves = dp.regroups_of(c, fab["id"])
-    grp = fab_groups.history(got) if got is not None else None
+    grp = fab_groups.history(got, p) if got is not None else None
     should, why, on = fab_groups.shoulds({code: fab}, own)[code]          # on its order month's yarn rates, as in Right cost
     s = fab_groups.short_spec(fab["spec"]) if fab["spec"] else {}
     out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "should": should, "should_why": why, "should_on": on,
            "metres": round(sum(x["metres"] for x in lines), 2), "orders": len({x["po"] for x in lines}),
+           "period": p, "months": fab_groups.months_held(first_, last_),
+           "in_period": (lambda ls: {"lines": len(ls), "metres": round(sum(x["metres"] for x in ls), 2), "orders": len({x["po"] for x in ls}),
+                                     "low": min((x["price"] for x in ls), default=None), "high": max((x["price"] for x in ls), default=None)})(
+               [x for x in lines if fab_groups.in_period(x["date"], p)]),
            "spec": {k: s.get(k, "") for k in ("blend_name", "dyemethod_name", "weavetype_name", "warpcount", "weftcount", "epi", "ppi",
                                               "finishedwidth", "finishedwidth_uom", "finish_name", "pattern_name")} if s else None,
            "not_grouped": None if gid is not None else (fab["not_grouped"] or "Not grouped"), "group": None,
@@ -1092,7 +1120,7 @@ def history(code):
     if grp is not None:
         g0 = groups[fab["fab_group_id"]]
         out["group"] = {k: grp[k] for k in ("code", "name", "purchases", "metres", "orders", "range", "mills", "should", "min_for_range",
-                                            "first", "last")}
+                                            "first", "last", "period", "purchases_all", "outside_period")}
         out["group"]["lines"] = grp["lines"]
         out["group"]["codes"] = len(grp["fabrics"])
         out["group"]["via"] = None if g0["id"] == gid else g0["code"]          # its own group was merged into this one
@@ -1282,7 +1310,7 @@ def pilot_rows():
     st = store.get()
     codes = {str(r["Fabric code"]) for r in pilot_records()}
     held = _held_fabrics(codes)
-    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS),
+    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, plm_key(),
            src["history"], src["shipped_loaded"], fp)
     if _rows_memo["key"] == key:
         _rows_memo["stale"] = False
@@ -1318,7 +1346,7 @@ def _work_rows(key, by_code, src, fp, held):
     """pilot_rows' work: every pilot fabric's row worked out on these lines, this history and these lists."""
     m = common.get_masters()
     patterns, contents = masters.lists(m)["Pattern"], list(yarn_seed.CONTENTS)
-    ctx, specs = pilot.inputs_context(m), plm_specs()
+    ctx, specs = pilot.inputs_context(m), plm_specs({str(r["Fabric code"]) for r in pilot_records()})
     group_of = m["Weaves"].set_index("Weave")["Weave group"]
     out = []
     for r in pilot_records():

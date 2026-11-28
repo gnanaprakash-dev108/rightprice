@@ -17,8 +17,10 @@ purchases priced well above the group. "Priced well above its group" is GP's dec
 usual range by the brief's own rule (costing.usual_range): the middle half of the group's past prices, kept between 5%
 and 10% either side of the group's median. A range needs purchases on at least MIN_FOR_RANGE separate orders.
 ZLOI order lines are left out of every figure and shown apart as outliers (GP, 27 Nov 2026)."""
+import datetime as dt
 import hashlib
 import json
+import os
 import re
 import statistics
 import warnings
@@ -429,6 +431,83 @@ def price_range(lines):
     return out
 
 
+# ------------------------------------------------------------------ the usual range over time (GP's decision, 28 Nov 2026)
+# "What we usually pay" (a Fab group's or a fabric type's usual range, its median, "priced above its group / its range")
+# rests by default on the purchases of the last 12 months, ending today. The Fab group page and the price popup have a time
+# slider to choose another period (a view only: every verdict elsewhere stays on the default); older purchases always stay
+# on the price-over-time chart.
+TODAY_ENV = "RIGHTPRICE_TODAY"      # a fixed "today" (YYYY-MM-DD), for the checks only, so their figures do not move with the date
+IST = dt.timedelta(hours=5, minutes=30)
+
+
+def today():
+    """Today, as a day in India (document dates are days in India)."""
+    fixed = os.environ.get(TODAY_ENV, "").strip()
+    if fixed:
+        return dt.date.fromisoformat(fixed)
+    return (dt.datetime.now(dt.timezone.utc).replace(tzinfo=None) + IST).date()
+
+
+def _year_before(d):
+    try:
+        return d.replace(year=d.year - 1)
+    except ValueError:              # 29 February: 28 February of the year before
+        return d.replace(year=d.year - 1, day=28)
+
+
+def default_period(day=None):
+    """The last 12 months, ending today: (from, to), ISO days, both included (29 Nov 2025 to 28 Nov 2026)."""
+    d = day or today()
+    return (_year_before(d) + dt.timedelta(days=1)).isoformat(), d.isoformat()
+
+
+def _words(day):
+    d = dt.date.fromisoformat(day)
+    return f"{d.day} {d:%b %Y}"
+
+
+def period(frm=None, to=None):
+    """The period "what we usually pay" rests on: {from, to, default, label}. None for both: the default (the last 12
+    months, ending today). A month (2026-03) is read as its first day (from) or its last (to)."""
+    dfrom, dto = default_period()
+
+    def read(v, end):
+        v = str(v or "").strip()
+        if not v:
+            return None
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}", v):
+                d = dt.date.fromisoformat(v + "-01")
+                if end:
+                    d = (d.replace(day=28) + dt.timedelta(days=4)).replace(day=1) - dt.timedelta(days=1)
+                return d.isoformat()
+            return dt.date.fromisoformat(v[:10]).isoformat()
+        except ValueError:
+            raise common.Refused(400, f"{v} is not a date: give the period as YYYY-MM-DD or YYYY-MM.")
+    f, t = read(frm, False) or (dfrom if not to else "0001-01-01"), read(to, True) or dto
+    if f > t:
+        raise common.Refused(400, f"The period runs from {f} to {t}: its start is after its end.")
+    default = (f, t) == (dfrom, dto)
+    label = ("the last 12 months" if default else "the period chosen") + f" ({_words(f) if f > '0001-01-01' else 'the first purchase'} to {_words(t)})"
+    return {"from": f, "to": t, "default": default, "label": label}
+
+
+def months_held(first, last):
+    """The months the slider runs over: from the history's first month to its last, or to this month if later."""
+    if not first:
+        return []
+    end = max(last or first, today().isoformat())[:7]
+    out, y, m = [], int(first[:4]), int(first[5:7])
+    while f"{y:04d}-{m:02d}" <= end:
+        out.append(f"{y:04d}-{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return out
+
+
+def in_period(day, p):
+    return day is not None and p["from"] <= day <= p["to"]
+
+
 def _should(fabric, m, om=None, table=None):
     """A fabric's should-cost (Rs/m) as Right cost costs a purchase order: on the yarn rates of its order month (om, from
     dated.month_of; today's where none is dated) and today's other rates. (should-cost or None, why, which rates)."""
@@ -480,20 +559,29 @@ def gather(c, gid, groups):
             "outliers": dp.lines(c, ids, outliers=True), "moves": dp.regroups(c, member_ids), "renames": dp.group_changes(c, member_ids)}
 
 
-def history(got):
+def history(got, p=None):
     """What the group page and the price popup show of one group, from gather() (outside the transaction: the
-    should-costs read the rate master). ZLOI lines are in no figure; they are listed apart."""
-    gid, groups, member_ids, fabs, lines = got["gid"], got["groups"], got["member_ids"], got["fabs"], got["lines"]
+    should-costs read the rate master). ZLOI lines are in no figure; they are listed apart. The figures of "what we
+    usually pay" (purchases, orders, metres, the median, the usual range, by mill, priced well above) rest on the
+    purchases of the period `p` (period(): by default the last 12 months, ending today); every purchase stays on the
+    chart (each line says whether it is in the period) and in the codes' table; the should-costs are each code's own,
+    on its order month as Right cost costs it, whatever the period."""
+    gid, groups, member_ids, fabs, every = got["gid"], got["groups"], got["member_ids"], got["fabs"], got["lines"]
+    p = p or period()
+    lines = [r for r in every if in_period(r["doc_date"], p)]
     g = groups[gid]
     rng = price_range([(r["price"], r["po_number"]) for r in lines])
-    sh = shoulds(fabs, lines)
+    sh = shoulds(fabs, every)
     costed = sorted(v for v, _, _ in sh.values() if v is not None)
     by_mill, out_by_mill = {}, {}
     for r in lines:
         by_mill.setdefault(r["mill_key"], []).append(r)
     for r in got["outliers"]:
         out_by_mill.setdefault(r["mill_key"], []).append(r)
-    mills_ = []
+    mills_, everyone = [], {}
+    for r in every:                 # every mill bought from, by metres: the chart's colours stay the same whatever the period
+        e = everyone.setdefault(r["mill_key"], {"key": r["mill_key"], "name": r["mill"], "metres": 0.0})
+        e["metres"] += float(r["qty_m"])
     total_m = sum(float(r["qty_m"]) for r in lines)
     for key in list(by_mill) + [k for k in out_by_mill if k not in by_mill]:
         rs, zs = by_mill.get(key, []), out_by_mill.get(key, [])
@@ -516,7 +604,7 @@ def history(got):
                                   pct=(float(r["price"]) / rng["median"] - 1) * 100))
         above.sort(key=lambda x: -x["above_rs"])
     codes = {}
-    for r in lines:
+    for r in every:
         codes.setdefault(r["fabric_code"], []).append(r)
     zcodes = {}
     for r in got["outliers"]:
@@ -538,8 +626,10 @@ def history(got):
             "merged_in": [{"code": groups[i]["code"], "name": groups[i]["name"], "merged_at": groups[i]["merged_at"], "merged_by": groups[i]["merged_by"]}
                           for i in member_ids if i != gid],
             "purchases": len(lines), "metres": round(total_m, 2), "orders": len({r["po_number"] for r in lines}),
-            "first": lines[0]["doc_date"] if lines else None, "last": lines[-1]["doc_date"] if lines else None,
-            "range": rng, "min_for_range": MIN_FOR_RANGE, "mills": mills_, "lines": [_line(r) for r in lines], "above": above,
+            "first": every[0]["doc_date"] if every else None, "last": every[-1]["doc_date"] if every else None,
+            "period": p, "purchases_all": len(every), "outside_period": len(every) - len(lines),
+            "mills_all": sorted(({"key": e["key"], "name": e["name"], "metres": round(e["metres"], 2)} for e in everyone.values()), key=lambda x: (-x["metres"], x["name"])),
+            "range": rng, "min_for_range": MIN_FOR_RANGE, "mills": mills_, "lines": [dict(_line(r), inside=in_period(r["doc_date"], p)) for r in every], "above": above,
             "above_rs": round(sum(a["above_rs"] for a in above), 0), "fabrics": fab_rows,
             "outliers": [_line(r) for r in got["outliers"]],
             "moved_in": [{"code": m["code"], "from": name(m["from_group_id"]), "why": m["why"], "at": m["at"]} for m in got["moves"]
@@ -559,18 +649,22 @@ def history(got):
                        "dated": dated_}}          # which codes' order months have a dated yarn rate (stage 5), as Right cost costs them
 
 
-def page(code):
-    """The Fab group page (#group/<code>)."""
+def page(code, frm=None, to=None):
+    """The Fab group page (#group/<code>), its figures on the period asked for (by default the last 12 months, ending
+    today); with the months the history holds, for the page's time slider."""
     st = need_db()
     code = str(code or "").strip()
+    p = period(frm, to)
     with st.tx() as c:
+        first, last = dp.span(c)
         groups = dp.groups(c)
         hit = next((i for i, g in groups.items() if g["code"].lower() == code.lower()), None)
         if hit is None:
             raise common.Refused(404, f"There is no Fab group {code}.")
         now = final(groups, hit)
         got = gather(c, now, groups)
-    out = history(got)
+    out = history(got, p)
+    out["months"] = months_held(first, last)
     if now != hit:
         out["asked"] = {"code": groups[hit]["code"], "name": groups[hit]["name"], "merged_at": groups[hit]["merged_at"],
                         "merged_by": groups[hit]["merged_by"]}
@@ -581,11 +675,13 @@ def listing():
     """Every Fab group with codes in it now, with its purchases, orders, metres and median price (ZLOI left out);
     merged ones say where they went."""
     st = need_db()
+    usual = period()                # the median: what we usually pay, the last 12 months (GP, 28 Nov 2026)
     with st.tx() as c:
         groups, stats, prices, counts = dp.groups(c), dp.group_stats(c), dp.prices_by_group(c), dp.counts(c)
+        recent = dp.prices_by_group_dated(c, usual["from"], usual["to"])
         fabs = dp.fabric_groups(c)
     per = {}
-    blank = lambda: {"lines": 0, "metres": 0.0, "last": None, "prices": [], "codes": 0}
+    blank = lambda: {"lines": 0, "metres": 0.0, "last": None, "prices": [], "recent": [], "codes": 0}
     for gid in groups:
         f = final(groups, gid)
         n, metres, _, last = stats.get(gid, (0, 0, 0, None))
@@ -594,6 +690,7 @@ def listing():
         p["metres"] += float(metres or 0)
         p["last"] = max(filter(None, [p["last"], last]), default=None)
         p["prices"] += prices.get(gid, [])
+        p["recent"] += recent.get(gid, [])
     for _, (gid, _) in fabs.items():
         if gid is not None:
             per.setdefault(final(groups, gid), blank())["codes"] += 1
@@ -604,7 +701,7 @@ def listing():
             continue
         rows.append({"code": g["code"], "name": g["name"], "codes": p["codes"], "purchases": p["lines"], "metres": round(p["metres"], 2),
                      "orders": len({po for _, po in p["prices"]}),
-                     "median": round(statistics.median([x for x, _ in p["prices"]]), 2) if p["prices"] else None, "last": p["last"],
+                     "median": round(statistics.median([x for x, _ in p["recent"]]), 2) if p["recent"] else None, "last": p["last"],
                      "route": g["route"], "weave": g["weave"], "content": g["content"]})
     merged = [{"code": g["code"], "name": g["name"], "into": groups[final(groups, gid)]["code"], "merged_at": g["merged_at"],
                "merged_by": g["merged_by"]} for gid, g in groups.items() if g["merged_into"] is not None]
@@ -615,7 +712,7 @@ def listing():
             why[k] = why.get(k, 0) + 1
     counts["groups"] = len(rows)
     return {"groups": rows, "merged": merged, "counts": counts, "not_grouped": sorted(why.items(), key=lambda x: -x[1]),
-            "min_for_range": MIN_FOR_RANGE}
+            "min_for_range": MIN_FOR_RANGE, "period": usual}
 
 
 def differences(a, b):

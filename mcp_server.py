@@ -11,7 +11,8 @@ never a second version, and every change it makes goes through the same checks a
 GP's decision, 27 Nov 2026: "if I ask something through the MCP connector it should execute everything including the
 admin role". The token is an admin key: its fixed role, "AI assistant" (rules/access.py ASSISTANT_ALLOWED), holds the
 Admin role's permissions. So there is a tool for every change an Admin can make in the app: rate tables, cotton prices,
-Bring in prices, dated yarn rates (stage 5), purchase files and Fab group merges (stage 2), uploads to the fabric list and
+Bring in prices, dated yarn rates (stage 5), purchase files and Fab group merges (stage 2), the PLM fabric code list to the
+Fab library (GP, 28 Nov 2026), uploads to the fabric list and
 removing its rows, mill cost sheets and their drafts, quote alerts seen, tracker steps, drafts to mills, and users and
 roles. Two things stay with a person (GP, 28 Nov 2026): switching off an admin or taking Admin away (rules/access.py
 change_person), and bringing in prices from a price service, which takes the service's key, and a key is never given in a
@@ -1367,6 +1368,51 @@ def unmerge_fab_group(code: str) -> dict:
     """Undo a merge of Fab groups (code: the group that was merged into another): it counts on its own again. THIS CHANGES
     THE FAB GROUPS EVERYONE SEES; the person must confirm first. Recorded on the group's page as undone by "AI assistant"."""
     return dict(_purch()[1].unmerge({"code": code}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+
+# ------------------------------------------------------------------ the Fab library: the PLM fabric code list (a database only)
+def _library():
+    from rules import fab_library
+    return fab_library
+
+
+@tool(mirrors="GET /api/fab-library/code/{code}")
+def fab_library_code(code: str) -> dict:
+    """One fabric code of the Fab library (the PLM fabric code list), as the Fab library page shows it: its 26 values as
+    the PLM gives them (content, dye method, weave, counts, EPI, PPI, finished width, finish ...), its construction in one
+    line, its Fab group (the one it is in, or, for a code never bought, the group its construction is), its purchases
+    (ZLOI left out), which upload gave its specification, and every change a later upload made to it. Changes nothing."""
+    return _library().code_page(code)
+
+
+@tool(mirrors="GET /api/fab-library/search")
+def find_in_fab_library(search: str, limit: int = 20) -> dict:
+    """Find codes in the Fab library: every word must match the code or its construction ('twill 40s', '136 x 90',
+    'yarn dyed oxford'); each with its construction, its Fab group and its purchases. Changes nothing."""
+    return _library().search(search, limit)
+
+
+@tool(mirrors="GET /api/fab-library/uploads/{upload_id}")
+def fab_library_upload_status(upload_id: int) -> dict:
+    """Where one upload of the PLM fabric code list stands, as the Fab library page shows it: waiting, being read, read or
+    failed; the codes new, corrected, the same, kept from earlier uploads, the rows repeated or without a code, the codes
+    with blank EPI, PPI, width or counts; and the purchase history grouped and costed again on it. Changes nothing."""
+    up = _library().upload_detail(upload_id)
+    return up
+
+
+@tool(mirrors="POST /api/fab-library/upload", writes=True)
+def upload_fab_library(file_base64: str, file_name: str) -> dict:
+    """Upload the PLM fabric code list to the Fab library, as the Fab library page does: a .csv with the 26 columns
+    plm_extract.py keeps, a .zip holding that one .csv (send the .zip: the full list is about 4 MB zipped, and a file sent
+    here may be at most 25 MB), or an .xlsx; sent as base64 with its name, read in the background
+    (fab_library_upload_status says where it stands). THIS CHANGES THE SPECIFICATIONS EVERYONE SEES: from then on the
+    purchase history takes every code's PLM specification from the library; codes whose specification changed are moved to
+    their Fab group and costed again at once (the Fab groups, the price popup and Right cost's purchase-order rows follow).
+    The person must confirm the file first. Recorded as uploaded by "AI assistant"."""
+    out = _library().upload(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT)
+    return dict(out, recorded_as=ASSISTANT, next="fab_library_upload_status with this id says where it stands")
 
 
 if __name__ == "__main__":

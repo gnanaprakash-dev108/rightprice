@@ -22,7 +22,7 @@ import threading
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
-from fastapi import Body, FastAPI, File, Request, UploadFile
+from fastapi import Body, FastAPI, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -46,6 +46,8 @@ async def lifespan(_app):
     await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
     from rules import purchases as _purchases       # stage 2: purchase files left half-read by a restart are read again
     threading.Thread(target=_purchases.resume_at_start, daemon=True).start()
+    from rules import fab_library as _library        # the Fab library: a list left half-read by a restart is read again
+    threading.Thread(target=_library.resume_at_start, daemon=True).start()
     if _mcp_app is not None:
         async with mcp_server.mcp.session_manager.run():       # the MCP endpoint's own machinery, for as long as the app runs
             yield
@@ -597,8 +599,9 @@ def purchase_upload_skipped(upload_id: int):
 
 
 @app.get("/api/purchases/history")
-def purchase_history(code: str):
-    return purchases.history(code)
+def purchase_history(code: str, frm: str = Query(None, alias="from"), to: str = None):
+    # from / to: the period "what we usually pay" rests on (the popup's time slider); none: the last 12 months
+    return purchases.history(code, frm, to)
 
 
 @app.get("/api/groups")
@@ -607,8 +610,9 @@ def groups_list():
 
 
 @app.get("/api/groups/{code}")
-def group_page(code: str):
-    return fab_groups.page(code)
+def group_page(code: str, frm: str = Query(None, alias="from"), to: str = None):
+    # from / to: the period "what we usually pay" rests on (the page's time slider); none: the last 12 months
+    return fab_groups.page(code, frm, to)
 
 
 @app.post("/api/groups/merge")
@@ -620,6 +624,38 @@ def groups_merge(payload: dict = Body(...), request: Request = None):
 def groups_unmerge(payload: dict = Body(...), request: Request = None):
     return fab_groups.unmerge(payload, who=_who(request))
 
+
+
+# ------------------------------------------------------------------ the Fab library: the PLM fabric code list (on a database only)
+# Who may look and who may upload: rules/access.py (ROUTES).
+from rules import fab_library  # noqa: E402
+
+
+@app.get("/api/fab-library")
+def fab_library_status():
+    return fab_library.status()
+
+
+@app.get("/api/fab-library/search")
+def fab_library_search(q: str = "", limit: int = 50):
+    return fab_library.search(q, limit)
+
+
+@app.get("/api/fab-library/code/{code}")
+def fab_library_code(code: str):
+    return fab_library.code_page(code)
+
+
+@app.get("/api/fab-library/uploads/{upload_id}")
+def fab_library_upload_detail(upload_id: int):
+    return fab_library.upload_detail(upload_id)
+
+
+@app.post("/api/fab-library/upload")
+async def fab_library_upload(request: Request, file: UploadFile = File(...)):
+    # the file as the browser sent it (kept on disk by the server while it comes): read, checked and kept in a worker
+    # thread, a .csv compressed as it is read, so a large list is never held whole; over the limit, refused at once
+    return await asyncio.to_thread(fab_library.upload, file.filename, file.file, _who(request))
 
 
 # ------------------------------------------------------------------ the front end
@@ -643,7 +679,7 @@ def _page(file, assets):
 def index():
     """The app: one shell (left rail, Right cost, the "+" popup) with every page in it; each page is a file in web/pages/."""
     pages = sorted("pages/" + f for f in os.listdir(os.path.join(WEB, "pages")) if f.endswith((".js", ".css")))
-    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js", "dated.css", "dated.js", "purchases.css", "purchases.js", *pages))
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js", "dated.css", "dated.js", "purchases.css", "purchases.js", "library.js", *pages))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")

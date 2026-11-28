@@ -1,5 +1,48 @@
 # Questions for GP
 
+## Built 28 Nov 2026 (GP's decisions of 28 Nov: the Fab library; what we usually pay over time)
+
+- **The Fab library** (user icon > Purchase history > Fab library): the PLM fabric code list, uploaded by an admin (Admin and
+  Rates editor: a new action permission, do:upload_fab_library, given as purchase files are), read in the background like a
+  purchase file (its progress shown; read again from the start after a restart), kept with every upload (who, when, its file
+  and its counts). A .csv with the 26 columns plm_extract.py keeps, a .zip holding that one .csv (the real list: 3.7 MB
+  zipped, 80 MB unzipped, 418,877 codes), or an .xlsx; up to 200 MB for the list itself (a .zip's list counted unzipped),
+  refused on the screen at once with the limit named. Every code is found by its code or words of its construction, with its
+  construction, its Fab group (the one it is in, or, for a code never bought, the group its construction is) and its
+  purchases; a code's page shows its 26 values, which list gave them and what later lists corrected.
+- **Where the specifications come from:** once the library holds a list read in full, the purchase history takes every
+  code's PLM specification from it (in place of data/plm_specs_for_po.csv deployed with the code); before any list, from the
+  deployed file as before, so nothing changes on the live site until GP uploads the list. The real list holds every one of
+  the deployed file's 19,669 codes with exactly the same values (checked by check_server.py when the file is on the
+  machine). A code's specification is the latest list's that holds it (lists go in the order they were uploaded, so an older
+  list read again never undoes a later one). Codes with a blank EPI, PPI, width or count are kept with the blanks and not
+  grouped (8,741 have no EPI or PPI and 23,267 no width in the real list).
+- **A list that gives a code a specification, or corrects one, groups and costs it again at once** (stage 2's own path, as a
+  purchase upload takes it): a code bought before the library had it is grouped and costed when the list is read, without
+  another purchase upload; a corrected EPI moves the code and the group page says what changed.
+- **What we usually pay over time:** a Fab group's and a fabric type's usual range, median and "priced above its group / its
+  range" rest by default on the purchases of the last 12 months, ending today (29 Nov 2025 to 28 Nov 2026 today: the same
+  day a year back, the day after). The Fab group page and the price popup have a time slider over the months the history
+  holds (from the start of a month to the end of a month); the figures are worked out again for the period chosen. A view
+  only: Right cost, the brief, quote alerts, supplier pages and the Dashboard stay on the last 12 months. Every purchase stays
+  on the price-over-time chart (those outside the period faded). For a fabric type, a fabric bought both inside and outside
+  the 12 months counts its purchases inside them alone (its price and metres there, costed for those metres). With the
+  history of Aug to Nov 2026 nothing changes today (checked: every page's figures as before; the brief says "bought in the
+  last 12 months").
+
+## Asked 28 Nov 2026 (the Fab library): built one way meanwhile, each can be changed
+
+L-1. **A code missing from a later list** (a list of part of the codes, or a code taken out of the PLM): built as **kept with the
+     specification it had**, its page saying it is not in the latest list (as a purchase line not in a newer file is kept).
+     1. Keep it (as now, recommended: a part list then corrects without removing). 2. Take it out of the library at the next
+     full list (the purchase history keeps the specification it was grouped by). 3. Keep it, and list such codes on the
+     upload's page for an admin.
+L-2. **The 12 months: rolling or calendar?** Built as **rolling, ending today** (29 Nov 2025 to 28 Nov 2026); the slider then
+     chooses whole months. 1. Rolling (as now). 2. The last 12 whole months (Dec 2025 to Nov 2026, this month included).
+     3. The last 12 complete months (Nov 2025 to Oct 2026).
+L-3. **The AI assistant's upload of the list** takes the file as base64 in the chat, at most 25 MB, so it is sent zipped (the
+     real list is 3.7 MB zipped). 1. As now (recommended). 2. Raise the assistant's limit for this one tool.
+
 ## Answered 28 Nov 2026 (the AI assistant, MCP)
 
 - Switching off an admin, or taking Admin away: **stays with a person**. The assistant is refused it, so the admins

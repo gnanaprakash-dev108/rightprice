@@ -92,6 +92,11 @@ PERMISSIONS = [
     ("page:purchase_files", "Purchase files: the uploads of purchase-order files and what each held (to look at)", "see the purchase files",
      "Unticked, Purchase files is not offered. The purchase history the files filled still shows in Right cost and on the "
      "Fab group pages."),
+    # the Fab library (GP, 28 Nov 2026): the PLM fabric code list
+    ("page:fab_library", "Fab library: every code of the PLM fabric code list with its construction, Fab group and purchases (to look at)",
+     "see the Fab library",
+     "Unticked, the Fab library is not offered. The construction it gives still shows in Right cost, on the Fab group pages and "
+     "in a fabric's price over time."),
     ("page:users", "Users and roles (this page)", "see who may use RightPrice", ""),
     ("do:edit_rates", "Edit rates: rate tables, yarn and cotton prices, Bring in prices", "edit rates", ""),
     ("do:apply_drafts", "Apply mill cost sheet drafts to the rate master", "apply mill cost sheet drafts", ""),
@@ -102,6 +107,8 @@ PERMISSIONS = [
     ("do:upload_purchases", "Upload purchase-order files, load the one that came with the code, and settle what a file and the purchase "
      "history disagree on (an admin action)", "upload purchase files", ""),
     ("do:merge_groups", "Merge two Fab groups, or undo a merge (an admin action)", "merge Fab groups", ""),
+    ("do:upload_fab_library", "Upload the PLM fabric code list to the Fab library (an admin action: the purchase history is grouped and "
+     "costed again on it)", "upload the PLM fabric code list", ""),
     ("do:manage_users", "Add people, change their role, switch them off, change what each role may do", "change who may use RightPrice", ""),
 ]
 LABEL = {k: label for k, label, _, _ in PERMISSIONS}
@@ -198,6 +205,12 @@ ROUTES = {
     "POST /api/purchases/disagreements": "do:upload_purchases",          # settle what a file and the history disagree on
     "POST /api/groups/merge": "do:merge_groups",
     "POST /api/groups/unmerge": "do:merge_groups",
+    # the Fab library: the PLM fabric code list (an upload is an admin action: Admin and Rates editor, as purchase files)
+    "GET /api/fab-library": "page:fab_library",
+    "GET /api/fab-library/search": "page:fab_library",
+    "GET /api/fab-library/code/{code}": "page:fab_library",
+    "GET /api/fab-library/uploads/{upload_id}": "page:fab_library",
+    "POST /api/fab-library/upload": "do:upload_fab_library",
 }
 
 # what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/pages/<page>.js
@@ -220,6 +233,8 @@ PAGE_USES = {
     # stage 2 (web/purchases.js): the Fab group pages and the price popup; the purchase files page
     "page:groups": ["GET /api/groups", "GET /api/groups/{code}", "GET /api/purchases/history"],
     "page:purchase_files": ["GET /api/purchases/uploads", "GET /api/purchases/uploads/{upload_id}", "GET /api/purchases/skipped/{upload_id}"],
+    # the Fab library (web/library.js)
+    "page:fab_library": ["GET /api/fab-library", "GET /api/fab-library/search", "GET /api/fab-library/code/{code}", "GET /api/fab-library/uploads/{upload_id}"],
 }
 
 # the AI assistant (the MCP token): a fixed role. Each tool names the address it mirrors (mcp_server.py) and runs only if

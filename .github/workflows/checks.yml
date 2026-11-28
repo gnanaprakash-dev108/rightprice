@@ -42,7 +42,7 @@ jobs:
       - name: Server gives the engine's numbers on files, SQLite and PostgreSQL; the move to a database changes nothing
         run: python check_server.py
       - name: Front end script parses
-        run: for f in web/rightcost.js web/access.js web/dated.js web/purchases.js web/pages/*.js; do node --check "$f" || exit 1; done
+        run: for f in web/rightcost.js web/access.js web/dated.js web/purchases.js web/library.js web/pages/*.js; do node --check "$f" || exit 1; done
       - name: A browser for the screen checks (not needed by the app itself)
         run: pip install playwright && python -m playwright install --with-deps chromium
       - name: Every page opens in a browser, light and dark and at phone width, and the main paths work

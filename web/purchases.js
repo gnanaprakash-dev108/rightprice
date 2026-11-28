@@ -37,7 +37,8 @@
     const box = h("div", { class: "pchart" });
     const legend = h("div", { class: "plegend" }, o.series.filter(s => o.points.some(p => p.series === s.key)).map(s => h("span", {}, h("i", { class: "dot " + s.cls }), s.name)),
       (o.marks || []).filter(m => m.y).map(m => h("span", {}, h("i", { class: "key " + m.cls }), m.label)),
-      o.band ? h("span", {}, h("i", { class: "bandkey" }), o.band.label) : null);
+      o.band ? h("span", {}, h("i", { class: "bandkey" }), o.band.label) : null,
+      o.points.some(p => p.inside === false) ? h("span", {}, h("i", { class: "dot s0 faded" }), "Faded: bought outside the period chosen") : null);
     const draw = () => {
       const W = Math.max(300, box.clientWidth || 600), H = o.height || 260, m = { l: 52, r: 16, t: 12, b: 28 };
       const t = p => new Date(p + "T00:00:00").getTime();
@@ -58,16 +59,18 @@
       const every = Math.max(1, Math.ceil(months.length / Math.max(1, Math.floor((W - m.l - m.r) / 70))));
       months.forEach((mo, i) => { if (i % every) return; s.append(el("line", { x1: X(mo.getTime()), x2: X(mo.getTime()), y1: H - m.b, y2: H - m.b + 4, class: "axis" }), el("text", { x: X(mo.getTime()), y: H - m.b + 16, class: "tick", "text-anchor": "middle" }, mo.toLocaleDateString("en-IN", { month: "short", year: months.length > 10 ? "2-digit" : undefined }))); });
       s.append(el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "axis" }));
-      if (o.band) s.append(el("rect", { x: m.l, width: W - m.l - m.r, y: Y(o.band.upper), height: Math.max(1, Y(o.band.lower) - Y(o.band.upper)), class: "band" }));
+      // the band is the usual range of the period chosen (the last 12 months by default): drawn over that period only
+      const bx0 = o.period ? Math.max(m.l, Math.min(W - m.r, X(t(o.period.from)))) : m.l, bx1 = o.period ? Math.max(m.l, Math.min(W - m.r, X(t(o.period.to)))) : W - m.r;
+      if (o.band && bx1 > bx0) s.append(el("rect", { x: bx0, width: bx1 - bx0, y: Y(o.band.upper), height: Math.max(1, Y(o.band.lower) - Y(o.band.upper)), class: "band" }));
       for (const k of (o.marks || []).filter(k => k.y)) s.append(el("line", { x1: m.l, x2: W - m.r, y1: Y(k.y), y2: Y(k.y), class: "mark " + k.cls }));
       // one dot per date, price and series: lines of one order at one price sit on one dot
       const dots = {};
-      for (const p of o.points) { const key = p.series + "|" + p.date + "|" + p.price; (dots[key] = dots[key] || Object.assign({ n: 0, metres: 0, texts: [] }, p)).n++; dots[key].metres += p.metres || 0; dots[key].texts.push(p.text); }
+      for (const p of o.points) { const key = p.series + "|" + p.date + "|" + p.price + "|" + (p.inside === false ? "out" : "in"); (dots[key] = dots[key] || Object.assign({ n: 0, metres: 0, texts: [] }, p)).n++; dots[key].metres += p.metres || 0; dots[key].texts.push(p.text); }
       const order = o.series.map(x => x.key);
       for (const p of Object.values(dots).sort((a, b) => order.indexOf(b.series) - order.indexOf(a.series))) {
         const ser = o.series.find(x => x.key === p.series) || {}, cx = X(t(p.date)), cy = Y(p.price);
-        const g = el("g", { class: "pt" }, el("circle", { cx, cy, r: ser.big ? 5.5 : 4.5, class: "dotm " + (ser.cls || "") }), el("circle", { cx, cy, r: 10, class: "hit" }));
-        const words = `${day(p.date)} · Rs ${n2(p.price)} · ${n0(p.metres)} m` + (p.n > 1 ? ` (${p.n} lines)` : "") + " · " + [...new Set(p.texts)].slice(0, 3).join("; ");
+        const g = el("g", { class: "pt" + (p.inside === false ? " out" : "") }, el("circle", { cx, cy, r: ser.big ? 5.5 : 4.5, class: "dotm " + (ser.cls || "") }), el("circle", { cx, cy, r: 10, class: "hit" }));
+        const words = `${day(p.date)} · Rs ${n2(p.price)} · ${n0(p.metres)} m` + (p.n > 1 ? ` (${p.n} lines)` : "") + " · " + [...new Set(p.texts)].slice(0, 3).join("; ") + (p.inside === false ? " · outside the period chosen" : "");
         g.addEventListener("mouseenter", ev => { tip.textContent = words; tip.hidden = false; tip.style.left = Math.min(ev.clientX + 12, innerWidth - tip.offsetWidth - 8) + "px"; tip.style.top = (ev.clientY + 14) + "px"; });
         g.addEventListener("mouseleave", () => { tip.hidden = true; });
         s.append(g);
@@ -95,6 +98,31 @@
   const rangeWords = r => r.enough ? `Rs ${n2(r.lower)} to ${n2(r.upper)}` : "Too few purchases";
   const rangeSub = (r, min) => r.enough ? `${pc(r.lo)} to ${pc(r.hi)} round the median` + ((r.lo !== r.p25 || r.hi !== r.p75) ? `; its middle half (${pc(r.p25)} to ${pc(r.p75)}) kept within 5% to 10%` : ": the middle half of its prices")
     : `${r.orders || 0} separate ${r.orders === 1 ? "order" : "orders"}; a usual range needs at least ${min}`;
+  // ---------------------------------------------------------------- the period: what we usually pay over time (GP, 28 Nov 2026)
+  // By default the last 12 months, ending today; the slider runs over the months the purchase history holds and chooses
+  // another period, from the start of a month to the end of a month. A view only: every verdict elsewhere (Right cost, the
+  // brief, alerts, supplier pages, the dashboard) stays on the last 12 months.
+  const monthWords = ym => new Date(ym + "-01T00:00:00").toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  function periodBar(d, choose) {
+    const per = d.period, months = d.months || [];
+    const said = h("span", { class: "pwords" }, `What we usually pay rests on ${per.label}`);
+    const reset = per.default ? null : h("button", { type: "button", class: "btn line", onclick: () => choose(null) }, "Last 12 months");
+    const view = h("p", { class: "muted pnote" }, "A view only: Right cost, the negotiation brief, quote alerts, supplier pages and the Dashboard stay on the last 12 months. Every purchase stays on the chart.");
+    if (months.length < 2) return h("div", { class: "pbar noprint" }, h("div", { class: "prow" }, said, reset), view);
+    const at = (day, end) => { const i = months.indexOf(String(day).slice(0, 7)); return i >= 0 ? i : end ? months.length - 1 : day < months[0] ? 0 : months.length - 1; };
+    const a = h("input", { type: "range", min: "0", max: String(months.length - 1), step: "1", value: String(at(per.from, false)), "aria-label": "From the month" });
+    const b = h("input", { type: "range", min: "0", max: String(months.length - 1), step: "1", value: String(at(per.to, true)), "aria-label": "To the month" });
+    const shown = h("b", { class: "pmonths" });
+    const show = () => { shown.textContent = `${monthWords(months[Math.min(+a.value, +b.value)])} to ${monthWords(months[Math.max(+a.value, +b.value)])}`; };
+    const go = () => { const i = Math.min(+a.value, +b.value), j = Math.max(+a.value, +b.value); choose({ from: months[i], to: months[j] }); };
+    for (const x of [a, b]) { x.addEventListener("input", show); x.addEventListener("change", go); }
+    show();
+    return h("div", { class: "pbar noprint" }, h("div", { class: "prow" }, said, reset),
+      h("div", { class: "prow" }, h("span", { class: "muted" }, "Period:"), shown, h("span", { class: "muted" }, `(the history holds ${monthWords(months[0])} to ${monthWords(months[months.length - 1])})`)),
+      h("div", { class: "pslide" }, h("label", {}, "From ", a), h("label", {}, "To ", b)), view);
+  }
+  const periodQuery = per => per ? `from=${encodeURIComponent(per.from)}&to=${encodeURIComponent(per.to)}` : "";
+
   // ZLOI order lines: kept, in no figure, listed apart (GP, 27 Nov 2026)
   const ZLOI_WORDS = "ZLOI order lines are left out of every figure on this page (price paid, metres, medians, ranges, should-cost): GP's decision of 27 Nov 2026.";
   function outliers(list, whose, withCode) {
@@ -106,7 +134,7 @@
   }
 
   // ---------------------------------------------------------------- the price popup: one fabric code
-  async function openHistory(code) {
+  async function openHistory(code, per) {
     closePopups();
     const body = h("div", { class: "pbody" }, h("div", { class: "empty" }, "Loading…"));
     const d = h("div", { class: "dialog pdialog rp-purch", role: "dialog", "aria-modal": "true", "aria-label": "Price over time: " + code },
@@ -115,29 +143,32 @@
     $("#layer").append(s);
     d.querySelector("button").focus();
     let x;
-    try { x = await api("/api/purchases/history?code=" + encodeURIComponent(code)); }
+    try { x = await api("/api/purchases/history?code=" + encodeURIComponent(code) + (per ? "&" + periodQuery(per) : "")); }
     catch (e) { fill(body, h("p", { class: needsDb(e.message) ? "muted" : "err" }, e.message)); return; }
     const g = x.group, sp = x.spec;
     const num = v => v === "" || isNaN(Number(v)) ? v : String(Number(v));
     const specLine = sp ? "PLM: " + [sp.blend_name, sp.dyemethod_name, sp.weavetype_name, `${sp.warpcount} x ${sp.weftcount}`, `${num(sp.epi)} x ${num(sp.ppi)}`, `${num(sp.finishedwidth)} ${sp.finishedwidth_uom}`, String(sp.finish_name || "").replace(/^F\s*-\s*/, "")].filter(Boolean).join(" · ") : "No PLM specification for this code";
-    const pts = x.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, series: "this", text: `${l.mill}, order ${l.po}/${l.item}` }));
-    if (g) for (const l of g.lines) if (l.code !== x.code) pts.push({ date: l.date, price: l.price, metres: l.metres, series: "group", text: `${l.code}, ${l.mill}` });
+    const inside = l => l.date >= x.period.from && l.date <= x.period.to, ip = x.in_period;
+    const pts = x.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, series: "this", inside: inside(l), text: `${l.mill}, order ${l.po}/${l.item}` }));
+    if (g) for (const l of g.lines) if (l.code !== x.code) pts.push({ date: l.date, price: l.price, metres: l.metres, series: "group", inside: l.inside !== false, text: `${l.code}, ${l.mill}` });
     const series = [{ key: "this", name: `This code, ${x.code}`, cls: "s1", big: true }, { key: "group", name: g ? `Other codes of ${g.code} (the same construction, any colour)` : "", cls: "s0" }];
     const marks = [x.should ? { y: x.should, label: "Should-cost", cls: "should" } : null, g && g.range.enough ? { y: g.range.median, label: `${g.code} median`, cls: "median" } : null].filter(Boolean);
     const others = g ? g.lines.filter(l => l.code !== x.code).length : 0;
+    const outside = x.lines.length - ip.lines;
     fill(body,
       h("p", { class: "muted" }, specLine),
+      periodBar(x, per2 => openHistory(code, per2)),
       h("div", { class: "stiles" },
-        tile("Bought", `${n0(x.lines.length)} ${x.lines.length === 1 ? "purchase" : "purchases"}`, `${n0(x.metres)} m on ${x.orders} ${x.orders === 1 ? "order" : "orders"}`),
-        tile("Price paid", x.lines.length ? (x.lines.length > 1 ? `Rs ${n2(Math.min(...x.lines.map(l => l.price)))} to ${n2(Math.max(...x.lines.map(l => l.price)))}` : `Rs ${n2(x.lines[0].price)}`) : "None", x.lines.length ? `last on ${day(x.lines[x.lines.length - 1].date)}` : ""),
+        tile("Bought", `${n0(ip.lines)} ${ip.lines === 1 ? "purchase" : "purchases"}`, `${n0(ip.metres)} m on ${ip.orders} ${ip.orders === 1 ? "order" : "orders"} in the period` + (outside ? `; ${outside} more outside it` : "")),
+        tile("Price paid", ip.lines ? (ip.lines > 1 && ip.low !== ip.high ? `Rs ${n2(ip.low)} to ${n2(ip.high)}` : `Rs ${n2(ip.low)}`) : "None", x.lines.length ? `last on ${day(x.lines[x.lines.length - 1].date)}` + (ip.lines ? "" : " (outside the period)") : ""),
         tile("Should-cost", x.should ? `Rs ${n2(x.should)}` : "Not costed", x.should ? (x.should_on || "on today's rates") : x.should_why),
-        g ? tile(`Fab group ${g.code}`, g.range.enough ? rangeWords(g.range) : `${g.purchases} ${g.purchases === 1 ? "purchase" : "purchases"}`, g.range.enough ? `its usual range; median Rs ${n2(g.range.median)} on ${g.purchases} purchases, ${g.range.orders} orders` : `on ${g.range.orders || 0} separate ${g.range.orders === 1 ? "order" : "orders"}: too few for a usual range (needs ${g.min_for_range})`) : tile("Fab group", "Not grouped", x.not_grouped)),
-      pts.length ? priceChart({ points: pts, series, marks, band: g && g.range.enough ? { lower: g.range.lower, upper: g.range.upper, label: `${g.code} usual range` } : null, label: `Price over time for ${x.code}` }) : null,
+        g ? tile(`Fab group ${g.code}`, g.range.enough ? rangeWords(g.range) : `${g.purchases} ${g.purchases === 1 ? "purchase" : "purchases"}`, g.range.enough ? `its usual range; median Rs ${n2(g.range.median)} on ${g.purchases} purchases, ${g.range.orders} orders` : `on ${g.range.orders || 0} separate ${g.range.orders === 1 ? "order" : "orders"} in the period: too few for a usual range (needs ${g.min_for_range})`) : tile("Fab group", "Not grouped", x.not_grouped)),
+      pts.length ? priceChart({ points: pts, series, marks, period: x.period, band: g && g.range.enough ? { lower: g.range.lower, upper: g.range.upper, label: `${g.code} usual range` } : null, label: `Price over time for ${x.code}` }) : null,
       g ? h("p", { class: "muted" }, others ? `Grey dots: the ${others} other ${others === 1 ? "purchase" : "purchases"} of ${g.codes - 1} other ${g.codes - 1 === 1 ? "code" : "codes"} in Fab group ${g.code}, ${g.name}. Most codes are ordered once, so the group shows the history.`
         : `No other code of Fab group ${g.code} has been bought yet.`) : h("p", { class: "muted" }, `Not in a Fab group: ${x.not_grouped}. Nothing is guessed, so there is no group history to show.`),
       (x.moved || []).map(m => h("p", { class: "note" }, m.from && m.from === m.to ? `On ${day(m.at)}: ${m.why}.` : `Moved ${m.from ? "from " + m.from + " " : ""}on ${day(m.at)}: ${m.why}.`)),
       h("h3", {}, "Purchases of this code"),
-      x.lines.length ? table(["Date", "Order", "Mill", "Metres", "Price Rs/m", "Against should-cost"], x.lines.map(l => [day(l.date), `${l.po}/${l.item}`, l.mill, n0(l.metres), n2(l.price), x.should ? pc((l.price / x.should - 1) * 100) : ""]), [3, 4, 5])
+      x.lines.length ? table(["Date", "Order", "Mill", "Metres", "Price Rs/m", "Against should-cost"], x.lines.map(l => [inside(l) ? day(l.date) : h("span", { class: "muted", title: "Outside the period chosen" }, day(l.date) + " (outside)"), `${l.po}/${l.item}`, l.mill, n0(l.metres), n2(l.price), x.should ? pc((l.price / x.should - 1) * 100) : ""]), [3, 4, 5])
         : h("p", { class: "muted" }, x.outliers.length ? "None but ZLOI orders, which are listed apart below: no price paid is shown." : "None."),
       outliers(x.outliers, "this code"),
       h("div", { class: "acts" }, g && may("page:groups") ? h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null,
@@ -151,8 +182,9 @@
     await known(); if (!may("page:groups")) return;
     const code = p.arg;
     if (page.group && page.group.code === code && page.group.data) return;
-    page.group = { code, data: null, error: null };
-    try { page.group.data = await api("/api/groups/" + encodeURIComponent(code)); } catch (e) { page.group.error = e.message; }
+    const per = page.group && page.group.code === code ? page.group.per : null;          // the period chosen stays while on the group
+    page.group = { code, data: null, error: null, per };
+    try { page.group.data = await api("/api/groups/" + encodeURIComponent(code) + (per ? "?" + periodQuery(per) : "")); } catch (e) { page.group.error = e.message; }
     if (state.page && state.page.id === "group") render();
   }
   function renderGroup(main) {
@@ -163,8 +195,9 @@
     if (p.error) return fillP(main, top, h("div", { class: "empty" }, p.error));
     if (!d) return fillP(main, top, h("div", { class: "empty" }, "Loading…"));
     document.title = d.code + " - RightPrice";
-    const r = d.range, sh = d.should, series = millSeries(d.mills), shown = new Set(series.map(x => x.key));
-    const pts = d.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, series: shown.has(l.mill_key) ? l.mill_key : "*", text: `${l.mill}, ${l.code}` }));
+    const r = d.range, sh = d.should, series = millSeries(d.mills_all || d.mills), shown = new Set(series.map(x => x.key));
+    const pts = d.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, inside: l.inside !== false, series: shown.has(l.mill_key) ? l.mill_key : "*", text: `${l.mill}, ${l.code}` }));
+    const choose = async per => { p.per = per; p.data = null; render(); try { p.data = await api("/api/groups/" + encodeURIComponent(p.code) + (per ? "?" + periodQuery(per) : "")); } catch (e) { p.error = e.message; } render(); };
     const marks = [sh.median ? { y: sh.median, label: "Should-cost", cls: "should" } : null, r.enough ? { y: r.median, label: "Median paid", cls: "median" } : null].filter(Boolean);
     const vsShould = sh.median && r.median ? (r.median / sh.median - 1) * 100 : null;
     const inList = (state.rows || []).filter(x => x.fab_group === d.code).length;
@@ -174,8 +207,9 @@
         h("div", { class: "dicons noprint" }, ib("pdf", "Print this page", () => print()),
           inList ? ib("pin", `Show its ${inList} purchase-order ${inList === 1 ? "costing" : "costings"} in Right cost`, () => { state.filters = { fab_group: [d.code] }; state.cls = "Purchase orders"; state.saved = "Default"; state.tab = "items"; location.hash = "#rightcost"; }) : null)),
       d.asked ? h("p", { class: "note" }, `${d.asked.code} (${d.asked.name}) was merged into this group` + (d.asked.merged_at ? ` on ${day(d.asked.merged_at)}` : "") + (d.asked.merged_by ? ` by ${d.asked.merged_by}` : "") + `. Its code stays ${d.asked.code} and is never given to another group.`) : null,
+      periodBar(d, choose),
       h("div", { class: "stiles" },
-        tile("Purchases", `${n0(d.purchases)}`, `${n0(d.orders)} ${d.orders === 1 ? "order" : "orders"}, ${n0(d.metres)} m` + (d.outliers.length ? `; ${d.outliers.length} ZLOI ${d.outliers.length === 1 ? "line" : "lines"} left out` : "")),
+        tile("Purchases", `${n0(d.purchases)}`, `${n0(d.orders)} ${d.orders === 1 ? "order" : "orders"}, ${n0(d.metres)} m in the period` + (d.outside_period ? `; ${n0(d.outside_period)} more outside it` : "") + (d.outliers.length ? `; ${d.outliers.length} ZLOI ${d.outliers.length === 1 ? "line" : "lines"} left out` : "")),
         (() => { const bought = d.mills.filter(m => m.lines), only = d.mills.length - bought.length;
           return tile("Mills", `${bought.length}`, [bought.slice(0, 3).map(m => m.name).join(", ") + (bought.length > 3 ? ` and ${bought.length - 3} more` : ""),
             only ? `${bought.length ? only + " more" : only} with ZLOI lines only, not counted` : ""].filter(Boolean).join(" · ")); })(),
@@ -184,7 +218,7 @@
         tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + (sh.dated && sh.dated.length ? `on the order months' yarn rates (some dated)` : `on today's rates`) + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
         tile("Priced well above the group", r.enough ? `${d.above.length} ${d.above.length === 1 ? "purchase" : "purchases"}` : "No range yet", r.enough ? (d.above.length ? `Rs ${n0(d.above_rs)} above the top of the usual range` : "none above the top of its usual range") : "too few orders to say", d.above.length ? "red" : "")),
       h("section", { class: "sec" }, h("h2", {}, "Price over time, by mill"),
-        d.lines.length ? priceChart({ points: pts, series, marks, band: r.enough ? { lower: r.lower, upper: r.upper, label: "Usual range" } : null, label: `Prices paid for ${d.code} by date and mill`, height: 300 }) : h("p", { class: "muted" }, "No purchase on record."),
+        d.lines.length ? priceChart({ points: pts, series, marks, period: d.period, band: r.enough ? { lower: r.lower, upper: r.upper, label: "Usual range" } : null, label: `Prices paid for ${d.code} by date and mill`, height: 300 }) : h("p", { class: "muted" }, "No purchase on record."),
         h("p", { class: "muted" }, "One dot per purchase (lines of one order at one price share a dot). Point at a dot for its date, price, metres, mill and code." + (r.enough ? " The band is the group's usual range." : ""))),
       h("section", { class: "sec" }, h("h2", {}, "By mill"),
         table(["Mill", "Purchases", "Orders", "Metres", "Share of metres", "Median Rs/m", "Lowest", "Highest", "Median against the group", "Last bought", "Outliers (ZLOI)"],
@@ -192,7 +226,7 @@
             m.vs_group === null ? "" : pc(m.vs_group), day(m.last), m.outliers.length ? wide(h("span", {}, `${m.outliers.length}: ` + m.outliers.map(o => `${day(o.date)} ${n0(o.metres)} m at Rs ${n2(o.price)}`).join("; "))) : ""]), [1, 2, 3, 4, 5, 6, 7, 8]),
         outliers(d.outliers, "this group", true)),
       h("section", { class: "sec" }, h("h2", {}, "Priced well above the group"),
-        !r.enough ? h("p", { class: "muted" }, `${r.n} ${r.n === 1 ? "purchase" : "purchases"} on ${r.orders || 0} separate ${r.orders === 1 ? "order" : "orders"} so far: too few for a usual range (it needs purchases on at least ${d.min_for_range} orders, ZLOI left out), so no purchase is called high. Load more purchase files as they come.`)
+        !r.enough ? h("p", { class: "muted" }, `${r.n} ${r.n === 1 ? "purchase" : "purchases"} on ${r.orders || 0} separate ${r.orders === 1 ? "order" : "orders"} in the period: too few for a usual range (it needs purchases on at least ${d.min_for_range} orders, ZLOI left out), so no purchase is called high. Load more purchase files as they come.`)
           : !d.above.length ? h("p", { class: "muted" }, `None: every purchase is at or below the top of the usual range, Rs ${n2(r.upper)}.`)
             : [h("p", { class: "muted" }, `Above Rs ${n2(r.upper)}, the top of the usual range. Already paid: use them for the next order of the same cloth.`),
               table(["Date", "Fabric code", "Mill", "Metres", "Price Rs/m", "Above the range Rs/m", "Against the median", "Above the range, Rs"],
@@ -212,7 +246,7 @@
         d.moved_in.length || d.moved_out.length ? [h("h3", {}, "Codes moved since"), h("ul", { class: "mon" },
           d.moved_in.map(m => h("li", {}, `${m.code} came in${m.from ? " from " + m.from : ""} on ${day(m.at)}: ${m.why}.`)),
           d.moved_out.map(m => h("li", {}, `${m.code} went ${m.to ? "to " + m.to : "out of every group"} on ${day(m.at)}: ${m.why}.`)))] : null),
-      h("p", { class: "muted", style: "margin-top:18px" }, `"Priced well above the group" uses the negotiation brief's own rule: the usual range is the middle half of the group's past prices, kept between 5% and 10% either side of its median, and it needs purchases on at least ${d.min_for_range} separate orders. ${ZLOI_WORDS} Should-cost is as Right cost has it: each code for the metres bought, on the yarn rates of its order month (today's where none is dated) and today's other rates.`));
+      h("p", { class: "muted", style: "margin-top:18px" }, `"Priced well above the group" uses the negotiation brief's own rule: the usual range is the middle half of the group's prices in the period (by default the last 12 months, ending today; GP, 28 Nov 2026), kept between 5% and 10% either side of its median, and it needs purchases on at least ${d.min_for_range} separate orders. ${ZLOI_WORDS} Should-cost is as Right cost has it: each code for the metres bought, on the yarn rates of its order month (today's where none is dated) and today's other rates.`));
   }
 
   // ---------------------------------------------------------------- #groups: every Fab group, and the admin merge
@@ -264,7 +298,7 @@
       h("p", { class: "muted" }, `${n0(c.groups)} groups of ${n0(c.fabrics_grouped)} fabric codes (the same construction in any colour, across mills), from ${n0(c.lines)} purchase lines` + (c.first ? `, ${day(c.first)} to ${day(c.last)}` : "") + `. ${n0(c.fabrics - c.fabrics_grouped)} codes are not grouped` + (d.not_grouped.length ? ` (${d.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")})` : "") + ".",
         " ", may("page:purchase_files") ? h("a", { href: "#purchase-files" }, "Purchase files") : null),
       h("div", { class: "toolbar" }, search, h("button", { type: "button", class: "btn line", onclick: () => { list.q = search.value; list.shown = 100; render(); } }, "Search"), h("span", { class: "count" }, `${n0(rows.length)} groups`)),
-      rows.length ? table(["Fab group", "Construction", "Codes", "Purchases", "Metres", "Median Rs/m", "Last bought"],
+      rows.length ? table(["Fab group", "Construction", "Codes", "Purchases", "Metres", "Median Rs/m, last 12 months", "Last bought"],
         rows.slice(0, list.shown).map(g => [groupLink(g.code), wide(g.name), n0(g.codes), n0(g.purchases), n0(g.metres), g.median === null ? "" : n2(g.median), day(g.last)]), [2, 3, 4, 5]) : h("div", { class: "empty" }, c.groups ? "No group matches." : "No Fab groups yet: load a purchase file first."),
       rows.length > list.shown ? h("p", {}, h("button", { type: "button", class: "btn line", onclick: () => { list.shown += 200; render(); } }, `Show more (${n0(rows.length - list.shown)} more)`)) : null,
       may("do:merge_groups") ? h("section", { class: "sec noprint" }, h("h2", {}, "Admin: merge two Fab groups"),
@@ -308,15 +342,18 @@
     if (files.error) return fillP(main, top, title, h("p", { class: needsDb(files.error) ? "note" : "err" }, files.error));
     if (!files.data) return fillP(main, top, title, h("div", { class: "empty" }, "Loading…"));
     const d = files.data, c = d.counts;
-    const input = h("input", { type: "file", accept: ".xlsx,.xlsm", "aria-label": "Purchase-order file" });
+    // one file box for as long as the page is open: the page is drawn again when a file is chosen (and every two seconds
+    // while a file is read), and a new box would lose the file chosen
+    const fresh = !files.input;
+    const input = files.input || (files.input = h("input", { type: "file", accept: ".xlsx,.xlsm", "aria-label": "Purchase-order file" }));
     const big = () => input.files.length ? tooBig(input.files[0].size, d.max_bytes, input.files[0].name) : null;
-    input.addEventListener("change", () => { files.uploadError = big(); render(); });     // said at once, before anything is sent
+    if (fresh) input.addEventListener("change", () => { files.uploadError = big(); render(); });     // said at once, before anything is sent
     const send = async () => {
       if (!input.files.length) return toast("Choose the purchase-order file first", false);
       files.uploadError = big();
       if (files.uploadError) return render();
       const fd = new FormData(); fd.append("file", input.files[0]);
-      try { const r = await api("/api/purchases/upload", { method: "POST", body: fd }); files.open = r.id; files.detail = null; toast(r.shipped_first ? "Uploaded: the purchase file that came with the code is read first, then this one, in the background" : "Uploaded: it is read in the background"); enterFiles(); }
+      try { const r = await api("/api/purchases/upload", { method: "POST", body: fd }); files.open = r.id; files.detail = null; input.value = ""; toast(r.shipped_first ? "Uploaded: the purchase file that came with the code is read first, then this one, in the background" : "Uploaded: it is read in the background"); enterFiles(); }
       catch (e) { files.uploadError = e.message; render(); }
     };
     const shipped = async () => {
@@ -355,7 +392,7 @@
         d.uploads.length ? h("div", { class: "gridscroll sup pgt" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Upload", "File", "Where it stands", "What was read"].map(t => h("th", {}, t)))), h("tbody", {}, d.uploads.map(row))))
           : h("p", { class: "muted" }, "No file uploaded yet."),
         det ? skippedView(det) : null),
-      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026). Nothing dated after the upload is trusted: a saved date after it (a clock set wrong), or before the file's latest order, is not used, and the file is dated by its upload instead; a report date counts only between its latest order and when it was saved; a document date after the upload is not used to date the file. Document dates are days in India; saved times are UTC. The upload's page says which file won and why, with both saved times, and every date it did not use. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre; an older or earlier-saved file never changes it or brings it back. A line simply not in a newer file is never taken as cancelled: the history keeps it (GP, 28 Nov 2026), so a later download covering a longer span takes each line once. Only where two files carry the very same dates, to the second, and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification and Fab group; a code whose specification is missing or incomplete is not grouped. The PLM specifications are the extract deployed with the code (data/plm_specs_for_po.csv in the code's own folder, not the data folder): a corrected extract goes in with a code change, and is read at the next upload."));
+      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026). Nothing dated after the upload is trusted: a saved date after it (a clock set wrong), or before the file's latest order, is not used, and the file is dated by its upload instead; a report date counts only between its latest order and when it was saved; a document date after the upload is not used to date the file. Document dates are days in India; saved times are UTC. The upload's page says which file won and why, with both saved times, and every date it did not use. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre; an older or earlier-saved file never changes it or brings it back. A line simply not in a newer file is never taken as cancelled: the history keeps it (GP, 28 Nov 2026), so a later download covering a longer span takes each line once. Only where two files carry the very same dates, to the second, and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification and Fab group; a code whose specification is missing or incomplete is not grouped. The PLM specifications come from the Fab library once the PLM fabric code list is uploaded there (a list that corrects a code moves it to its Fab group and costs it again at once); before that, from the extract deployed with the code (data/plm_specs_for_po.csv in the code's own folder, not the data folder)."));
   }
   // TOO BIG: what a file over the limit is told on the screen at once, before it is sent (as rules/purchases.py too_big;
   // check_server.py runs this function and compares the two)

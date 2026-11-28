@@ -79,23 +79,31 @@ def _pilot_insights():
     """The pilot's own panels (fit by fabric type, cost split by route, suppliers, order size), on the purchase-order
     rows as Right cost has them: worked out again from what was bought, ZLOI left out (GP, 27 Nov 2026), the pilot
     workbook itself never changed. Kept until those rows change; the brief's usual ranges come from it."""
-    from rules import purchases
+    from rules import fab_groups, purchases
     key, all_rows = purchases.pilot_rows()
+    usual = fab_groups.period()         # what we usually pay, by fabric type: the last 12 months, ending today (GP, 28 Nov 2026)
+    key = (key, usual["from"], usual["to"])
     hit = common._cache.get(common.PILOT + "#insights")
     if hit and hit[0] == key:
         return hit[1]
     rows = [r for r in all_rows if r["PO price Rs/m"] is not None and r["Should-cost Rs/m"] is not None]
 
+    def frame(rs):
+        f = pd.DataFrame(rs)
+        for col in ["PO metres", "PO price Rs/m", "Should-cost Rs/m", "PO above should-cost %"] + [f"{b} Rs/m" for b in BUCKETS]:
+            if col in f:
+                f[col] = pd.to_numeric(f[col], errors="coerce")
+        return f
+
     def from_pilot():
         if not rows:
             return None
-        f = pd.DataFrame(rows)
+        f = frame(rows)
+        recent = in_period(rows, usual)
+        w = frame(recent) if recent else None
         gap = "PO above should-cost %"
-        for col in ["PO metres", "PO price Rs/m", "Should-cost Rs/m", gap] + [f"{b} Rs/m" for b in BUCKETS]:
-            if col in f:
-                f[col] = pd.to_numeric(f[col], errors="coerce")
         cats = []
-        for (route, grp), d in f.groupby(["Route", "Weave group"]):
+        for (route, grp), d in (w.groupby(["Route", "Weave group"]) if w is not None else []):
             if len(d) >= 20:
                 # averages over the metres bought, so paid, should-cost and the gap between them agree
                 metres = d["PO metres"].sum()
@@ -127,11 +135,45 @@ def _pilot_insights():
             d = f[(f["PO metres"] >= lo) & (f["PO metres"] < hi)]
             qty.append({"band": label, "fabrics": len(d), "paid": float(d["PO price Rs/m"].median()) if len(d) else None})
         return {"categories": cats, "split": split, "suppliers": sup, "quantity": qty, "fabrics": len(f),
-                "median_gap": float(f[gap].median()), "within10": float((f[gap].abs() <= 10).mean())}
+                "median_gap": float(f[gap].median()), "within10": float((f[gap].abs() <= 10).mean()),
+                # the fit by fabric type (panel 1, and so the brief's usual ranges and every verdict) rests on the purchases of
+                # the last 12 months: the fabrics bought then, each on its purchases then (GP, 28 Nov 2026)
+                "period": dict(usual, fabrics=len(recent), outside=len(rows) - len(recent))}
 
     p = from_pilot()
     common._cache[common.PILOT + "#insights"] = (key, p)
     return p
+
+
+def in_period(rows, p):
+    """The purchase-order rows over the purchases of a period (GP, 28 Nov 2026: what we usually pay rests on the last 12
+    months): a row whose counted purchases are all in it, as it is; one with none in it, left out; one with some, its
+    price paid and metres over those, and its should-cost for those metres (the quantity band and order size they set),
+    on the same rates as the row's own (purchases.pilot_rows)."""
+    from rules import purchases
+    _, by_code, _ = purchases.bought_lines()
+    m, out = None, []
+    for r in rows:
+        ls = [x for x in by_code.get(str(r["Fabric code"]), []) if x[3] not in purchases.OUTLIER_TYPES]
+        win = [x for x in ls if p["from"] <= x[2] <= p["to"]]
+        if len(win) == len(ls):
+            out.append(r)
+            continue
+        sel = r.get("Costing choices")
+        if not win or not sel:
+            continue
+        metres = sum(x[5] for x in win)
+        price = round(sum(x[5] * x[6] for x in win) / metres, 2)
+        m = m or common.get_masters()
+        band, slab = purchases.quantity_terms(r["Route"], metres, m)
+        try:
+            res = masters.cost(dict(sel, **{"Rate card quantity": band, "Order size": slab, "Order quantity (m)": metres, "Quoted price (Rs/m)": price}), m)
+        except Exception:
+            continue
+        should = round(res["total_per_m"], 2)
+        out.append(dict(r, **{"PO metres": metres, "PO price Rs/m": price, "PO lines": len(win), "Should-cost Rs/m": should,
+                              "PO above should-cost %": round((price / should - 1) * 100, 1)}))
+    return out
 
 
 def insights():

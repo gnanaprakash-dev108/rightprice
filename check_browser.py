@@ -14,7 +14,8 @@ the code is loaded through the app (stage 2's purchase history), so every page i
    on a phone nothing reaches past the screen's edge (the page, its own box, or a part cut off where it cannot be
    scrolled to), and the console stays empty; and stage 2's screens in the same three looks: a Fab group opened from
    Right cost's Fab group column (its chart drawn, its codes listed), the price popup from the same row (its chart with
-   the group's other codes; Escape closes it), the list of Fab groups and Purchase files;
+   the group's other codes; Escape closes it), the list of Fab groups and Purchase files; the Fab library (GP, 28 Nov
+   2026: a list made of the deployed extract loaded first) found by a code, and a code's page;
 2. the main paths: Create cost (the example, Qlty-1, is Rs 181.40, with the rates it is on under the figure; Add to list
    adds a row; Print prints the cost alone, the cost in light colours and the shell left in its theme); Bulk upload (a
    mill sheet's rows, its alert and the rail's count); a row opened in Create cost at the list's should-cost; Compare of
@@ -29,10 +30,12 @@ the code is loaded through the app (stage 2's purchase history), so every page i
    Bring in prices adds its rows as dated rates after asking the month and GST); a bookmark of the retired /classic;
    stage 2: a purchase order's price popup from its page and the Fab group from the popup, a code's popup from the
    group's page, a group found on the list of Fab groups, an upload's detail on Purchase files and the purchase file
-   loaded again from that page (read in the background, changing nothing);
+   loaded again from that page (read in the background, changing nothing); the usual range over time: the group page's
+   slider and the popup's (a period chosen works the figures out again, every purchase stays on the chart); the Fab
+   library: a code found, its page and its Fab group, a list uploaded from the page;
 3. with users and roles on (stage 3): a Viewer, a Buyer, a Rates editor and an Admin each see only the buttons their role
    may use; each walks every address (every page, every tab of the popup, Right cost, a fabric's page, a supplier's
-   page, a setup list, Users and roles, a Fab group, the list of Fab groups, Purchase files): what the role may open draws, what it may not says so, the menus offer exactly
+   page, a setup list, Users and roles, a Fab group, the list of Fab groups, Purchase files, the Fab library): what the role may open draws, what it may not says so, the menus offer exactly
    what it may open, and the server is asked for nothing it refuses; and the same walk for a Buyer with each page
    unticked in turn.
 A crash fails the run like any check, and whenever something failed the data folder and the servers' logs are kept.
@@ -90,7 +93,8 @@ NEEDS = {"dashboard": "page:dashboard", "pilot": "page:pilot", "yarn": "page:pri
          "ratecard": "page:prices", "settings": "page:prices", "costsheets": "page:costsheets", "intake": "do:edit_rates",
          "rightcost": "page:rightcost", "item": "page:rightcost", "supplier": "page:rightcost", "users": "page:users",
          "cost": "page:cost", "compare": "page:cost", "bulk": "page:list", "pack": "page:pack",
-         "group": "page:groups", "groups": "page:groups", "purchase-files": "page:purchase_files"}         # stage 2 (web/purchases.js)
+         "group": "page:groups", "groups": "page:groups", "purchase-files": "page:purchase_files",         # stage 2 (web/purchases.js)
+         "fab-library": "page:fab_library"}                                                                # the Fab library (web/library.js)
 # what the menus offer: the Prices links, the sections' tabs above a page, the popup's tabs
 OFFERED = """() => [...CONFIG.flyouts.prices.groups.flatMap(g => g[1]).map(x => x[1].slice(1)).filter(x => !x.startsWith('lib/')),
     ...Object.values(CONFIG.sections).flat(), ...CONFIG.popupTabs.map(t => t[0])]"""
@@ -182,6 +186,31 @@ def load_shipped(app):
     return {"status": "still being read after 10 minutes"}
 
 
+def post_file(app, path, name, data):
+    """A file sent as the page sends it (multipart form), its answer."""
+    import uuid
+    b = uuid.uuid4().hex
+    body = (f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
+    req = urllib.request.Request(app.base + path, data=body, headers={"Content-Type": f"multipart/form-data; boundary={b}"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        return json.loads(r.read())
+
+
+def load_library(app):
+    """The Fab library: a PLM fabric code list made of the extract deployed with the code (its 19,669 codes, as they are, so
+    nothing in the purchase history changes), uploaded through the app as an admin would and read in the background."""
+    import pandas as pd
+    plm = pd.read_csv(os.path.join(HERE, "data", "plm_specs_for_po.csv"), dtype=str).fillna("")
+    up = post_file(app, "/api/fab-library/upload", "PLM list, as deployed.csv", plm.to_csv(index=False).encode("utf-8-sig"))
+    for _ in range(900):
+        u = app.api(f"/api/fab-library/uploads/{up['id']}")
+        if u["status"] == "failed" or (u["status"] == "done" and (u["summary"] or {}).get("regroup")):
+            app.costs()
+            return u
+        time.sleep(1)
+    return {"status": "still being read after 15 minutes"}
+
+
 def rich_row(app):
     """A purchase order of Right cost in the Fab group with the most codes (and purchases): its code and its group. The
     group page and the price popup then have other codes and many dots to draw."""
@@ -201,6 +230,8 @@ class App:
         self.base = f"http://127.0.0.1:{self.port}"
         env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "RIGHTPRICE_DATA", "ANTHROPIC_API_KEY", "RIGHTPRICE_MCP_TOKEN",
                                                                 "RIGHTPRICE_ADMINS", "WEBSITE_SITE_NAME", "WEBSITE_AUTH_ENABLED")}
+        # what we usually pay rests on the last 12 months ending today (GP, 28 Nov 2026): today fixed, so the pages read the same whenever this runs
+        env.setdefault("RIGHTPRICE_TODAY", "2026-11-28")
         env.update(RIGHTPRICE_DATA=data, DATABASE_URL=f"sqlite:///{os.path.join(data, 'rightprice.db')}", PYTHONUNBUFFERED="1", **(extra or {}))
         self.log = open(os.path.join(data, f"server-{self.port}.log"), "w")
         self.proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "server:app", "--host", "127.0.0.1", "--port", str(self.port)],
@@ -274,6 +305,10 @@ def main():
         check("Stage 2: the purchase file that came with the code loads through the app, and Right cost's purchase orders carry their Fab group",
               shipped["status"] == "done" and shipped["rows_loaded"] and rich, f"{shipped.get('status')} {shipped.get('error') or ''} {rich}")
         n_groups = app.api("/api/groups")["counts"]["groups"]
+        library = load_library(app)
+        check("The Fab library: a PLM fabric code list (the deployed extract's codes) loads through the app, and the Fab groups stay as they were",
+              library["status"] == "done" and library["codes_total"] == 19669 and app.api("/api/groups")["counts"]["groups"] == n_groups,
+              f"{library.get('status')} {library.get('error') or ''} {library.get('codes_total')}")
         where = {"group": "group/" + rich["group"]}           # a fabric's page, a supplier's page and a Fab group, for the walks of section 3
         with sync_playwright() as p:
             browser = p.chromium.launch()
@@ -382,6 +417,7 @@ def main():
                 wide = page.evaluate(SIDEWAYS, ".main") if size is PHONE else [0, ""]
                 hue, got = stage2_colours(page, theme, ".main", ".main .stile")
                 good = (in_cell == rich["group"] and page.inner_text(".main .dhead h1") == rich["group"] and page.url.endswith("#group/" + rich["group"])
+                        and "the last 12 months" in page.inner_text(".main .pbar .pwords")
                         and page.title() == rich["group"] + " - RightPrice" and active_rail(page) == ["costs"] and dots >= 2
                         and rich["code"] in page.inner_text(".main") and not page.errors and wide[0] <= 1 and hue)
                 check(f"Stage 2: a Fab group opens from Right cost's Fab group column, its chart drawn and its codes listed ({look})", good,
@@ -400,6 +436,30 @@ def main():
                 good = head == "Price over time: " + rich["code"] and dots >= 2 and page.locator(".pdialog .stile").count() == 0 and not page.errors and wide[0] <= 1 and hue
                 check(f"Stage 2: the price popup opens from the same row, its chart drawn with the group's other codes, and Escape closes it ({look})", good,
                       "" if good else f"{head!r}, {dots} dots, sideways {wide}, colours {got}, console {page.errors[:3]}")
+                page.context.close()
+                # the Fab library (web/library.js): its page, a search, a code's page
+                page = tab(theme, size)
+                open_at(page, "fab-library", None)
+                page.wait_for_selector(".main .rp-lib .stiles")
+                page.fill(".main .toolbar input.search", rich["code"])
+                page.press(".main .toolbar input.search", "Enter")
+                page.wait_for_selector(".main .libfound .grid tbody tr button.code")
+                first_hit = page.locator(".main .libfound .grid tbody tr").first.inner_text()
+                wide = page.evaluate(SIDEWAYS, ".main") if size is PHONE else [0, ""]
+                hue, got = stage2_colours(page, theme, ".main", ".main .stile")
+                good = (page.inner_text(".main .ptitle") == "Fab library" and page.title() == "Fab library - RightPrice" and first_hit.startswith(rich["code"])
+                        and rich["group"] in first_hit and "19,669" in page.inner_text(".main .stiles") and not page.errors and wide[0] <= 1 and hue)
+                check(f"The Fab library opens, and finds a code with its construction, Fab group and purchases ({look})", good,
+                      "" if good else f"{page.title()!r} {first_hit[:200]!r}, sideways {wide}, colours {got}, console {page.errors[:3]}")
+                page.click(f".main .libfound .grid tbody tr button.code:has-text('{rich['code']}')")
+                page.wait_for_function("c => (document.querySelector('.main .dhead h1') || {}).textContent === c", arg=rich["code"])
+                page.wait_for_timeout(300)
+                wide = page.evaluate(SIDEWAYS, ".main") if size is PHONE else [0, ""]
+                hue, got = stage2_colours(page, theme, ".main", ".main .stile")
+                good = (page.url.endswith("#fab-library/" + rich["code"]) and page.locator(".main .gfields dt").count() == 26 and rich["group"] in page.inner_text(".main .stiles")
+                        and page.title() == rich["code"] + " - RightPrice" and not page.errors and wide[0] <= 1 and hue)
+                check(f"The Fab library: a code's page, its 26 values and its Fab group ({look})", good,
+                      "" if good else f"{page.url} {page.locator('.main .gfields dt').count()} values, sideways {wide}, colours {got}, console {page.errors[:3]}")
                 page.context.close()
                 for addr, title, sel in (("groups", "Fab groups", ".main .toolbar"), ("purchase-files", "Purchase files", ".main .stiles")):
                     page = tab(theme, size)
@@ -796,6 +856,70 @@ def main():
             check("Stage 2: on a Fab group's page, a code of the group opens its price popup", page.inner_text(".pdialog .phead h2") == "Price over time: " + code
                   and rich["codes"] >= 2 and not page.errors, f"{code} {page.errors[:3]}")
             page.context.close()
+            # the usual range over time (GP, 28 Nov 2026): on the group page, a period chosen with the slider works the figures
+            # out again (a view only), every purchase stays on the chart (those outside faded); "Last 12 months" puts it back; the
+            # price popup has the same slider
+            page = tab()
+            open_at(page, where["group"], None)
+            page.wait_for_selector(".main .pbar input[type=range]")
+            page.wait_for_selector(".main .pchart svg circle.dotm")
+            tile = lambda: page.inner_text(".main .stiles .stile:first-child .sb")
+            dots0, n0_ = page.locator(".main .pchart svg circle.dotm").count(), tile()
+            months = page.evaluate("() => +document.querySelector(\".main .pbar input[aria-label='From the month']\").max + 1")
+            slide = """([label, v]) => { const i = document.querySelector(`.main .pbar input[aria-label='${label}']`); i.value = String(v);
+                i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('change', { bubbles: true })); }"""
+            page.evaluate(slide, ["From the month", months - 1])
+            page.wait_for_function("() => /the period chosen/.test((document.querySelector('.main .pbar .pwords') || {}).textContent || '')")
+            page.wait_for_selector(".main .pchart svg circle.dotm")
+            page.wait_for_timeout(300)
+            dots1, n1_, faded = page.locator(".main .pchart svg circle.dotm").count(), tile(), page.locator(".main .pchart svg g.pt.out").count()
+            last_m = app.api(f"/api/groups/{rich['group']}")["months"][-1]
+            wanted = app.api(f"/api/groups/{rich['group']}?from={last_m}&to={last_m}")
+            page.click(".main .pbar button:has-text('Last 12 months')")
+            page.wait_for_function("() => /the last 12 months/.test((document.querySelector('.main .pbar .pwords') || {}).textContent || '')")
+            page.wait_for_selector(".main .pchart svg circle.dotm")
+            back_ = tile()
+            check("The usual range over time: the group page's slider chooses a period (its last month) and the figures are worked out again for it; "
+                  "every purchase stays on the chart, those outside faded; Last 12 months puts it back",
+                  months >= 2 and n1_ == f"{wanted['purchases']:,}" and dots1 == dots0 and (faded > 0) == (wanted["outside_period"] > 0) and back_ == n0_ and not page.errors,
+                  f"{months} months, {n0_} then {n1_} (want {wanted['purchases']}), dots {dots0}/{dots1}, faded {faded}, back {back_}, {page.errors[:3]}")
+            other = page.locator(".main button.code[title='Price over time for this code']").first
+            code = other.inner_text()
+            other.click()
+            page.wait_for_selector(".pdialog .pbar input[type=range]")
+            page.evaluate(slide.replace(".main .pbar", ".pdialog .pbar"), ["From the month", months - 1])
+            page.wait_for_function("() => /the period chosen/.test((document.querySelector('.pdialog .pbar .pwords') || {}).textContent || '')")
+            page.wait_for_selector(".pdialog .pchart svg circle.dotm")
+            check("The usual range over time: the price popup has the same slider; a period chosen redraws it for that period, every purchase still on its chart",
+                  page.inner_text(".pdialog .phead h2") == "Price over time: " + code and page.locator(".pdialog .pchart svg circle.dotm").count() >= 1 and not page.errors,
+                  str(page.errors[:3]))
+            page.context.close()
+            # the Fab library: a code found, its page, its Fab group; a list uploaded from the page and read in the background
+            page = tab()
+            open_at(page, "fab-library", None)
+            page.wait_for_selector(".main .rp-lib .uprow input[type=file]")
+            page.fill(".main .toolbar input.search", rich["code"].lower())
+            page.click(".main .toolbar button:has-text('Search')")
+            page.wait_for_selector(".main .libfound .grid tbody tr button.code")
+            page.click(f".main .libfound .grid tbody tr button.code:has-text('{rich['code']}')")
+            page.wait_for_function("c => (document.querySelector('.main .dhead h1') || {}).textContent === c", arg=rich["code"])
+            page.click(f".main .acts button:has-text('Open Fab group {rich['group']}')")
+            page.wait_for_function("g => (document.querySelector('.main .dhead h1') || {}).textContent === g", arg=rich["group"])
+            via = page.url
+            import pandas as pd
+            one = pd.read_csv(os.path.join(HERE, "data", "plm_specs_for_po.csv"), dtype=str).fillna("")
+            one = one[one["article_code"] == rich["code"]]
+            open_at(page, "fab-library", None)
+            page.wait_for_selector(".main .rp-lib .uprow input[type=file]")
+            page.set_input_files(".main .rp-lib .uprow input[type=file]", files=[{"name": "PLM list, one code.csv", "mimeType": "text/csv", "buffer": one.to_csv(index=False).encode("utf-8-sig")}])
+            page.click(".main .rp-lib .uprow button:has-text('Upload')")
+            page.wait_for_function("() => { const t = document.querySelector('.main .libups .grid'); return !!t && t.tBodies[0].rows.length === 2 && t.querySelectorAll('.upst.done').length === 2 && /grouped again/.test(t.tBodies[0].rows[0].textContent) }", timeout=300000)
+            newest = page.locator(".main .libups .grid tbody tr").first.inner_text()
+            check("The Fab library: a code found by its code in small letters opens its page, and from it its Fab group; a list uploaded from the page is "
+                  "read in the background, its counts shown (one code, the same)",
+                  via.endswith("#group/" + rich["group"]) and "Uploaded" in page.inner_text("#toast") and "1 code ·" in newest and "0 new, 0 corrected, 1 the same" in newest
+                  and not page.errors, f"{via} {newest[:200]!r} {page.errors[:3]}")
+            page.context.close()
             # with no frame, stage 2's own look stays on its pages: no box round a stat's note on Pilot results (the profile's
             # notes: section 3); and Pilot results says it is the pilot as it was run (stage 2's line, carried from the frame)
             page = tab()
@@ -831,6 +955,25 @@ def main():
             check("Purchase files: an upload opens to what it held; the file that came with the code, loaded again from the page, is read in the background and changes nothing",
                   detail.startswith(f"Upload #{shipped['id']}: ") and "Loading the purchase file" in page.inner_text("#toast") and "already in" in newest
                   and after == before and not page.errors, f"{detail!r} {newest[:160]!r} {page.errors[:3]}")
+            page.context.close()
+            # a purchase file chosen on the page and uploaded (the file box keeps the file chosen while the page is drawn again)
+            import pandas as pd
+            cols = ["Purchasing Document", "Plant", "Document Date", "Item", "Material", "Short Text", "Purchasing Doc. Type", "Order Quantity",
+                    "Order Unit", "Net Price", "Name of Supplier", "Currency", "Deletion Indicator"]
+            xb = io.BytesIO()
+            pd.DataFrame([{"Purchasing Document": 9400000001, "Plant": "F007", "Document Date": pd.Timestamp("2026-11-10"), "Item": 10, "Material": rich["code"],
+                           "Short Text": "made up for the checks", "Purchasing Doc. Type": "BO", "Order Quantity": 100, "Order Unit": "M", "Net Price": 123,
+                           "Name of Supplier": "1200094    ARVIND LTD", "Currency": "INR", "Deletion Indicator": None}], columns=cols).to_excel(xb, index=False)
+            page = tab()
+            open_at(page, "purchase-files", None)
+            page.wait_for_selector(".main .uprow input[type=file]")
+            page.set_input_files(".main .uprow input[type=file]", files=[{"name": "orders chosen on the page.xlsx", "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "buffer": xb.getvalue()}])
+            page.wait_for_timeout(300)
+            page.click(".main .uprow button:has-text('Upload')")
+            page.wait_for_function("() => { const t = document.querySelector('.main .grid'); return !!t && t.tBodies[0].rows.length === 3 && /orders chosen on the page/.test(t.tBodies[0].rows[0].textContent) && t.tBodies[0].rows[0].querySelector('.upst.done') }", timeout=300000)
+            newest = page.locator(".main .grid tbody tr").first.inner_text()
+            check("Purchase files: a file chosen on the page stays chosen while the page is drawn again, and Upload sends it; it is read in the background",
+                  "Uploaded" in page.inner_text("#toast") and "1 new" in newest and not page.errors, f"{newest[:200]!r} {page.errors[:3]}")
             page.context.close()
             app.costs()             # Right cost worked out again after the load, before the next checks
             browser.close()
@@ -896,6 +1039,7 @@ def main():
                 seen["intake page"] = page.locator(".main .ua-nopage", has_text="not open to your role").count() == 0
                 seen["merge groups"] = at("groups", ".main .toolbar").locator("xpath=..").locator(".mergerow").count() > 0          # stage 2
                 seen["purchase upload"] = at("purchase-files", ".main .stiles").locator("xpath=..").locator(".uprow input[type=file]").count() > 0
+                seen["library upload"] = at("fab-library", ".main .rp-lib .stiles").locator("xpath=..").locator(".uprow input[type=file]").count() > 0   # the Fab library
                 page.context.close()
                 return seen, page.refused + page.errors
 
@@ -903,7 +1047,7 @@ def main():
             addresses = [(a, a, ".pgbox > .pg") for a, _ in PAGES] + [("rightcost", "rightcost", ".grid tbody tr td .code"),
                          ("item", where["item"], ".dhead h1"), ("supplier", where["supplier"], ".dhead h1"), (None, "lib/Payment terms", ".main .title"),
                          ("users", "users", ".main .ua-card"), ("group", where["group"], ".main .dhead h1"), ("groups", "groups", ".main .toolbar"),
-                         ("purchase-files", "purchase-files", ".main .stiles")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
+                         ("purchase-files", "purchase-files", ".main .stiles"), ("fab-library", "fab-library", ".main .rp-lib .stiles")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
 
             def walk(who):
                 """Every address as this person, each from a fresh load: what the role may open draws, what it may not says so
@@ -942,7 +1086,7 @@ def main():
             want = {"Viewer": set(), "Buyer": {"mark seen", "list upload", "list remove", "add to list", "cost sheet upload"}}
             want["Rates editor"] = want["Admin"] = {"edit rates", "bring in prices", "dated rate entry", "rate tables edit", "add cotton", "cost sheet upload",
                                                     "apply drafts", "mark seen", "list upload", "list remove", "add to list", "intake page",
-                                                    "merge groups", "purchase upload"}
+                                                    "merge groups", "purchase upload", "library upload"}
             for who, role in people:
                 seen, refused = offered(who)
                 got = {k for k, v in seen.items() if v}

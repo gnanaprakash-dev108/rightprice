@@ -58,9 +58,10 @@ KINDS = ("rates", "list", "negotiations", "seen", "sheets")
 KINDS += ("users",)         # stage 3: the people let in and what each role may do (db/003_users_and_roles.sql, data_users.py)
 KINDS += ("dated",)         # stage 5: dated yarn rates (db/005_dated_rates.sql); kept in a database only, never in a file
 KINDS += ("purchases",)     # stage 2: the purchase history and Fab groups (db/002_purchases_and_fab_groups.sql), on a database only
+KINDS += ("library",)       # the Fab library: the PLM fabric code list (db/006_fab_library.sql), on a database only
 # writes that move no version of their own (no page needs redoing for them) but wait for the writers of a kind: stage 2's
 # progress of a purchase file being read takes the purchase history's lock, never the one of adding tables and copying in
-LOCKS_WITH = {"purchase_status": "purchases"}
+LOCKS_WITH = {"purchase_status": "purchases", "library_status": "library"}
 MOVED_NOTE = "moved_to_database.json"      # left beside the files once they are copied into a database (they stay as they were)
 FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations": "negotiations.json",
          "seen": "alerts_seen.json", "sheets": "cost_sheets.json"}
