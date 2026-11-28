@@ -123,6 +123,37 @@
   }
   const periodQuery = per => per ? `from=${encodeURIComponent(per.from)}&to=${encodeURIComponent(per.to)}` : "";
 
+  // every other row of the purchase files (GP, 28 Nov 2026): stored and shown by its type, in no rupees-per-metre figure;
+  // imports converted on their month's exchange rate, kept apart; domestic bulk lines per kg with their own per-kg figures
+  const OTHER_WORDS = "Every row of the purchase files is stored (GP's decision, 28 Nov 2026): sampling orders, stock transfers, returns, lines deleted or blocked in SAP, imports, other units. Only domestic bulk orders (BO, BF) per metre count in prices, ranges and verdicts; ZLOI is kept apart; imports are shown in rupees on their month's exchange rate, apart; lines per kg have their own per-kg figures.";
+  const unitWords = u => u === "M" ? "m" : u === "KG" ? "kg" : (u || "").toLowerCase();
+  const qtyWords = o => o.qty === null ? "" : `${n0(o.qty)} ${unitWords(o.unit)}`.trim();
+  const priceWords = o => o.price === null ? "" : (o.currency && o.currency !== "INR" ? `${o.currency} ` : "Rs ") + n2(o.price) + (o.unit && o.unit !== "M" ? ` per ${unitWords(o.unit)}` : "");
+  const rsWords = o => o.currency && o.currency !== "INR" ? (o.price_rs === null ? h("span", { class: "muted", title: o.rate_why || "" }, "no rate yet") : `Rs ${n2(o.price_rs)}` + (o.unit && o.unit !== "M" ? ` per ${unitWords(o.unit)}` : "") + ` (at ${n2(o.rate)})`) : "";
+  function otherTable(list, whose, withCode, total) {
+    if (!list || !list.length) return null;
+    const heads = ["Date", "Order", "SAP type", "Order type"].concat(withCode ? ["Fabric code"] : [], ["Mill", "Sourcing", "Quantity", "Price", "In rupees", "Why it counts in no figure"]);
+    return h("div", { class: "othl" }, h("h3", {}, `Other order lines of ${whose}, in no rupees-per-metre figure: ${n0(total || list.length)}`),
+      h("p", { class: "muted" }, OTHER_WORDS),
+      table(heads, list.map(o => [day(o.date), `${o.po}/${o.item}`, o.type || "", o.order_type || ""].concat(withCode ? [codeLink(o.code)] : [], [o.mill, o.sourcing + (o.currency && o.currency !== "INR" ? `, ${o.currency}` : ""), qtyWords(o), priceWords(o), rsWords(o),
+        wide(h("span", { class: "muted" }, o.why + (o.detail && o.detail !== o.why ? `: ${o.detail}` : "")))])), withCode ? [7, 8] : [6, 7]),
+      total && total > list.length ? h("p", { class: "muted" }, `The newest ${list.length} are shown.`) : null);
+  }
+  // what is kept apart, in tiles: the per-kg figures (their own range; no should-cost per kg yet) and the imports
+  function apartTiles(d) {
+    const k = d.per_kg, im = d.imports;
+    if (!k || !im || (!k.lines && !im.lines)) return null;
+    const r = k.range || {};
+    return h("div", { class: "stiles apart" },
+      k.lines ? tile("Bought per kg (domestic bulk)", r.median ? `Rs ${n2(r.median)} per kg` : `${n0(k.lines)} lines`, `${n0(k.lines)} ${k.lines === 1 ? "line" : "lines"}, ${n0(k.kg)} kg in the period; ` +
+        (r.enough ? `usual range Rs ${n2(r.lower)} to ${n2(r.upper)} per kg` + (r.above ? `, ${r.above} above it` : "") : `${r.orders || 0} separate ${r.orders === 1 ? "order" : "orders"}: too few for a range`) + `. Never mixed with metres; ${k.should}.`) : null,
+      im.lines ? tile("Imports, kept apart", `${n0(im.lines)} ${im.lines === 1 ? "line" : "lines"}`, `${im.currencies.join(", ")}; ${im.no_rate ? `${n0(im.no_rate)} with no exchange rate yet (Prices > Exchange rates)` : "each converted on its month's rate"}. ${im.note}`, im.no_rate ? "amber" : "") : null);
+  }
+  const imports = (list, whose) => list && list.length ? h("div", { class: "othl" }, h("h3", {}, `Imports of ${whose}: ${n0(list.length)} ${list.length === 1 ? "line" : "lines"}, kept apart`),
+    h("p", { class: "muted" }, "Bulk orders priced in another currency, shown in rupees on their order month's exchange rate (Prices > Exchange rates; blank where none is entered). They are in none of the rupee figures on this page."),
+    table(["Date", "Order", "Fabric code", "Quantity", "Price", "Exchange rate", "In rupees", "Value Rs"], list.map(o => [day(o.date), `${o.po}/${o.item}`, codeLink(o.code), qtyWords(o), priceWords(o),
+      o.rate === null ? h("span", { class: "muted", title: o.rate_why || "" }, "no rate yet") : n2(o.rate), rsWords(o), o.value_rs === null ? "" : n0(o.value_rs)]), [3, 4, 5, 7])) : null;
+
   // ZLOI order lines: kept, in no figure, listed apart (GP, 27 Nov 2026)
   const ZLOI_WORDS = "ZLOI order lines are left out of every figure on this page (price paid, metres, medians, ranges, should-cost): GP's decision of 27 Nov 2026.";
   function outliers(list, whose, withCode) {
@@ -151,7 +182,10 @@
     const inside = l => l.date >= x.period.from && l.date <= x.period.to, ip = x.in_period;
     const pts = x.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, series: "this", inside: inside(l), text: `${l.mill}, order ${l.po}/${l.item}` }));
     if (g) for (const l of g.lines) if (l.code !== x.code) pts.push({ date: l.date, price: l.price, metres: l.metres, series: "group", inside: l.inside !== false, text: `${l.code}, ${l.mill}` });
-    const series = [{ key: "this", name: `This code, ${x.code}`, cls: "s1", big: true }, { key: "group", name: g ? `Other codes of ${g.code} (the same construction, any colour)` : "", cls: "s0" }];
+    for (const o of x.others || []) if (o.plotted) pts.push({ date: o.date, price: o.price_rs_m, metres: o.qty || 0, series: o.import ? "import" : "other", text: `${o.type || "no type"} (${o.order_type}): ${o.import ? `import, ${o.currency} ${n2(o.price)} at ${n2(o.rate)}` : o.why}, ${o.mill}, order ${o.po}/${o.item}` });
+    const series = [{ key: "this", name: `This code, ${x.code}`, cls: "s1", big: true }, { key: "group", name: g ? `Other codes of ${g.code} (the same construction, any colour)` : "", cls: "s0" },
+      { key: "import", name: "This code's imports, in rupees on their month's rate (kept apart)", cls: "imp" },
+      { key: "other", name: "This code's other orders, in no figure (sampling, stock transfer, deleted ...)", cls: "oth" }];
     const marks = [x.should ? { y: x.should, label: "Should-cost", cls: "should" } : null, g && g.range.enough ? { y: g.range.median, label: `${g.code} median`, cls: "median" } : null].filter(Boolean);
     const others = g ? g.lines.filter(l => l.code !== x.code).length : 0;
     const outside = x.lines.length - ip.lines;
@@ -171,6 +205,8 @@
       x.lines.length ? table(["Date", "Order", "Mill", "Metres", "Price Rs/m", "Against should-cost"], x.lines.map(l => [inside(l) ? day(l.date) : h("span", { class: "muted", title: "Outside the period chosen" }, day(l.date) + " (outside)"), `${l.po}/${l.item}`, l.mill, n0(l.metres), n2(l.price), x.should ? pc((l.price / x.should - 1) * 100) : ""]), [3, 4, 5])
         : h("p", { class: "muted" }, x.outliers.length ? "None but ZLOI orders, which are listed apart below: no price paid is shown." : "None."),
       outliers(x.outliers, "this code"),
+      apartTiles(x),
+      otherTable(x.others, "this code", false, x.others_count),
       h("div", { class: "acts" }, g && may("page:groups") ? h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null,
         h("button", { type: "button", class: "btn line", onclick: () => s.remove() }, "Close")),
       h("p", { class: "muted" }, "Should-cost is as Right cost has it: for the metres bought (ZLOI left out), on the yarn rates of the order month (today's where none is dated) and today's other rates. Prices are the net price on each purchase-order line (ex-mill, Rs per metre)."));
@@ -224,7 +260,9 @@
         table(["Mill", "Purchases", "Orders", "Metres", "Share of metres", "Median Rs/m", "Lowest", "Highest", "Median against the group", "Last bought", "Outliers (ZLOI)"],
           d.mills.map(m => [millLink(m.name, m.key), n0(m.lines), n0(m.orders), n0(m.metres), m.share === null ? "" : Math.round(m.share * 100) + "%", m.median === null ? "" : n2(m.median), m.low === null ? "" : n2(m.low), m.high === null ? "" : n2(m.high),
             m.vs_group === null ? "" : pc(m.vs_group), day(m.last), m.outliers.length ? wide(h("span", {}, `${m.outliers.length}: ` + m.outliers.map(o => `${day(o.date)} ${n0(o.metres)} m at Rs ${n2(o.price)}`).join("; "))) : ""]), [1, 2, 3, 4, 5, 6, 7, 8]),
-        outliers(d.outliers, "this group", true)),
+        outliers(d.outliers, "this group", true),
+        apartTiles(d),
+        d.others_count ? [h("p", { class: "muted" }, "In no figure, by why: " + d.others_by_kind.map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + "."), otherTable(d.others, "this group", true, d.others_count)] : null),
       h("section", { class: "sec" }, h("h2", {}, "Priced well above the group"),
         !r.enough ? h("p", { class: "muted" }, `${r.n} ${r.n === 1 ? "purchase" : "purchases"} on ${r.orders || 0} separate ${r.orders === 1 ? "order" : "orders"} in the period: too few for a usual range (it needs purchases on at least ${d.min_for_range} orders, ZLOI left out), so no purchase is called high. Load more purchase files as they come.`)
           : !d.above.length ? h("p", { class: "muted" }, `None: every purchase is at or below the top of the usual range, Rs ${n2(r.upper)}.`)
@@ -366,7 +404,8 @@
         savedNote(u), u.disagree_open ? `${n0(u.disagree_open)} ${u.disagree_open === 1 ? "disagreement" : "disagreements"} open, for an admin` : null,
         (u.summary || {}).disagreements ? `${n0(u.summary.disagreements)} ${u.summary.disagreements === 1 ? "disagreement" : "disagreements"} with the history listed for an admin (open the upload)` : null, u.rows_removed ? `${n0(u.rows_removed)} removed (this newer file shows them deleted, blocked or no longer bulk)` : null,
         u.rows_outliers ? `${n0(u.rows_outliers)} ZLOI ${u.rows_outliers === 1 ? "line" : "lines"}, kept apart` : null,
-        u.rows_skipped !== null ? `${n0(u.rows_skipped)} left out` : null].filter(Boolean).join(" · ") : "";
+        u.rows_stored !== null && u.rows_stored !== undefined ? `${n0(u.rows_stored)} rows stored, of which ${n0(u.rows_other || 0)} in no figure (sample and yardage orders, deleted lines, other currencies or units: shown in the price history by type)` : null,
+        u.rows_skipped !== null ? `${n0(u.rows_skipped - (u.rows_other || 0))} left out, not stored` : null].filter(Boolean).join(" · ") : "";
       return h("tr", { class: files.open === u.id ? "picked" : null },
         h("td", {}, h("button", { type: "button", class: "code", onclick: async () => { files.open = files.open === u.id ? null : u.id; files.detail = null; if (files.open) { try { files.detail = await api("/api/purchases/uploads/" + u.id); } catch (e) { toast(e.message, false); } } render(); } }, `#${u.id}`)),
         h("td", { class: "w" }, u.filename, h("div", { class: "muted" }, `${day(u.uploaded_at)}${u.uploaded_by ? " by " + u.uploaded_by : ""}` + (u.file_date_from ? ` · ${u.file_date_from}` : ""))),
@@ -392,7 +431,7 @@
         d.uploads.length ? h("div", { class: "gridscroll sup pgt" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Upload", "File", "Where it stands", "What was read"].map(t => h("th", {}, t)))), h("tbody", {}, d.uploads.map(row))))
           : h("p", { class: "muted" }, "No file uploaded yet."),
         det ? skippedView(det) : null),
-      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026). Nothing dated after the upload is trusted: a saved date after it (a clock set wrong), or before the file's latest order, is not used, and the file is dated by its upload instead; a report date counts only between its latest order and when it was saved; a document date after the upload is not used to date the file. Document dates are days in India; saved times are UTC. The upload's page says which file won and why, with both saved times, and every date it did not use. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre; an older or earlier-saved file never changes it or brings it back. A line simply not in a newer file is never taken as cancelled: the history keeps it (GP, 28 Nov 2026), so a later download covering a longer span takes each line once. Only where two files carry the very same dates, to the second, and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification and Fab group; a code whose specification is missing or incomplete is not grouped. The PLM specifications come from the Fab library once the PLM fabric code list is uploaded there (a list that corrects a code moves it to its Fab group and costs it again at once); before that, from the extract deployed with the code (data/plm_specs_for_po.csv in the code's own folder, not the data folder)."));
+      h("p", { class: "muted", style: "margin-top:14px" }, "Every row of a file is stored (GP, 28 Nov 2026) and shown in the price history by its type; what counts in prices, ranges and verdicts is as the pilot keeps it: bulk orders (BO, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026). Nothing dated after the upload is trusted: a saved date after it (a clock set wrong), or before the file's latest order, is not used, and the file is dated by its upload instead; a report date counts only between its latest order and when it was saved; a document date after the upload is not used to date the file. Document dates are days in India; saved times are UTC. The upload's page says which file won and why, with both saved times, and every date it did not use. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre; an older or earlier-saved file never changes it or brings it back. A line simply not in a newer file is never taken as cancelled: the history keeps it (GP, 28 Nov 2026), so a later download covering a longer span takes each line once. Only where two files carry the very same dates, to the second, and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification and Fab group; a code whose specification is missing or incomplete is not grouped. The PLM specifications come from the Fab library once the PLM fabric code list is uploaded there (a list that corrects a code moves it to its Fab group and costs it again at once); before that, from the extract deployed with the code (data/plm_specs_for_po.csv in the code's own folder, not the data folder)."));
   }
   // TOO BIG: what a file over the limit is told on the screen at once, before it is sent (as rules/purchases.py too_big;
   // check_server.py runs this function and compares the two)
@@ -452,11 +491,74 @@
         fut.slice(0, 5).map(x => `row ${x.row} (order ${x.po}/${x.item}, ${x.date})`).join(", ") + (s.future_count > 5 ? ` and ${n0(s.future_count - 5)} more` : "") + ". Check them in SAP; the rows are kept as they are.") : null,
       u.status === "done" ? h("p", {}, `Order lines dated ${day(s.first)} to ${day(s.last)}, from ${n0(s.mills)} ${s.mills === 1 ? "spelling of a mill" : "mill spellings"}, for ${n0(s.fabrics)} fabric codes: ${n0(s.grouped)} in Fab groups, ${n0(s.costed)} costed.` +
         (s.not_grouped && s.not_grouped.length ? ` Not grouped: ${s.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")}.` : "")) : null,
-      u.skipped_count ? [h("p", {}, `Left out: ${n0(u.skipped_count)} rows. ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",
-        " ", h("a", { href: `/api/purchases/skipped/${u.id}`, download: "" }, "Download every row left out (Excel)")),
-      table(["Row", "Order", "Item", "Material", "Why it was left out"], u.skipped.slice(0, files.rows).map(x => [String(x.row), x.po, x.item, x.material, wide(x.why)]), [0]),
+      u.status === "done" && u.rows_stored !== null && u.rows_stored !== undefined ? h("p", {}, `Stored: ${n0(u.rows_stored)} rows. They count in prices, ranges and verdicts: ${n0((u.rows_loaded || 0) - (u.rows_outliers || 0))} (bulk orders BO and BF, in rupees per metre)` +
+        `; kept apart: ${n0(u.rows_outliers || 0)} ZLOI; in no figure, shown in the price history by type: ${n0(u.rows_other || 0)}` + ((s.other_by_kind || []).length ? ` (${s.other_by_kind.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")})` : "") + ".") : null,
+      u.skipped_count ? [h("p", {}, `Not counted: ${n0(u.skipped_count)} rows, ${n0(u.skipped_count - (u.rows_other || 0))} of them left out, not stored (no order number, repeated, no material or supplier, a date that cannot be read). ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",
+        " ", h("a", { href: `/api/purchases/skipped/${u.id}`, download: "" }, "Download every row not counted (Excel)")),
+      table(["Row", "Order", "Item", "Material", "Why it is not counted", "Stored"], u.skipped.slice(0, files.rows).map(x => [String(x.row), x.po, x.item, x.material, wide(x.why), x.stored ? "stored, in the price history" : "left out"]), [0]),
       u.skipped.length > files.rows ? h("p", {}, h("button", { type: "button", class: "btn line", onclick: () => { files.rows = u.skipped.length; render(); } }, `Show the first ${u.skipped.length}`)) : null,
       u.skipped_count > Math.min(files.rows, u.skipped.length) ? h("p", { class: "muted" }, `The first ${Math.min(files.rows, u.skipped.length)} are shown; the download has ${u.skipped_listed < u.skipped_count ? "the first " + n0(u.skipped_listed) + " (the counts above cover all " + n0(u.skipped_count) + ")" : "all " + n0(u.skipped_count)}.`) : null] : (u.status === "done" ? h("p", { class: "muted" }, "No row was left out.") : null));
+  }
+
+  // ---------------------------------------------------------------- #purchase-lines: every stored line, filtered (GP, 28 Nov 2026)
+  // Filtered and paged on the server (it stays quick with a million lines); the Excel download has what is filtered. The
+  // table of order types is on this page too: a rates editor or an admin corrects it, and the lines are counted again.
+  const pl = { data: null, error: null, f: {}, page: 1, types: null, busy: false };
+  const LINE_FILTERS = [["order_type", "Order type"], ["sourcing", "Mode of sourcing"], ["unit", "Unit"], ["currency", "Currency"], ["month", "Month"], ["mill", "Mill"], ["counts", "Counts"]];
+  const plQuery = (extra) => Object.entries(Object.assign({}, pl.f, extra || {})).filter(([, v]) => v !== "" && v !== null && v !== undefined).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  async function enterLines() {
+    await known(); if (!may("page:purchase_lines")) return;
+    pl.busy = true;
+    try { [pl.data, pl.types] = await Promise.all([api("/api/purchases/lines?" + plQuery({ page: pl.page })), api("/api/purchases/order-types")]); pl.error = null; } catch (e) { pl.error = e.message; }
+    pl.busy = false;
+    if (state.page && state.page.id === "purchase-lines") render();
+  }
+  function renderLines(main) {
+    tip.hidden = true;
+    $("#selbar").hidden = true;
+    const top = crumbs("Purchase lines"), title = h("div", { class: "headrow" }, h("h1", { class: "ptitle" }, "Purchase lines"));
+    if (pl.error) return fillP(main, top, title, h("p", { class: needsDb(pl.error) ? "note" : "err" }, pl.error));
+    if (!pl.data) return fillP(main, top, title, h("div", { class: "empty" }, "Loading…"));
+    const d = pl.data, fc = d.facets;
+    const opts = (k) => k === "order_type" ? fc.order_types : k === "sourcing" ? [["Domestic", null], ["Import", null]] : k === "unit" ? fc.units : k === "currency" ? fc.currencies
+      : k === "month" ? fc.months : k === "mill" ? fc.mills : [["counts", "Counts in the figures"], ["apart", "Kept apart (in no rupees-per-metre figure)"]];
+    const sel = {}, text = {};
+    const bar = h("div", { class: "plfilters" }, LINE_FILTERS.map(([k, label]) => {
+      sel[k] = h("select", { "aria-label": label }, h("option", { value: "" }, `${label}: all`), opts(k).map(([v, n]) => h("option", { value: v, selected: pl.f[k] === v ? true : null },
+        k === "counts" ? n : `${k === "month" ? monthWords(v) : v || "(blank)"}${n !== null && n !== undefined && k !== "counts" ? ` (${n0(n)})` : ""}`)));
+      return h("label", {}, sel[k]);
+    }), [["group", "Fab group", "Fab-0012"], ["code", "Fabric code", "a code"]].map(([k, label, ph]) => { text[k] = h("input", { type: "text", "aria-label": label, placeholder: `${label}: ${ph}`, value: pl.f[k] || "" }); return h("label", {}, text[k]); }),
+      h("button", { type: "button", class: "btn fill", onclick: () => { pl.f = {}; for (const k in sel) pl.f[k] = sel[k].value; for (const k in text) pl.f[k] = text[k].value.trim(); pl.page = 1; enterLines(); } }, "Filter"),
+      h("button", { type: "button", class: "btn line", onclick: () => { pl.f = {}; pl.page = 1; enterLines(); } }, "Clear"));
+    const go = n => { pl.page = n; enterLines(); };
+    const rs = r => r.price_rs === null ? h("span", { class: "muted", title: r.rate_why || "" }, r.rate_why ? "no rate yet" : "") : n2(r.price_rs);
+    fillP(main, top, title, h("p", { class: "muted" }, d.note),
+      bar,
+      h("div", { class: "toolbar" }, h("span", { class: "count" }, `${n0(d.total)} ${d.total === 1 ? "line" : "lines"} of ${n0(fc.total)}` + (d.pages > 1 ? ` · page ${d.page} of ${n0(d.pages)}` : "")),
+        d.total && d.total <= d.excel_max ? h("a", { class: "btn line", href: "/api/purchases/lines/download?" + plQuery(), download: "" }, "Download Excel (what is filtered)") : h("span", { class: "muted" }, d.total ? "Too many lines for one Excel sheet: filter by month or order type first" : "")),
+      d.rows.length ? table(["Date", "Order", "Fabric code", "Mill", "SAP type", "Order type", "Sourcing", "Quantity", "Price", "Rate", "Price Rs", "Value Rs", "Counts", "Fab group", "Construction"],
+        d.rows.map(r => [day(r.date), `${r.po}/${r.item}`, r.code ? codeLink(r.code) : "", wide(h("span", {}, r.mill || "")), r.sap_type, r.order_type, r.sourcing + (r.currency && r.currency !== "INR" ? `, ${r.currency}` : ""),
+          qtyWords(r), priceWords(r), r.rate === null ? "" : n2(r.rate), rs(r), r.value_rs === null ? "" : n0(r.value_rs),
+          r.counts ? "yes" : h("span", { class: "muted", title: r.why || "" }, "no: " + (r.why || "")), r.group ? groupLink(r.group) : "", wide(h("span", { class: "muted" }, r.construction || ""))]), [7, 8, 9, 10, 11])
+        : h("div", { class: "empty" }, "No line matches."),
+      d.pages > 1 ? h("div", { class: "acts noprint" }, h("button", { type: "button", class: "btn line", disabled: d.page <= 1 || pl.busy ? true : null, onclick: () => go(d.page - 1) }, "Previous"),
+        h("button", { type: "button", class: "btn line", disabled: d.page >= d.pages || pl.busy ? true : null, onclick: () => go(d.page + 1) }, "Next")) : null,
+      orderTypes());
+  }
+  function orderTypes() {
+    const t = pl.types;
+    if (!t) return null;
+    const edit = may("do:edit_rates");
+    const put = async (sap_type, category) => {
+      try { const r = await api("/api/purchases/order-types", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sap_type, category }) });
+        toast(`${r.sap_type} is ${r.category} now` + (r.lines_now_counted || r.lines_now_apart ? `: ${n0(r.lines_now_counted)} lines count, ${n0(r.lines_now_apart)} kept apart` : "")); reloadCosts(); list.data = null; page.group = null; enterLines(); }
+      catch (e) { toast(e.message, false); }
+    };
+    const pick = (sap, now) => edit ? h("select", { "aria-label": `Order type of ${sap}`, onchange: e => put(sap, e.target.value) }, (now ? [] : [h("option", { value: "" }, "Other (not in the table)")]).concat(t.categories.map(cat => h("option", { value: cat, selected: cat === now ? true : null }, cat)))) : (now || "Other");
+    return h("section", { class: "sec" }, h("h2", {}, "Order types"), h("p", { class: "muted" }, t.rule + (edit ? " Changing one counts its lines again at once." : " A rates editor or an admin changes them.")),
+      table(["SAP type", "Order type", "Lines", "From"], t.types.map(x => [x.sap_type, pick(x.sap_type, x.category), n0(x.lines), wide(h("span", { class: "muted" }, x.basis + (x.changed_by ? `, ${x.changed_by}` : "") + (x.basis.startsWith("Set") ? ` on ${day(x.changed_at)}` : "")))]), [2]),
+      t.not_in_table.length ? [h("h3", {}, "Types the history has that the table does not (counted as Other)"),
+        table(["SAP type", "Order type", "Lines"], t.not_in_table.map(x => [x.sap_type || "(blank)", x.sap_type ? pick(x.sap_type, null) : "Other", n0(x.lines)]), [2])] : null);
   }
 
   // ---------------------------------------------------------------- what the shell sees
@@ -464,9 +566,10 @@
     group: { enter: enterGroup, render: renderGroup, title: p => p.arg || "Fab group", rail: "costs" },
     groups: { enter: () => enterGroups(true), render: renderGroups, title: () => "Fab groups", rail: "costs" },
     "purchase-files": { enter: enterFiles, render: renderFiles, title: () => "Purchase files", rail: null },
+    "purchase-lines": { enter: enterLines, render: renderLines, title: () => "Purchase lines", rail: null },
   };
   window.RP_PURCH = {
-    openHistory, outliers,
+    openHistory, outliers, imports,
     // Right cost's Fab group cell: the group (to its page) and the price popup
     cell(r) {
       if (r.source !== "Purchase orders" || (r.fab_group === undefined && r.fab_group_name === undefined) || (r.fab_group === null && !r.fab_group_name)) return "";

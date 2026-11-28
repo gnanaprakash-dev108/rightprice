@@ -70,6 +70,14 @@
 .pbar .pslide input[type=range] { flex: 1; min-width: 0; accent-color: var(--s1); }
 .pbar .pnote { margin: 4px 0 0; font-size: 12px; }
 .pchart .pt.out .dotm { opacity: .32; }
+.pchart .dotm.oth { fill: var(--panel); stroke: var(--s0); stroke-width: 1.6; }
+.plegend .dot.oth { background: transparent; border: 1.6px solid var(--s0); box-sizing: border-box; }
+.pchart .dotm.imp { fill: var(--panel); stroke: var(--s2); stroke-width: 1.8; }
+.plegend .dot.imp { background: transparent; border: 1.8px solid var(--s2); box-sizing: border-box; }
+.stiles.apart { margin-top: 10px; }
+.plfilters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.plfilters select, .plfilters input { border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; background: var(--panel2); color: var(--text); max-width: 100%; }
+.plfilters label { max-width: 100%; }
 .plegend .dot.faded { opacity: .32; }
 @media (max-width: 700px) {
   .pbar .pslide { grid-template-columns: 1fr; }

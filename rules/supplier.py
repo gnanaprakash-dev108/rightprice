@@ -300,7 +300,13 @@ def supplier(mill: str):
             "sums": sums, "hint": hint, "today": common._day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},
             "questions": {"quoted": quoted_q, "bought": bought_q, "general": general},
-            "outliers": _outliers(key)}
+            "outliers": _outliers(key), "imports": _imports(key)}
+
+
+def _imports(key):
+    """The mill's import lines (GP, 28 Nov 2026), converted on their month's exchange rate: in none of the figures above."""
+    from rules import purchases
+    return purchases.imports_for_mill(key)
 
 
 def _outliers(key):

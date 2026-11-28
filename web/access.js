@@ -15,7 +15,8 @@ const canAny = (...perms) => perms.some(can);
 const PAGE_NEEDS = { dashboard: "page:dashboard", pilot: "page:pilot", yarn: "page:prices", cotton: "page:prices", rates: "page:prices", ratecard: "page:prices",
   settings: "page:prices", costsheets: "page:costsheets", intake: "do:edit_rates", rightcost: "page:rightcost", item: "page:rightcost", supplier: "page:rightcost", users: "page:users",
   group: "page:groups", groups: "page:groups", "purchase-files": "page:purchase_files",       // stage 2: web/purchases.js
-  "fab-library": "page:fab_library" };                                                          // the Fab library: web/library.js
+  "fab-library": "page:fab_library",                                                           // the Fab library: web/library.js
+  "purchase-lines": "page:purchase_lines", fx: "page:prices" };          // every purchase line (web/purchases.js); Prices > Exchange rates (web/pages/fx.js)
 const TAB_NEEDS = { cost: "page:cost", compare: "page:cost", bulk: "page:list", pack: "page:pack" };
 const ACTION_TABS = { "Create cost": "cost", "Compare": "compare", "Bulk upload": "bulk", "Negotiation pack": "pack" };
 

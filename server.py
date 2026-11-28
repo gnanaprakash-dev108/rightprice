@@ -626,6 +626,44 @@ def groups_unmerge(payload: dict = Body(...), request: Request = None):
 
 
 
+# ------------------------------------------------------------------ every purchase line (GP, 28 Nov 2026): the list, the order types
+from rules import purchase_lines  # noqa: E402
+
+
+@app.get("/api/purchases/lines")
+def purchase_lines_page(request: Request):
+    return purchase_lines.listing(dict(request.query_params))
+
+
+@app.get("/api/purchases/lines/download")
+def purchase_lines_download(request: Request):
+    return _file(purchase_lines.download(dict(request.query_params)))
+
+
+@app.get("/api/purchases/order-types")
+def order_types_page():
+    return purchases.order_types_page()
+
+
+@app.post("/api/purchases/order-types")
+def order_type_set(payload: dict = Body(...), request: Request = None):
+    return purchases.set_order_type(payload, who=_who(request))
+
+
+# ------------------------------------------------------------------ exchange rates by month (GP, 28 Nov 2026), on a database only
+from rules import fx as fx_rules  # noqa: E402
+
+
+@app.get("/api/fx-rates")
+def fx_rates():
+    return fx_rules.rates()
+
+
+@app.post("/api/fx-rates")
+def fx_rate_add(payload: dict = Body(...), request: Request = None):
+    return fx_rules.add(payload, who=_who(request))
+
+
 # ------------------------------------------------------------------ the Fab library: the PLM fabric code list (on a database only)
 # Who may look and who may upload: rules/access.py (ROUTES).
 from rules import fab_library  # noqa: E402

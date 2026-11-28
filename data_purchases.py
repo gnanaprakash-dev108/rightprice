@@ -341,11 +341,13 @@ def lines_of_orders(c, pos):
 
 
 def add_lines(c, rows):
-    """rows: dicts with the line's columns (its state: state_upload_id, state_from, state_to, state_saved, included)."""
+    """rows: dicts with the line's columns (its state: state_upload_id, state_from, state_to, state_saved, included): a bulk
+    order in rupees per metre, that counts."""
     _many(c, "INSERT INTO purchase_line (po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, upload_id, "
-             "state_upload_id, state_from, state_to, state_saved) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+             "state_upload_id, state_from, state_to, state_saved, currency, unit, qty_po, price_po) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'INR', %s, %s, %s)",
           [(r["po_number"], r["item"], r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"],
-            r["upload_id"], r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"]) for r in rows])
+            r["upload_id"], r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"], r.get("unit") or "M",
+            r.get("qty_po", r["qty_m"]), r.get("price_po", r["price"])) for r in rows])
 
 
 def add_marks(c, rows):
@@ -355,13 +357,37 @@ def add_marks(c, rows):
              "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)", [(po, item, s[0], s[0], why, s[0], s[1], s[2], s[3]) for po, item, why, s in rows])
 
 
-def change_lines(c, rows):
-    """rows: dicts with id and the line's columns: a newer file's figures, the line counted again."""
+def add_other_lines(c, rows):
+    """rows: dicts with a line's columns as a file gives them (its currency, unit, deletion indicator, why it counts in no
+    figure), and its state: a row that is not a bulk order in rupees per metre, stored all the same (GP, 28 Nov 2026) and
+    shown in the price history by its type. It is marked removed by its own file (removed_upload_id, removed_why), so every
+    figure that leaves removed lines out leaves it out."""
+    _many(c, "INSERT INTO purchase_line (po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, qty_po, price_po, currency, "
+             "unit, deletion, not_counted, upload_id, removed_upload_id, removed_why, state_upload_id, state_from, state_to, state_saved) "
+             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+          [(r["po_number"], r["item"], r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"], r["qty_po"],
+            r["price_po"], r["currency"], r["unit"], r["deletion"], r["not_counted"], r["upload_id"], r["upload_id"], r["removed_why"], r["state_upload_id"],
+            r["state_from"], r["state_to"], r["state_saved"]) for r in rows])
+
+
+def set_other_figures(c, rows):
+    """rows: dicts with id and a line's figures as a newer file gives them, where that file shows it counted in no figure
+    (deleted, not bulk, another currency or unit ...): the line keeps being left out of every figure, with these figures."""
     _many(c, "UPDATE purchase_line SET doc_date = %s, doc_type = %s, fabric_id = %s, mill_id = %s, supplier = %s, qty_m = %s, price = %s, "
-             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s, state_saved = %s "
-             "WHERE id = %s",
+             "qty_po = %s, price_po = %s, currency = %s, unit = %s, deletion = %s, not_counted = %s, removed_why = %s WHERE id = %s",
+          [(r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"], r["qty_po"], r["price_po"], r["currency"],
+            r["unit"], r["deletion"], r["not_counted"], r["removed_why"], r["id"]) for r in rows])
+
+
+def change_lines(c, rows):
+    """rows: dicts with id and the line's columns: a newer file's figures, the line counted again (a bulk order in rupees
+    per metre, live)."""
+    _many(c, "UPDATE purchase_line SET doc_date = %s, doc_type = %s, fabric_id = %s, mill_id = %s, supplier = %s, qty_m = %s, price = %s, "
+             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s, state_saved = %s, "
+             "currency = 'INR', unit = %s, qty_po = %s, price_po = %s, deletion = NULL, not_counted = NULL WHERE id = %s",
           [(r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"], r["upload_id"],
-            r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"], r["id"]) for r in rows])
+            r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"], r.get("unit") or "M", r.get("qty_po", r["qty_m"]),
+            r.get("price_po", r["price"]), r["id"]) for r in rows])
 
 
 def touch_lines(c, rows):
@@ -412,6 +438,26 @@ def lines(c, fabric_ids, outliers=False):
                          f"WHERE l.removed_upload_id IS NULL AND {_OUTLIER if outliers else _NOT_OUTLIER} AND l.fabric_id IN {store._in(len(part))}", part)
     out.sort(key=lambda r: (r["doc_date"], r["po_number"], r["item"]))
     return out
+
+
+def lines_other(c, fabric_ids):
+    """The lines of these fabrics stored but counted in no figure (GP, 28 Nov 2026: every row of a purchase file is stored):
+    sample and yardage orders, lines deleted or blocked, other currencies or units, no price; and lines a newer file
+    removed. With the fabric code, the mill, why, oldest first."""
+    out = []
+    for part in _chunks(sorted(set(fabric_ids))):
+        out += _dicts(c, "SELECT l.id, l.po_number, l.item, l.doc_date, l.doc_type, l.qty_m, l.price, l.qty_po, l.price_po, l.currency, l.unit, l.deletion, l.not_counted, "
+                         "l.removed_why, l.supplier, l.fabric_id, f.code AS fabric_code, l.mill_id, m.name AS mill, m.key AS mill_key "
+                         "FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id JOIN mill m ON m.id = l.mill_id "
+                         f"WHERE l.removed_upload_id IS NOT NULL AND l.fabric_id IN {store._in(len(part))}", part)
+    out.sort(key=lambda r: (r["doc_date"] or "", r["po_number"], r["item"]))
+    return out
+
+
+def stored_by_kind(c):
+    """{why: lines} of the lines stored but counted in no figure, with their figures."""
+    return dict(c.all("SELECT coalesce(not_counted, 'Removed by a newer file'), count(*) FROM purchase_line WHERE removed_upload_id IS NOT NULL "
+                      "AND fabric_id IS NOT NULL GROUP BY coalesce(not_counted, 'Removed by a newer file')"))
 
 
 def lines_for_codes(c, codes):

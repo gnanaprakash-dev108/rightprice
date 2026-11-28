@@ -211,8 +211,9 @@ def first_bought(c):
 
 
 def bought(c, codes_):
-    """{fabric code: (lines, metres, orders, last date, last price, fabric id, Fab group id, why not grouped)} for these
-    codes in the purchase history (the lines still counted, ZLOI left out, as every figure)."""
+    """{fabric code: (lines, metres, orders, last date, last price, fabric id, Fab group id, why not grouped, other lines)}
+    for these codes in the purchase history (the lines still counted, ZLOI left out, as every figure; and the other rows of
+    the purchase files stored for it, in no figure)."""
     out = {}
     for part in _chunks(sorted(set(codes_))):
         for code, fid, gid, why in c.all(f"SELECT code, id, fab_group_id, not_grouped FROM fabric WHERE code IN {store._in(len(part))}", part):
@@ -230,7 +231,11 @@ def bought(c, codes_):
             v[3], v[4] = day, float(price)
         for fid, s in orders.items():
             out[ids[fid]][2] = len(s)
-    return {k: tuple(v) for k, v in out.items()}
+        # every other row of the purchase files stored for the code (GP, 28 Nov 2026), counted in no figure
+        for fid, n in c.all(f"SELECT fabric_id, count(*) FROM purchase_line WHERE removed_upload_id IS NOT NULL AND fabric_id IN {store._in(len(part))} "
+                            "GROUP BY fabric_id", part):
+            out[ids[fid]].append(n)
+    return {k: tuple(v) + ((0,) if len(v) == 8 else ()) for k, v in out.items()}
 
 
 def purchase_working(c):

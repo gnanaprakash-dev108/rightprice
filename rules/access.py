@@ -97,6 +97,9 @@ PERMISSIONS = [
      "see the Fab library",
      "Unticked, the Fab library is not offered. The construction it gives still shows in Right cost, on the Fab group pages and "
      "in a fabric's price over time."),
+    ("page:purchase_lines", "Purchase lines: every line of the purchase files, filtered and downloaded (to look at)", "see the purchase lines",
+     "Unticked, Purchase lines is not offered. The lines that count still show in the price popup, on the Fab group pages and in Right "
+     "cost; the others in the price popup and on the Fab group pages."),
     ("page:users", "Users and roles (this page)", "see who may use RightPrice", ""),
     ("do:edit_rates", "Edit rates: rate tables, yarn and cotton prices, Bring in prices", "edit rates", ""),
     ("do:apply_drafts", "Apply mill cost sheet drafts to the rate master", "apply mill cost sheet drafts", ""),
@@ -211,6 +214,13 @@ ROUTES = {
     "GET /api/fab-library/code/{code}": "page:fab_library",
     "GET /api/fab-library/uploads/{upload_id}": "page:fab_library",
     "POST /api/fab-library/upload": "do:upload_fab_library",
+    # every purchase line (GP, 28 Nov 2026); the table of order types and the exchange rates are changed by a rates editor or an admin
+    "GET /api/purchases/lines": "page:purchase_lines",
+    "GET /api/purchases/lines/download": "page:purchase_lines",
+    "GET /api/purchases/order-types": "page:purchase_lines",
+    "POST /api/purchases/order-types": "do:edit_rates",
+    "GET /api/fx-rates": "page:prices",
+    "POST /api/fx-rates": "do:edit_rates",
 }
 
 # what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/pages/<page>.js
@@ -227,7 +237,8 @@ PAGE_USES = {
     "page:list": ["GET /api/meta", "POST /api/list", "POST /api/list/download", "GET /api/template"],
     "page:pack": ["GET /api/meta", "POST /api/pack"],
     "page:prices": ["GET /api/meta", "GET /api/table/{sheet}", "GET /api/dashboard", "GET /api/cotton",
-                    "GET /api/dated-rates", "GET /api/dated-rates/market"],          # stage 5: web/dated.js on Yarn prices
+                    "GET /api/dated-rates", "GET /api/dated-rates/market",          # stage 5: web/dated.js on Yarn prices
+                    "GET /api/fx-rates"],                                           # Prices > Exchange rates (GP, 28 Nov 2026)
     "page:costsheets": ["GET /api/meta", "GET /api/costsheet", "GET /api/costsheet/template"],
     "page:users": ["GET /api/users"],
     # stage 2 (web/purchases.js): the Fab group pages and the price popup; the purchase files page
@@ -235,6 +246,8 @@ PAGE_USES = {
     "page:purchase_files": ["GET /api/purchases/uploads", "GET /api/purchases/uploads/{upload_id}", "GET /api/purchases/skipped/{upload_id}"],
     # the Fab library (web/library.js)
     "page:fab_library": ["GET /api/fab-library", "GET /api/fab-library/search", "GET /api/fab-library/code/{code}", "GET /api/fab-library/uploads/{upload_id}"],
+    # every purchase line (web/purchases.js); the exchange rates on Prices (web/pages/fx.js)
+    "page:purchase_lines": ["GET /api/purchases/lines", "GET /api/purchases/lines/download", "GET /api/purchases/order-types"],
 }
 
 # the AI assistant (the MCP token): a fixed role. Each tool names the address it mirrors (mcp_server.py) and runs only if

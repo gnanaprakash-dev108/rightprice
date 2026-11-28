@@ -34,8 +34,9 @@
     return h("span", { class: "muted" }, g.how === "none yet" ? "No group yet" : "Not grouped: " + String(g.why || "").replace(/^PLM specification /, ""));
   };
   const boughtCell = (code, b) => !b ? h("span", { class: "muted" }, "Not bought") :
-    h("span", { class: "fgcell" }, `${n0(b.lines)} ${b.lines === 1 ? "line" : "lines"}, ${n0(b.metres)} m` + (b.last_price !== null ? `; last Rs ${n2(b.last_price)} on ${day(b.last)}` : ""),
-      popupOk() && b.lines && window.RP_PURCH ? tipOn(h("button", { type: "button", class: "ib pib", onclick: e => { e.stopPropagation(); RP_PURCH.openHistory(code); }, html: svg("chart") }), "Price over time for " + code) : null);
+    h("span", { class: "fgcell" }, `${n0(b.lines)} ${b.lines === 1 ? "line" : "lines"}, ${n0(b.metres)} m` + (b.last_price !== null ? `; last Rs ${n2(b.last_price)} on ${day(b.last)}` : "")
+      + (b.other_lines ? `; ${n0(b.other_lines)} other order ${b.other_lines === 1 ? "line" : "lines"} in no figure` : ""),
+      popupOk() && (b.lines || b.other_lines) && window.RP_PURCH ? tipOn(h("button", { type: "button", class: "ib pib", onclick: e => { e.stopPropagation(); RP_PURCH.openHistory(code); }, html: svg("chart") }), "Price over time for " + code) : null);
 
   // TOO BIG: what a file over the limit is told on the screen at once, before it is sent (as rules/fab_library.py too_big;
   // check_server.py runs this function and compares the two). A .zip is checked by the server as soon as it arrives.
@@ -167,10 +168,11 @@
         h("div", { class: "dicons noprint" }, ib("pdf", "Print this page", () => print()))),
       h("div", { class: "stiles" },
         tile("Fab group", g.code || (g.how === "none yet" ? "None yet" : "Not grouped"), g.code ? (g.how === "construction" ? "its construction is this group's; not bought under this code" : g.name) : g.why, g.code ? "" : "amber"),
-        tile("Purchases", b ? `${n0(b.lines)} ${b.lines === 1 ? "line" : "lines"}` : "Not bought", b ? `${n0(b.metres)} m on ${n0(b.orders)} ${b.orders === 1 ? "order" : "orders"}` + (b.last ? `; last Rs ${n2(b.last_price)} on ${day(b.last)}` : "") : "no purchase of this code is in the purchase history"),
+        tile("Purchases", b ? `${n0(b.lines)} ${b.lines === 1 ? "line" : "lines"}` : "Not bought", b ? `${n0(b.metres)} m on ${n0(b.orders)} ${b.orders === 1 ? "order" : "orders"}` + (b.last ? `; last Rs ${n2(b.last_price)} on ${day(b.last)}` : "")
+          + (b.other_lines ? `; ${n0(b.other_lines)} other order ${b.other_lines === 1 ? "line" : "lines"} (sample, yardage, deleted ...) in no figure` : "") : "no purchase of this code is in the purchase history"),
         tile("Specification from", d.spec_from ? `Upload #${d.spec_from.id}` : "", d.spec_from ? `${day(d.spec_from.at)}${d.spec_from.by ? " by " + d.spec_from.by : ""}` : ""),
         tile("In the latest list", d.in_latest ? "Yes" : "No", d.in_latest ? `upload #${d.latest}` : `last in ${up(d.last_in)}; it keeps that specification`, d.in_latest ? "" : "amber")),
-      h("div", { class: "acts noprint" }, b && b.lines && popupOk() && window.RP_PURCH ? h("button", { type: "button", class: "btn line", onclick: () => RP_PURCH.openHistory(d.code) }, "Price over time") : null,
+      h("div", { class: "acts noprint" }, b && (b.lines || b.other_lines) && popupOk() && window.RP_PURCH ? h("button", { type: "button", class: "btn line", onclick: () => RP_PURCH.openHistory(d.code) }, "Price over time") : null,
         g.code && may("page:groups") ? h("button", { type: "button", class: "btn fill", onclick: () => { location.hash = "#group/" + encodeURIComponent(g.code); } }, `Open Fab group ${g.code}`) : null),
       h("section", { class: "sec" }, h("h2", {}, "Its PLM specification"),
         h("dl", { class: "kv gfields" }, d.values.map(v => [h("dt", {}, v.label), h("dd", {}, String(v.value).trim() ? v.value : h("span", { class: "muted" }, "blank"))])),

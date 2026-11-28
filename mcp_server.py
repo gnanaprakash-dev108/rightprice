@@ -1415,5 +1415,59 @@ def upload_fab_library(file_base64: str, file_name: str) -> dict:
     return dict(out, recorded_as=ASSISTANT, next="fab_library_upload_status with this id says where it stands")
 
 
+
+# ------------------------------------------------------------------ every purchase line, order types, exchange rates (GP, 28 Nov 2026)
+@tool(mirrors="GET /api/purchases/lines")
+def purchase_lines(order_type: str = "", sourcing: str = "", unit: str = "", currency: str = "", mill: str = "", month: str = "",
+                   group: str = "", code: str = "", counts: str = "", page: int = 1, size: int = 100) -> dict:
+    """Every stored line of the purchase files, as Purchase lines shows it, filtered: order_type (Bulk, Letter of intent,
+    Sampling, Stock transfer, Return, Other), sourcing (Domestic or Import), unit (M, KG ...), currency (INR, USD ...), mill
+    (its name), month (YYYY-MM), group (a Fab group code), code (a fabric code), counts ("counts": in the figures; "apart":
+    not). Each line with its SAP type and order type, quantity and unit, price in the PO's currency per its unit, the exchange
+    rate of its month and its price and value in rupees (blank, with why, where no rate is entered), its Fab group and its
+    construction. Only domestic bulk orders per metre count in prices, ranges and verdicts. Changes nothing."""
+    from rules import purchase_lines as pl
+    args = {"order_type": order_type, "sourcing": sourcing, "unit": unit, "currency": currency, "mill": mill, "month": month, "group": group,
+            "code": code, "counts": counts, "page": page, "size": size}
+    return pl.listing({k: v for k, v in args.items() if v not in ("", None)})
+
+
+@tool(mirrors="GET /api/purchases/order-types")
+def order_types() -> dict:
+    """The table of order types (Purchase lines): each SAP purchasing document type, its order type (Bulk counts; ZLOI, a
+    letter of intent, is kept apart; Sampling, Stock transfer, Return, Other are stored and shown, in no figure), where the
+    mapping is from and how many lines have it; and the types the history has that the table does not (Other). Changes nothing."""
+    return _purch()[0].order_types_page()
+
+
+@tool(mirrors="POST /api/purchases/order-types", writes=True)
+def set_order_type(sap_type: str, category: str) -> dict:
+    """Put a SAP purchasing document type in an order type (Bulk, Letter of intent, Sampling, Stock transfer, Return, Other),
+    as Purchase lines does. THIS CHANGES WHAT COUNTS IN EVERY PRICE, RANGE AND VERDICT EVERYONE SEES: the lines of that type
+    are counted again at once (a type moved into Bulk counts from then on). The person must confirm the type and the order
+    type first. Recorded as changed by "AI assistant". [RATE RULE]"""
+    return dict(_purch()[0].set_order_type({"sap_type": sap_type, "category": category}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+@tool(mirrors="GET /api/fx-rates")
+def exchange_rates() -> dict:
+    """The exchange rates by month (Prices > Exchange rates): rupees per unit of each currency, each with its source (the RBI
+    reference rate by default; the rate actually paid where one is entered, which holds for that month), the ones kept but
+    replaced, and the months and currencies the purchase history's import lines need, with or without a rate. Changes nothing."""
+    from rules import fx
+    return fx.rates()
+
+
+@tool(mirrors="POST /api/fx-rates", writes=True)
+def add_exchange_rate(currency: str, month: str, rate: float, source: str = "", note: str = "") -> dict:
+    """Enter an exchange rate, as Prices > Exchange rates does: currency (USD, EUR ...), month (YYYY-MM), rate (rupees per unit
+    of the currency), source ("RBI reference rate", or "rate paid" for the rate actually paid; none: a Placeholder), note
+    (where the figure is from). It takes the place of the month's rate of the same source (kept, marked replaced); a rate
+    paid holds over the RBI rate. THIS CHANGES THE RUPEE PRICES OF IMPORT LINES EVERYONE SEES. RULE: enter a rate only when
+    the person has given it and its source; never make one up. Recorded as entered by "AI assistant". [RATE RULE]"""
+    from rules import fx
+    return dict(fx.add({"currency": currency, "month": month, "rate": rate, "source": source, "note": note}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
 if __name__ == "__main__":
     mcp.run()           # stdio: for an assistant on the same machine as the data

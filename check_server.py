@@ -661,6 +661,8 @@ def main():
         stage2_checks(c, check)         # stage 2: purchase history and Fab groups (last: it loads purchase files)
         period_checks(c, check)         # the usual range over time (GP, 28 Nov 2026): first on the history as it is, then over years
         library_checks(c, check)        # the Fab library (GP, 28 Nov 2026): after stage 2's, which change the deployed extract in memory
+        every_line_checks(c, check)     # every row of a purchase file stored (GP, 28 Nov 2026)
+        every_line_extra_checks(c, check)   # GP's decisions on the stored lines: order types, units, imports and exchange rates, the list
     print("ALL OK" if ok else "SOMETHING FAILED")
     return 0 if ok else 1
 
@@ -1338,13 +1340,19 @@ def stage2_checks(c, check):
               & (po["Currency"] == "INR") & (po["Order Unit"] == "M")]
     counts = c.get("/api/purchases/status").json()["counts"]
     zloi = int((bulk["Purchasing Doc. Type"] == "ZLOI").sum())
+    # every row with its order, item, material, supplier and a document date is stored (GP, 28 Nov 2026); the others left out
+    stored_rows = po[po["Purchasing Document"].notna() & po["Item"].notna() & po["Material"].notna() & po["Name of Supplier"].notna()
+                     & po["Document Date"].notna()].drop_duplicates(["Purchasing Document", "Item"])
     check(f"{k} the purchase file that came with the code loads through the app ({took:.0f} s): the pilot's own bulk lines, every material code once, "
           f"its {zloi} ZLOI lines kept apart; it covers its latest order (23 Nov 2026) up to when SAP saved it (05:48:59 UTC)", real["status"] == "done" and real["rows_total"] == len(po) and real["rows_loaded"] == len(bulk) == 6265
           and real["rows_new"] == 6265 and real["rows_outliers"] == zloi == 1377 and real["file_date"] == "2026-11-23"
           and (real["covers_from"], real["covers_to"], real["saved_at"]) == ("2026-11-22T18:30:00", "2026-11-23T05:48:59", "2026-11-23T05:48:59")
           and c.get("/api/purchases/uploads").json()["shipped"]["loaded"] is True
           and counts["lines"] == counts_before["lines"] + 6265 - zloi and counts["outliers"] == counts_before["outliers"] + zloi
-          and counts["fabrics"] == len(set(bulk["Material"].astype(str).str.strip()) | {a1, a2, b1, inc, "ZZCHECK001"}), str({x: real[x] for x in real if x.startswith(("rows", "file", "covers", "saved"))}))
+          # every row of the file stored (GP, 28 Nov 2026): a fabric for every material of a row with its order, mill and date
+          and counts["fabrics"] == len(set(stored_rows["Material"].astype(str).str.strip()) | {a1, a2, b1, inc, "ZZCHECK001"})
+          and real["rows_other"] == len(stored_rows) - len(bulk) and real["rows_stored"] == len(stored_rows),
+          str({x: real[x] for x in real if x.startswith(("rows", "file", "covers", "saved"))}))
     fab = pd.read_excel(os.path.join(HERE, "pilot", "Pilot_Results.xlsx"), sheet_name="Fabrics")
     with st.tx() as cur:
         got = {code: json.loads(ch) for code, ch in cur.all("SELECT code, choices FROM fabric WHERE choices IS NOT NULL")}
@@ -1361,7 +1369,7 @@ def stage2_checks(c, check):
     bands = [r["Fabric code"] for r in fab.to_dict("records") if r["Fabric code"] not in mine
              and (got.get(r["Fabric code"], {}).get("Rate card quantity"), got.get(r["Fabric code"], {}).get("Order size")) != purchases.quantity_terms(r["Route"], met.get(r["Fabric code"]), m_)]
     check(f"{k} every fabric the pilot costed has the pilot's costing choices here, by pilot.py's own functions; its quantity band and order size from its metres, ZLOI left out ({len(fab)} fabrics)",
-          not differ and not wd and not bands and len([x for x in got if x in set(fab["Fabric code"])]) == len(fab) and len(got) == len(fab), f"{differ[:5]} {wd[:5]} {bands[:5]} {len(got)}")
+          not differ and not wd and not bands and len([x for x in got if x in set(fab["Fabric code"])]) == len(fab), f"{differ[:5]} {wd[:5]} {bands[:5]} {len(got)}")
     check(f"{k} new Fab groups go on from the last code ever given: a merged code is never handed out again",
           new_codes and new_codes[0] == "Fab-0003" and gB not in new_codes, str(new_codes[:3]))
     _stage2_right_cost(c, check, kind, "after the purchase file is loaded", popup=True)
@@ -2003,6 +2011,198 @@ def period_checks(c, check):
                   and r["PO lines"] == len(sep_lines(str(r["Fabric code"]))) for r in some), str(len(in_sep)) + str(len(some)))
 
 
+def every_line_checks(c, check):
+    """Every row of a purchase file stored (GP, 28 Nov 2026): sample and yardage orders, lines deleted in SAP, other currencies
+    and units, no price, each kept with its figures and shown in the price history by its type; only bulk orders (BO, BF) in
+    rupees per metre count in prices, ranges and verdicts, ZLOI kept apart as before; the upload says what was stored and
+    what counts."""
+    import pandas as pd
+    import store
+    if store.get().kind == "files":
+        return
+    k = f"[{store.get().kind}] Every purchase-order line stored:"
+    a1, a2, a3, b1, inc = _stage2_codes()
+    hist = lambda code, **kw: c.get("/api/purchases/history", params=dict(code=code, **kw)).json()
+
+    def wait(uid, limit=300):
+        for _ in range(limit * 4):
+            u = c.get(f"/api/purchases/uploads/{uid}").json()
+            if u["status"] in ("done", "failed"):
+                return u
+            time.sleep(0.25)
+        raise SystemExit(f"upload {uid} was not read in {limit} s")
+    row = lambda po, item, code, typ, price, **kw: dict({"Purchasing Document": float(po), "Item": float(item), "Material": code, "Plant": "F007",
+                                                        "Document Date": pd.Timestamp("2026-11-06"), "Name of Supplier": "1200094    ARVIND LTD",
+                                                        "Order Quantity": 400, "Net Price": price, "Purchasing Doc. Type": typ, "Currency": "INR",
+                                                        "Order Unit": "M", "Short Text": "made up for the checks"}, **kw)
+    before, g0 = hist(a1), None
+    gcode = before["group"]["code"]
+    g0 = c.get(f"/api/groups/{gcode}").json()
+    rc0 = next(r for r in _ready_costs(c)["rows"] if r["source"] == "Purchase orders" and r["code"] == a1)
+    rows = [row(9500000001, 10, a1, "BO", 101), row(9500000002, 10, a1, "BA", 300), row(9500000003, 10, a1, "YB", 520, **{"Order Unit": "KG"}),
+            row(9500000004, 10, a1, "BO", 99, **{"Deletion Indicator": "L"}), row(9500000005, 10, a1, "BO", 1.4, Currency="USD"),
+            row(9500000006, 10, a1, "ZB", None), row(9500000007, 10, a1, "ZLOI", 550), row(9500000008, 10, "", "BO", 100),
+            {"Order Quantity": 9999, "Order Unit": "M"}]
+    u = wait(c.post("/api/purchases/upload", files={"file": ("orders of every kind.xlsx", io.BytesIO(_stage2_file(rows, saved="2026-11-27T13:00:00")))}).json()["id"])
+    det = c.get(f"/api/purchases/uploads/{u['id']}").json()
+    after = hist(a1)
+    oth = {o["po"]: o for o in after["others"]}
+    by_po = lambda po: next((o for o in after["others"] if o["po"] == po), {})
+    check(f"{k} a file's rows are all stored but a total line and a row with no material: the bulk order and the ZLOI line as before; the "
+          "sample order (BA), the yardage order in kilos (YB), the line deleted in SAP, the one in dollars and the one without a price, each "
+          "with its figures; the upload says what was stored and what counts",
+          u["status"] == "done" and u["rows_total"] == 9 and u["rows_stored"] == 7 and u["rows_other"] == 5 and u["rows_loaded"] == 2 and u["rows_outliers"] == 1
+          and {"9500000002", "9500000003", "9500000004", "9500000005", "9500000006"} <= set(oth)
+          and by_po("9500000002")["type"] == "BA" and by_po("9500000002")["price"] == 300 and by_po("9500000002")["plotted"] is True
+          and by_po("9500000003")["unit"] == "KG" and by_po("9500000003")["plotted"] is False and by_po("9500000004")["deletion"] == "L"
+          and by_po("9500000005")["currency"] == "USD" and by_po("9500000006")["price"] is None
+          and dict(det["summary"]["other_by_kind"]) == {"Not a bulk order": 3, "Deleted or blocked in SAP": 1, "Not in rupees": 1}
+          and sum(1 for s in det["skipped"] if s.get("stored")) == 5 and sum(1 for s in det["skipped"] if not s.get("stored")) == 2,
+          str({x: u.get(x) for x in ("status", "error", "rows_total", "rows_stored", "rows_other", "rows_loaded", "rows_outliers")}) + str(sorted(oth))
+          + str(det["summary"].get("other_by_kind")))
+    g1 = c.get(f"/api/groups/{gcode}").json()
+    want = fab_groups_range = None
+    from rules import fab_groups
+    want = fab_groups.price_range([(l["price"], l["po"]) for l in g1["lines"] if l["inside"]])
+    rc1 = next(r for r in _ready_costs(c)["rows"] if r["source"] == "Purchase orders" and r["code"] == a1)
+    metres = sum(l["metres"] for l in after["lines"])
+    paid = round(sum(l["metres"] * l["price"] for l in after["lines"]) / metres, 2)
+    check(f"{k} only the bulk order counts: the code's purchases gain the one at Rs 101, its group's range rests on the bulk orders alone, "
+          "Right cost's price paid and metres are its bulk orders' (none of the sample's Rs 300, the dollars, the kilos or the deleted line)",
+          len(after["lines"]) == len(before["lines"]) + 1 and any(l["po"] == "9500000001" for l in after["lines"])
+          and not any(l["po"] in oth for l in after["lines"]) and g1["range"] == want and g1["purchases"] == g0["purchases"] + 1
+          and rc1["po_lines"] == rc0["po_lines"] + 1 and abs(rc1["metres"] - metres) < 1e-6 and abs(rc1["price"] - paid) < 0.01
+          and any(o["po"] == "9500000007" for o in after["outliers"]) and g1["others_count"] >= 5 and dict(g1["others_by_kind"]).get("Not a bulk order", 0) >= 3,
+          str({x: rc1.get(x) for x in ("po_lines", "metres", "price")}) + f" want {metres} {paid}")
+    xl = c.get(f"/api/purchases/skipped/{u['id']}")
+    sheet = pd.read_excel(io.BytesIO(xl.content))
+    check(f"{k} the download of the rows not counted says which were stored (shown in the price history) and which left out",
+          xl.status_code == 200 and len(sheet) == 7 and (sheet["Stored"] == "left out").sum() == 2 and "Not counted" in sheet.columns)
+    # a newer file: the sample order turns into a bulk order (it counts now); the bulk order at 101 is deleted (stored, in no figure)
+    newer = [row(9500000001, 10, a1, "BO", 101, **{"Deletion Indicator": "L"}), row(9500000002, 10, a1, "BO", 104)]
+    u2 = wait(c.post("/api/purchases/upload", files={"file": ("orders of every kind, later.xlsx", io.BytesIO(_stage2_file(newer, saved="2026-11-28T01:00:00")))}).json()["id"])
+    later = hist(a1)
+    oth2 = {o["po"]: o for o in later["others"]}
+    check(f"{k} a newer file's word: a sample order now a bulk order counts (Rs 104); a bulk order now deleted is stored with its figures, in no figure",
+          u2["status"] == "done" and any(l["po"] == "9500000002" and l["price"] == 104 for l in later["lines"]) and "9500000002" not in oth2
+          and oth2.get("9500000001", {}).get("deletion") == "L" and oth2["9500000001"]["price"] == 101 and not any(l["po"] == "9500000001" for l in later["lines"]),
+          str(sorted(oth2)) + str(u2.get("error")))
+
+
+def every_line_extra_checks(c, check):
+    """GP's decisions of 28 Nov 2026 on every stored line: the order types' table (seeded from the data, corrected by a rates
+    editor or an admin, the lines counted again at once; a type not in it is Other and listed); domestic or import; a yard
+    converted to metres exactly and counted; per kg apart with its own figures (no should-cost per kg); imports in rupees on
+    their month's exchange rate (the RBI rate, the rate paid in its place; nothing made up: blank with why); the Purchase
+    lines page filtered and paged on the server, downloaded as filtered."""
+    import pandas as pd
+    import store
+    from rules import fab_groups, fx, purchases
+    kind = store.get().kind
+    k = f"[{kind}] Every purchase-order line stored:"
+    if kind == "files":
+        r = [c.get("/api/purchases/lines"), c.get("/api/fx-rates"), c.post("/api/fx-rates", json={"currency": "USD", "month": "2026-09", "rate": 88}),
+             c.get("/api/purchases/order-types")]
+        check(f"{k} on the files store the lines, the order types and the exchange rates say plainly they need the database (503)",
+              all(x.status_code == 503 for x in r), str([x.status_code for x in r]))
+        return
+    a1, a2, a3, b1, inc = _stage2_codes()
+
+    def wait(uid, limit=300):
+        for _ in range(limit * 4):
+            u = c.get(f"/api/purchases/uploads/{uid}").json()
+            if u["status"] in ("done", "failed"):
+                return u
+            time.sleep(0.25)
+        raise SystemExit(f"upload {uid} was not read in {limit} s")
+    row = lambda po, code, typ, price, **kw: dict({"Purchasing Document": float(po), "Item": 10.0, "Material": code, "Plant": "F007",
+                                                  "Document Date": pd.Timestamp("2026-10-07"), "Name of Supplier": "1203290    NSL TEXTILES LIMITED",
+                                                  "Order Quantity": 100, "Net Price": price, "Purchasing Doc. Type": typ, "Currency": "INR",
+                                                  "Order Unit": "M", "Short Text": "made up for the checks"}, **kw)
+    hist = lambda code: c.get("/api/purchases/history", params={"code": code}).json()
+    before = hist(a2)
+    rows = [row(9300000001, a2, "BO", 100, **{"Order Unit": "YD"}), row(9300000002, a2, "BO", 420, **{"Order Unit": "KG"}),
+            row(9300000003, a2, "BO", 4.4, Currency="USD"), row(9300000004, a2, "ZQX", 101), row(9300000005, a2, "BA", 250)]
+    u = wait(c.post("/api/purchases/upload", files={"file": ("orders in yards, kilos, dollars.xlsx", io.BytesIO(_stage2_file(rows, saved="2026-11-27T14:00:00")))}).json()["id"])
+    det = c.get(f"/api/purchases/uploads/{u['id']}").json()
+    after = hist(a2)
+    yd = next((l for l in after["lines"] if l["po"] == "9300000001"), {})
+    kg = after["per_kg"]
+    imp = next((o for o in after["others"] if o["po"] == "9300000003"), {})
+    oth = next((o for o in after["others"] if o["po"] == "9300000004"), {})
+    check(f"{k} a bulk order in yards counts, converted to metres exactly (100 yd = 91.44 m at Rs 100 a yard = Rs 109.36 a metre); one per kg "
+          "is kept apart with its own per-kg figures (no should-cost per kg yet); one in dollars is an import, apart; a SAP type not in the "
+          "table (ZQX) is Other and the upload lists it",
+          u["status"] == "done" and yd.get("metres") == 91.44 and yd.get("price") == 109.36 and len(after["lines"]) == len(before["lines"]) + 1
+          and kg["lines"] >= 1 and "no should-cost per kg" in kg["should"] and imp.get("sourcing") == "Import" and imp.get("import") is True
+          and oth.get("order_type") == "Other" and dict(det["summary"]["unknown_types"]).get("ZQX") == 1,
+          str({"yd": yd, "kg": kg, "imp": {x: imp.get(x) for x in ("sourcing", "import", "price_rs", "rate_why")}, "unknown": det["summary"].get("unknown_types")})[:600])
+    check(f"{k} an import line's rupee price is blank, and says why, while its month has no exchange rate (nothing is made up)",
+          imp.get("price_rs") is None and "no exchange rate for USD in Oct 2026" in (imp.get("rate_why") or "") and after["imports"]["no_rate"] >= 1, str(imp)[:300])
+    # exchange rates: the RBI rate, then the rate paid in its place, then an RBI rate again that does not undo it
+    fxp = lambda **kw: c.post("/api/fx-rates", json=kw)
+    bad = [fxp(currency="INR", month="2026-10", rate=1, source="RBI reference rate"), fxp(currency="USD", month="2026/10", rate=88),
+           fxp(currency="USD", month="2099-01", rate=88), fxp(currency="USD", month="2026-10", rate=0.001), fxp(currency="USD", month="2026-10", rate=88, source="a guess")]
+    r1 = fxp(currency="USD", month="2026-10", rate=88.25, source="RBI reference rate", note="RBI, Oct 2026 average").json()
+    with_rbi = next(o for o in hist(a2)["others"] if o["po"] == "9300000003")
+    r2 = fxp(currency="USD", month="2026-10", rate=88.9, source="rate paid", note="bank advice").json()
+    r3 = fxp(currency="USD", month="2026-10", rate=88.4, source="RBI reference rate").json()
+    with_paid = next(o for o in hist(a2)["others"] if o["po"] == "9300000003")
+    rates = c.get("/api/fx-rates").json()
+    oct_ = [x for x in rates["rates"] if x["currency"] == "USD" and x["month"] == "2026-10"]
+    check(f"{k} exchange rates: refused for INR, a month that is not one or is to come, a rate that cannot be right, a source that is neither; "
+          "the RBI rate converts the import line (4.4 USD at 88.25 = Rs 388.30); the rate paid takes its place (Rs 391.16), the RBI rate kept; "
+          "a later RBI rate is kept, replacing the earlier, but the rate paid still holds",
+          all(x.status_code == 400 for x in bad) and r1["in_force"] and with_rbi["price_rs"] == 388.3 and with_rbi["rate"] == 88.25
+          and r2["in_force"] and r3["in_force"] is False and r3["replaced"] == 1 and with_paid["price_rs"] == 391.16
+          and [(x["rate"], x["source"], x["in_force"]) for x in oct_] == [(88.25, "RBI reference rate", False), (88.9, "rate paid", True), (88.4, "RBI reference rate", False)]
+          and not any(x["currency"] == "USD" and x["month"] == "2026-10" and x["rate"] is None for x in rates["needed"]),
+          str([x.status_code for x in bad]) + str(r1) + str(with_rbi.get("price_rs")) + str(with_paid.get("price_rs")) + str(oct_)[:300])
+    ph = fxp(currency="EUR", month="2026-10", rate=97.5).json()
+    check(f"{k} a rate entered with no source counts as a Placeholder (rule 4)", ph["source"] == "Placeholder" and ph["in_force"], str(ph))
+    # the order types: a sampling order put in Bulk counts at once, and back
+    types = c.get("/api/purchases/order-types").json()
+    seeded = {t["sap_type"]: t["category"] for t in types["types"]}
+    n0_ = len(hist(a2)["lines"])
+    to_bulk = c.post("/api/purchases/order-types", json={"sap_type": "BA", "category": "Bulk"}).json()
+    n1_ = len(hist(a2)["lines"])
+    back = c.post("/api/purchases/order-types", json={"sap_type": "BA", "category": "Sampling"}).json()
+    n2_ = len(hist(a2)["lines"])
+    by = store.get()._read(lambda cur: cur.one("SELECT basis, changed_at FROM order_type WHERE sap_type = 'BA'"))
+    check(f"{k} the order types' table is seeded from the data (BO and BF Bulk, ZLOI a letter of intent, BA Sampling, YB ZB UB1 UB UBRF stock "
+          "transfers, RK Return), each marked as read from the data; a type put in Bulk counts at once (its lines count), put back it does not; "
+          "the change is recorded; a type not in the table is listed as Other",
+          seeded == purchases.SEED_TYPES and all(t["basis"].startswith("Read from the data") for t in types["types"] if t["sap_type"] != "BA")
+          and to_bulk["lines_now_counted"] >= 1 and n1_ > n0_ and n2_ == n0_ and by[0] == "Set by a person"
+          and any(x["sap_type"] == "ZQX" for x in types["not_in_table"]) and c.post("/api/purchases/order-types", json={"sap_type": "BA", "category": "Samples"}).status_code == 400,
+          f"{n0_} {n1_} {n2_} {to_bulk} {back}")
+    # the Purchase lines page: filtered and paged on the server, downloaded as filtered
+    L = lambda **kw: c.get("/api/purchases/lines", params=kw).json()
+    every = L(size=500)
+    one = L(code=a2)
+    imports = L(sourcing="Import", code=a2)
+    per_kg = L(unit="KG", code=a2)
+    other = L(order_type="Other")
+    p2 = L(page=2, size=10)
+    p1 = L(page=1, size=10)
+    dl = c.get("/api/purchases/lines/download", params={"code": a2})
+    sheet = pd.read_excel(io.BytesIO(dl.content))
+    with store.get().tx() as cur:
+        n_all = cur.one("SELECT count(*) FROM purchase_line WHERE fabric_id IS NOT NULL AND doc_date IS NOT NULL")[0]
+        n_code = cur.one("SELECT count(*) FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id WHERE f.code = %s AND l.doc_date IS NOT NULL", (a2,))[0]
+    row_imp = next((r for r in imports["rows"] if r["po"] == "9300000003"), {})
+    check(f"{k} Purchase lines: every stored line ({n_all:,}), filtered on the server by code, mode of sourcing, unit and order type, paged "
+          "(page 2 follows page 1), each with its SAP and order type, quantity and unit, price in its currency, the month's rate and its rupee "
+          "price and value, Fab group and construction; the Excel download has what is filtered",
+          every["total"] == n_all and one["total"] == n_code and all(r["code"] == a2 for r in one["rows"]) and imports["total"] >= 1
+          and row_imp.get("rate") == 88.9 and row_imp.get("price_rs") == 391.16 and row_imp.get("value_rs") == 39116.0 and per_kg["total"] >= 1
+          and all(r["unit"] == "KG" for r in per_kg["rows"]) and any(r["sap_type"] == "ZQX" for r in other["rows"])
+          and p1["rows"] and p2["rows"] and not ({(r["po"], r["item"]) for r in p1["rows"]} & {(r["po"], r["item"]) for r in p2["rows"]})
+          and dl.status_code == 200 and len(sheet) == n_code and "Price Rs (per unit)" in sheet.columns and one["rows"][0].get("construction")
+          and c.get("/api/purchases/lines", params={"month": "May"}).status_code == 400,
+          str({"all": (every["total"], n_all), "code": (one["total"], n_code), "imp": row_imp, "sheet": len(sheet)})[:600])
+
+
 # ===================================================================== stage 5: dated yarn rates
 def _ready_costs(c, until=lambda d: True):
     for _ in range(600):            # Right cost works its verdicts out in the background
@@ -2355,7 +2555,8 @@ def front_end_calls(routes):
     popup = part("the price popup", "#group/")
     per.setdefault("page:rightcost", set()).update(popup)
     per.setdefault("page:groups", set()).update(popup | part("#group/", "#purchase-files"))
-    per.setdefault("page:purchase_files", set()).update(part("#purchase-files", "what the shell sees"))
+    per.setdefault("page:purchase_files", set()).update(part("#purchase-files", "#purchase-lines"))
+    per.setdefault("page:purchase_lines", set()).update(part("#purchase-lines", "what the shell sees"))      # every purchase line (GP, 28 Nov 2026)
     # the Fab library, web/library.js: its page (the price popup it opens is purchases.js's, which needs page:groups or page:rightcost)
     per.setdefault("page:fab_library", set()).update(calls(read("library.js")))
     dj = read("dated.js")           # stage 5: the Yarn prices card (page:prices) and Bring in prices' dated step (do:edit_rates)
@@ -2862,7 +3063,13 @@ def assistant_files_checks():
                     (call("find_in_fab_library", search="x"), web("GET", "/api/fab-library/search", params={"q": "x", "limit": 20})),
                     (call("fab_library_upload_status", upload_id=1), web("GET", "/api/fab-library/uploads/1")),
                     (call("upload_fab_library", file_base64=base64.b64encode(b"x").decode(), file_name="list.csv"),
-                     c.post("/api/fab-library/upload", headers=gp, files={"file": ("list.csv", io.BytesIO(b"x"))}))]
+                     c.post("/api/fab-library/upload", headers=gp, files={"file": ("list.csv", io.BytesIO(b"x"))})),
+                    # every purchase line, the order types, the exchange rates (GP, 28 Nov 2026)
+                    (call("purchase_lines"), web("GET", "/api/purchases/lines", params={"page": 1, "size": 100})),
+                    (call("order_types"), web("GET", "/api/purchases/order-types")),
+                    (call("set_order_type", sap_type="BA", category="Bulk"), web("POST", "/api/purchases/order-types", json={"sap_type": "BA", "category": "Bulk"})),
+                    (call("exchange_rates"), web("GET", "/api/fx-rates")),
+                    (call("add_exchange_rate", currency="USD", month="2026-10", rate=88), web("POST", "/api/fx-rates", json={"currency": "USD", "month": "2026-10", "rate": 88}))]
         check(tag + "Users and roles, dated rates, the purchase history (stage 2) and the Fab library need the database: refused on the files in the screen's own words",
               all(same_refusal(m, w) and "DATABASE_URL" in m["error"] for m, w in need_db), str([m.get("error", "")[:80] for m, _ in need_db]))
     for k in ("RIGHTPRICE_MCP_TOKEN", "RIGHTPRICE_ADMINS"):
@@ -2993,7 +3200,10 @@ def assistant_checks():
                   "merge_fab_groups": "POST /api/groups/merge", "unmerge_fab_group": "POST /api/groups/unmerge",
                   # the Fab library (GP, 28 Nov 2026)
                   "fab_library_code": "GET /api/fab-library/code/{code}", "find_in_fab_library": "GET /api/fab-library/search",
-                  "fab_library_upload_status": "GET /api/fab-library/uploads/{upload_id}", "upload_fab_library": "POST /api/fab-library/upload"}
+                  "fab_library_upload_status": "GET /api/fab-library/uploads/{upload_id}", "upload_fab_library": "POST /api/fab-library/upload",
+                  # every purchase line, the order types and the exchange rates (GP, 28 Nov 2026)
+                  "purchase_lines": "GET /api/purchases/lines", "order_types": "GET /api/purchases/order-types", "set_order_type": "POST /api/purchases/order-types",
+                  "exchange_rates": "GET /api/fx-rates", "add_exchange_rate": "POST /api/fx-rates"}
         check(tag + "Each tool mirrors the route it really does the work of (pinned here, so a tool cannot quietly name a weaker address; a new "
                     "tool adds its line)", dict(mirrors) == PINNED,
               str({k: (mirrors.get(k), PINNED.get(k)) for k in set(mirrors) | set(PINNED) if mirrors.get(k) != PINNED.get(k)}))
@@ -3779,6 +3989,24 @@ def assistant_checks():
               and lm["codes_same"] == 301 and lw["uploaded_by"] == "gp@example.com" and lm["uploaded_by"] == AI and st_lm == st_lw and code_m == code_w
               and code_m["code"] == "ZZAI0001" and len(code_m["values"]) == 26 and find_m == find_w and find_m["results"][0]["code"] == "ZZAI0001"
               and same_refusal(bad_m, bad_w) and fab_library.source() == lm["id"], str(lib_m)[:200] + str(lm)[:200] + str(bad_m)[:200])
+        # every purchase line, the order types and the exchange rates (GP, 28 Nov 2026), each tool beside its web route
+        fx_w = web("POST", "/api/fx-rates", json={"currency": "USD", "month": "2026-10", "rate": 88.1, "source": "RBI reference rate"}).json()
+        fx_m = call("add_exchange_rate", currency="USD", month="2026-10", rate=88.6, source="rate paid", note="bank advice")
+        fx_bad = (call("add_exchange_rate", currency="INR", month="2026-10", rate=1), web("POST", "/api/fx-rates", json={"currency": "INR", "month": "2026-10", "rate": 1}))
+        rates_m, rates_w = call("exchange_rates"), web("GET", "/api/fx-rates").json()
+        by_ = sql("SELECT source, entered_by FROM fx_rate WHERE currency = 'USD' AND month = '2026-10-01' ORDER BY id")
+        ot_m = call("set_order_type", sap_type="ZQY", category="Sampling")
+        ot_w = web("POST", "/api/purchases/order-types", json={"sap_type": "ZQZ", "category": "Return"}).json()
+        types_m, types_w = call("order_types"), web("GET", "/api/purchases/order-types").json()
+        set_by = dict((t, b) for t, b in sql("SELECT sap_type, changed_by FROM order_type WHERE sap_type IN ('ZQY', 'ZQZ')"))
+        lines_m, lines_w = call("purchase_lines", sourcing="Import", size=20), web("GET", "/api/purchases/lines", params={"sourcing": "Import", "size": 20}).json()
+        check(tag + "add_exchange_rate enters a rate as Prices > Exchange rates does (the rate paid holds over the RBI rate), entered by \"AI "
+                    "assistant\" where the page records the admin; set_order_type puts a SAP type in an order type as Purchase lines does; the reading "
+                    "tools read what the pages read; a refusal is in the page's words",
+              fx_m.get("in_force") is True and fx_m.get("source") == "rate paid" and [tuple(r) for r in by_] == [("RBI reference rate", "gp@example.com"), ("rate paid", AI)]
+              and same_refusal(*fx_bad) and rates_m == rates_w and ot_m.get("category") == "Sampling" and ot_w.get("category") == "Return"
+              and set_by == {"ZQY": AI, "ZQZ": "gp@example.com"} and types_m == types_w and lines_m == lines_w,
+              str(fx_m)[:200] + str(set_by) + str(fx_bad[0])[:100])
 
         # every tool that only reads, called for real, watched: the store does not move
         fresh_tok = call("intake_file", file_base64=b64(csv), file_name="list.csv")["token"]
@@ -3789,7 +4017,8 @@ def assistant_checks():
                 "cost_template_file": {"file_base64": b64(tpl), "file_name": "t.xlsx"}, "dated_rates": {}, "dated_market_preview": {},
                 "intake_map_columns": {"token": fresh_tok, "table": sheet, "count_column": "Count", "rate_column": "Rate"},
                 "purchase_upload_status": {"upload_id": m_up["id"]}, "fab_library_upload_status": {"upload_id": lm["id"]},
-                "fab_library_code": {"code": "ZZAI0001"}, "find_in_fab_library": {"search": "zzai"}}
+                "fab_library_code": {"code": "ZZAI0001"}, "find_in_fab_library": {"search": "zzai"},
+                "purchase_lines": {"sourcing": "Import", "size": 20}, "order_types": {}, "exchange_rates": {}}
         read_only = {n for n in names if ann[n].get("readOnlyHint")}
         errs = {n: str(call(n, **READ.get(n, {})).get("error"))[:80] for n in sorted(read_only & set(READ))}
         changing = {n for n in names if ann[n].get("destructiveHint") and not ann[n].get("readOnlyHint")}

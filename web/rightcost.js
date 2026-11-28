@@ -313,8 +313,9 @@ function openFly(name, anchor, hover, keep) {
       h("div", { class: "g" }, "Settings"),
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
       can("page:prices") ? [link("Calculation settings", "#settings"), link("Rate tables", "#rates")] : null,
-      canAny("page:groups", "page:purchase_files", "page:fab_library") ? h("div", { class: "g" }, "Purchase history") : null,      // stage 2: web/purchases.js
+      canAny("page:groups", "page:purchase_files", "page:fab_library", "page:purchase_lines") ? h("div", { class: "g" }, "Purchase history") : null,      // stage 2: web/purchases.js
       can("page:groups") ? link("Fab groups", "#groups") : null, can("page:fab_library") ? link("Fab library", "#fab-library") : null,   // web/library.js
+      can("page:purchase_lines") ? link("Purchase lines", "#purchase-lines") : null,         // every purchase line (GP, 28 Nov 2026)
       can("page:purchase_files") ? link("Purchase files", "#purchase-files") : null,
       h("div", { class: "g" }, "Account"), profileExtras(),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
@@ -627,6 +628,7 @@ function renderSupplier(main) {
       B.rows.length > shown.length ? h("p", { class: "noprint" }, h("button", { type: "button", class: "btn line", onclick: () => { sp.all = true; render(); } }, `Show all ${n0(B.rows.length)} (the ${shown.length} with the most money above the range are shown)`)) : null,
       B.rows.length > shown.length ? h("p", { class: "muted printonly" }, `The ${shown.length} purchases with the most money above the range are printed, of ${n0(B.rows.length)}.`) : null) : null,
     typeof RP_PURCH !== "undefined" && (d.outliers || []).length ? h("section", { class: "sec" }, RP_PURCH.outliers(d.outliers, "this mill", true)) : null,      // stage 2
+    typeof RP_PURCH !== "undefined" && (d.imports || []).length ? h("section", { class: "sec rp-purch" }, RP_PURCH.imports(d.imports, "this mill")) : null,      // imports, apart (GP, 28 Nov 2026)
     h("p", { class: "muted", style: "margin-top:18px" }, "Quotes: should-cost and verdicts on today's rates. " + (B.rates && B.rates.text ? B.rates.text + " " : "") + "“Above the usual range” is the price less the top of the range for that fabric type, times the metres; it is counted only where the tool is sure of the fabric."));
 }
 function renderSelbar() {

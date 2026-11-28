@@ -30,18 +30,34 @@
   history of Aug to Nov 2026 nothing changes today (checked: every page's figures as before; the brief says "bought in the
   last 12 months").
 
-## Asked 28 Nov 2026 (the Fab library): built one way meanwhile, each can be changed
+- **Every row of a purchase file stored** (GP's decisions, 28 Nov 2026): every row with its order, item, fabric code, mill and
+  date is kept with its figures. Each line carries its SAP type and its **order type** (Bulk: BO, BF; Letter of intent: ZLOI,
+  kept apart as before; Sampling: BA; Stock transfer: YB, ZB, UB1, UB, UBRF; Return: RK; Other), from a table seeded with these
+  and marked as read from the data, which a rates editor or an admin corrects on Purchase lines (the lines of a type changed
+  are counted again at once; a type not in the table is Other and is listed on the upload: ZSRO, SC, NB, ZJRO, ZINC and ZSYM
+  in the real files); its **mode of sourcing** (Domestic: INR; Import: any other currency); its **unit** (a yard or a
+  centimetre converted to metres exactly, 0.9144 and 0.01, and said; per kg; PC and others kept apart as they are); and its
+  **price in three columns**: in the PO's currency per its unit, the order month's exchange rate, and in rupees (price and
+  value). What counts: domestic bulk orders per metre, in the woven figures, as before. Imports are kept apart, shown converted
+  on the price popup's chart, the Fab group page and the mill's page, marked "Import, USD", never in a rupee range or verdict.
+  Domestic bulk lines per kg have their own per-kg figures (median, usual range, never mixed with metres); no should-cost per
+  kg yet (GP will give the logic). Left out, not stored, only: total lines, a row repeated in the same file, a row with no
+  material or no supplier, a date that cannot be read. The upload's page says how many rows were stored, how many count, how
+  many are ZLOI and how many are in no rupees-per-metre figure, by why. **Purchase lines** (under Purchase history) lists every
+  stored line with these columns, its Fab group and its construction from the Fab library, filtered on each (order type, mode
+  of sourcing, unit, currency, mill, month, Fab group, code), paged and filtered on the server, downloaded to Excel as filtered.
+  None of the real files has a bulk rupee line in yards or centimetres, so the conversion changes no figure today.
 
-L-1. **A code missing from a later list** (a list of part of the codes, or a code taken out of the PLM): built as **kept with the
-     specification it had**, its page saying it is not in the latest list (as a purchase line not in a newer file is kept).
-     1. Keep it (as now, recommended: a part list then corrects without removing). 2. Take it out of the library at the next
-     full list (the purchase history keeps the specification it was grouped by). 3. Keep it, and list such codes on the
-     upload's page for an admin.
-L-2. **The 12 months: rolling or calendar?** Built as **rolling, ending today** (29 Nov 2025 to 28 Nov 2026); the slider then
-     chooses whole months. 1. Rolling (as now). 2. The last 12 whole months (Dec 2025 to Nov 2026, this month included).
-     3. The last 12 complete months (Nov 2025 to Oct 2026).
-L-3. **The AI assistant's upload of the list** takes the file as base64 in the chat, at most 25 MB, so it is sent zipped (the
-     real list is 3.7 MB zipped). 1. As now (recommended). 2. Raise the assistant's limit for this one tool.
+## Answered 28 Nov 2026 (the Fab library)
+
+- L-1. **A code missing from a later list keeps its last specification** (GP: as built). The Fab library page says which list it
+  was last seen in, and that it is not in the latest list.
+- L-2. **The 12 months are rolling, ending today** (GP: as built): 29 Nov 2025 to 28 Nov 2026 today; the slider chooses whole months.
+- L-3. **The AI assistant's upload of the list stays at 25 MB** (GP: keep as now): the list is sent zipped (3.7 MB).
+- **Exchange rates** (GP, 28 Nov): the RBI (FBIL) reference rate, the month's average, by default; the rate actually paid, where a
+  person enters it for a month, takes its place for that month (the RBI rate kept, marked replaced). No per-line override.
+  GP is getting the RBI monthly figures for Nov 2025 to Nov 2026; until they are entered the table is empty and an import
+  line's rupee price is blank, with why.
 
 ## Answered 28 Nov 2026 (the AI assistant, MCP)
 

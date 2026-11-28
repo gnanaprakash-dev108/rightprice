@@ -648,7 +648,8 @@ def _card(row, bought, groups, by_rest):
     b = bought
     return {"code": row["code"], "construction": _construction(s), "product": " · ".join(x for x in (s.get("productgroup_name"), s.get("productsubcategory_name")) if x),
             "group": _group_of(row, b, groups, by_rest), "not_grouped": row["not_grouped"],
-            "bought": None if b is None else {"lines": b[0], "metres": round(b[1], 2), "orders": b[2], "last": b[3], "last_price": None if b[4] is None else round(b[4], 2)},
+            "bought": None if b is None else {"lines": b[0], "metres": round(b[1], 2), "orders": b[2], "last": b[3], "last_price": None if b[4] is None else round(b[4], 2),
+                                              "other_lines": b[8]},
             "upload_id": row["upload_id"]}
 
 

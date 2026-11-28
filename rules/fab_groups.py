@@ -550,13 +550,59 @@ def _line(r):
             "mill_key": r["mill_key"], "metres": round(float(r["qty_m"]), 2), "price": round(float(r["price"]), 2), "type": r["doc_type"]}
 
 
+def other_line(r, types=None, rates=None):
+    """A stored line that counts in no rupees-per-metre figure (GP, 28 Nov 2026), as the price history shows it: its SAP type and
+    order type, mode of sourcing, quantity in its unit, price in its currency per its unit, the exchange rate of its month and
+    its price in rupees (blank, with why, where no rate is entered), and why it is not counted."""
+    from rules import fx, purchases
+    types = types if types is not None else purchases.order_types()
+    why = r["not_counted"] or "Removed by a newer file"
+    detail = (r["removed_why"] or "").split(": ", 1)[-1]
+    cur, unit = (r["currency"] or "").upper(), (r["unit"] or "").upper()
+    price_po, qty_po = r.get("price_po"), r.get("qty_po")
+    if price_po is None and r.get("price") is not None and cur in ("", "INR"):
+        price_po = r["price"]                    # a line stored before the units were kept: rupees per metre
+    if qty_po is None and r.get("qty_m") is not None:
+        qty_po = r["qty_m"]
+    rate, rate_why = fx.rate_for(cur or "INR", r["doc_date"], rates) if price_po else (None, "no price on the line")
+    rs = None if rate is None or price_po is None else round(float(price_po) * rate, 2)
+    per_m = purchases.TO_METRES.get(unit or "M")
+    per_kg = (why == "Not per metre" and unit == "KG" and cur == "INR" and bool(price_po) and float(price_po) > 0 and bool(qty_po) and float(qty_po) > 0)
+    imported = why == "Not in rupees" and bool(price_po) and float(price_po) > 0
+    return {"date": r["doc_date"], "po": r["po_number"], "item": r["item"], "code": r["fabric_code"], "mill": r["mill"], "mill_key": r["mill_key"],
+            "type": r["doc_type"] or "", "order_type": types.get(r["doc_type"] or "", "Other"), "sourcing": "Domestic" if cur in ("", "INR") else "Import",
+            "qty": None if qty_po is None else round(float(qty_po), 2), "unit": unit, "price": None if price_po is None else round(float(price_po), 4),
+            "currency": cur, "rate": rate if cur not in ("", "INR") else None, "rate_why": rate_why if cur not in ("", "INR") else None,
+            "price_rs": rs, "value_rs": None if rs is None or qty_po is None else round(rs * float(qty_po), 0),
+            "price_rs_m": None if rs is None or not per_m else round(rs / per_m, 2), "deletion": r["deletion"] or "", "why": why, "detail": detail,
+            "per_kg": per_kg, "import": imported,
+            # on the chart beside the purchases (by its type) where it reads as rupees per metre
+            "plotted": rs is not None and bool(per_m) and rs > 0}
+
+
+def apart(others, p):
+    """What is kept apart from the rupee-per-metre figures, worked out in the period p: the domestic bulk lines per kg (their
+    own per-kg figures: GP, 28 Nov 2026; no should-cost per kg yet) and the import lines (converted on their month's rate)."""
+    kg = [o for o in others if o["per_kg"] and in_period(o["date"], p)]
+    rng = price_range([(o["price"], o["po"]) for o in kg])
+    if rng.get("enough"):
+        rng["above"] = sum(1 for o in kg if o["price"] > rng["upper"])
+    imp = [o for o in others if o["import"]]
+    return {"per_kg": {"lines": len(kg), "kg": round(sum(o["qty"] or 0 for o in kg), 2), "orders": len({o["po"] for o in kg}), "range": rng,
+                       "should": "no should-cost per kg yet (GP will give the logic for fabrics bought by weight)"},
+            "imports": {"lines": len(imp), "in_period": sum(1 for o in imp if in_period(o["date"], p)),
+                        "currencies": sorted({o["currency"] for o in imp}), "no_rate": sum(1 for o in imp if o["price_rs"] is None),
+                        "note": "Imports are shown converted to rupees on their order month's exchange rate, apart: never in the rupee usual ranges or verdicts."}}
+
+
 def gather(c, gid, groups):
     """Inside a transaction: what history() needs of one group (gid: the group it counts as now)."""
     member_ids = _members(groups, gid)
     fabs = dp.fabrics(c, group_ids=member_ids)
     ids = [f["id"] for f in fabs.values()]
     return {"gid": gid, "groups": groups, "member_ids": member_ids, "fabs": fabs, "lines": dp.lines(c, ids),
-            "outliers": dp.lines(c, ids, outliers=True), "moves": dp.regroups(c, member_ids), "renames": dp.group_changes(c, member_ids)}
+            "outliers": dp.lines(c, ids, outliers=True), "moves": dp.regroups(c, member_ids), "renames": dp.group_changes(c, member_ids),
+            "others": dp.lines_other(c, ids)}
 
 
 def history(got, p=None):
@@ -568,6 +614,9 @@ def history(got, p=None):
     on its order month as Right cost costs it, whatever the period."""
     gid, groups, member_ids, fabs, every = got["gid"], got["groups"], got["member_ids"], got["fabs"], got["lines"]
     p = p or period()
+    from rules import fx, purchases
+    types_, rates_ = purchases.order_types(), fx.table()
+    others_ = [other_line(r, types_, rates_) for r in got.get("others", [])]
     lines = [r for r in every if in_period(r["doc_date"], p)]
     g = groups[gid]
     rng = price_range([(r["price"], r["po_number"]) for r in lines])
@@ -632,6 +681,13 @@ def history(got, p=None):
             "range": rng, "min_for_range": MIN_FOR_RANGE, "mills": mills_, "lines": [dict(_line(r), inside=in_period(r["doc_date"], p)) for r in every], "above": above,
             "above_rs": round(sum(a["above_rs"] for a in above), 0), "fabrics": fab_rows,
             "outliers": [_line(r) for r in got["outliers"]],
+            # every other row of the purchase files stored for these codes (GP, 28 Nov 2026), in no figure: by why, and the
+            # newest few hundred
+            "others": others_[-300:][::-1],
+            "others_count": len(others_),
+            **apart(others_, p),
+            "others_by_kind": sorted(((k, sum(1 for r in got.get("others", []) if (r["not_counted"] or "Removed by a newer file") == k))
+                                      for k in {r["not_counted"] or "Removed by a newer file" for r in got.get("others", [])}), key=lambda x: -x[1]),
             "moved_in": [{"code": m["code"], "from": name(m["from_group_id"]), "why": m["why"], "at": m["at"]} for m in got["moves"]
                          if m["to_group_id"] in members and m["from_group_id"] not in members],
             "moved_out": [{"code": m["code"], "to": name(m["to_group_id"]), "why": m["why"], "at": m["at"]} for m in got["moves"]

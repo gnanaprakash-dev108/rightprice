@@ -57,7 +57,7 @@ DESK, PHONE = {"width": 1366, "height": 900}, {"width": 390, "height": 844}
 # the pages of the shell: address, the heading it shows
 PAGES = [("dashboard", "Dashboard"), ("pilot", "Pilot results"), ("yarn", "Yarn prices"), ("cotton", "Cotton prices"),
          ("intake", "Bring in prices"), ("rates", "Rate tables"), ("ratecard", "Mill rate card"), ("settings", "Calculation settings"),
-         ("costsheets", "Mill cost sheets")]
+         ("costsheets", "Mill cost sheets"), ("fx", "Exchange rates")]
 POPUP_TABS = [("cost", "Create cost"), ("bulk", "Bulk upload"), ("compare", "Compare"), ("pack", "Negotiation pack")]
 # the colours each theme gives (computed): the page's background, a page's text, a card
 THEME = {"light": ("rgb(246, 244, 238)", "rgb(29, 37, 33)", "rgb(255, 255, 255)"), "dark": ("rgb(15, 21, 19)", "rgb(232, 237, 233)", "rgb(22, 30, 27)")}
@@ -94,7 +94,8 @@ NEEDS = {"dashboard": "page:dashboard", "pilot": "page:pilot", "yarn": "page:pri
          "rightcost": "page:rightcost", "item": "page:rightcost", "supplier": "page:rightcost", "users": "page:users",
          "cost": "page:cost", "compare": "page:cost", "bulk": "page:list", "pack": "page:pack",
          "group": "page:groups", "groups": "page:groups", "purchase-files": "page:purchase_files",         # stage 2 (web/purchases.js)
-         "fab-library": "page:fab_library"}                                                                # the Fab library (web/library.js)
+         "fab-library": "page:fab_library",                                                               # the Fab library (web/library.js)
+         "purchase-lines": "page:purchase_lines", "fx": "page:prices"}                                     # every purchase line; Prices > Exchange rates
 # what the menus offer: the Prices links, the sections' tabs above a page, the popup's tabs
 OFFERED = """() => [...CONFIG.flyouts.prices.groups.flatMap(g => g[1]).map(x => x[1].slice(1)).filter(x => !x.startsWith('lib/')),
     ...Object.values(CONFIG.sections).flat(), ...CONFIG.popupTabs.map(t => t[0])]"""
@@ -461,7 +462,8 @@ def main():
                 check(f"The Fab library: a code's page, its 26 values and its Fab group ({look})", good,
                       "" if good else f"{page.url} {page.locator('.main .gfields dt').count()} values, sideways {wide}, colours {got}, console {page.errors[:3]}")
                 page.context.close()
-                for addr, title, sel in (("groups", "Fab groups", ".main .toolbar"), ("purchase-files", "Purchase files", ".main .stiles")):
+                for addr, title, sel in (("groups", "Fab groups", ".main .toolbar"), ("purchase-files", "Purchase files", ".main .stiles"),
+                                         ("purchase-lines", "Purchase lines", ".main .plfilters")):
                     page = tab(theme, size)
                     open_at(page, addr, None)
                     page.wait_for_selector(sel)
@@ -470,7 +472,9 @@ def main():
                     wide = page.evaluate(SIDEWAYS, ".main") if size is PHONE else [0, ""]
                     hue, got = stage2_colours(page, theme, ".main", ".main .stile" if addr != "groups" else None)
                     good = (page.inner_text(".main .ptitle") == title and page.title() == title + " - RightPrice" and not page.errors and wide[0] <= 1 and hue
-                            and (page.inner_text(".main .toolbar .count") == f"{n_groups:,} groups" if addr == "groups" else page.locator(".main .grid .upst.done").count() >= 1))
+                            and (page.inner_text(".main .toolbar .count") == f"{n_groups:,} groups" if addr == "groups"
+                                 else " lines of " in page.inner_text(".main .toolbar .count") and page.locator(".main .grid tbody tr").count() >= 10 if addr == "purchase-lines"
+                                 else page.locator(".main .grid .upst.done").count() >= 1))
                     check(f"Stage 2: {title} opens ({look})", good, "" if good else f"{page.title()!r}, sideways {wide}, colours {got}, console {page.errors[:3]}")
                     page.context.close()
 
@@ -894,6 +898,34 @@ def main():
                   page.inner_text(".pdialog .phead h2") == "Price over time: " + code and page.locator(".pdialog .pchart svg circle.dotm").count() >= 1 and not page.errors,
                   str(page.errors[:3]))
             page.context.close()
+            # every row of a purchase file stored (GP, 28 Nov 2026): a code with sample or yardage orders (or deleted lines) shows them
+            # in its price popup by type, in no figure, those in rupees per metre as hollow dots; Purchase files says what was stored
+            gp_ = app.api(f"/api/groups/{rich['group']}")
+            with_other = next((o["code"] for o in gp_.get("others", []) if o.get("plotted")), None) or next((o["code"] for o in gp_.get("others", [])), None)
+            if with_other is None:          # the busiest group has none: any code of the history that has one
+                for g_ in app.api("/api/groups")["groups"][:200]:
+                    page_ = app.api(f"/api/groups/{g_['code']}")
+                    if page_.get("others"):
+                        with_other = page_["others"][0]["code"]
+                        break
+            hx = app.api(f"/api/purchases/history?code={with_other}") if with_other else {"others": []}
+            page = tab()
+            open_at(page, "dashboard", ".pgbox > .pg")
+            page.evaluate("c => RP_PURCH.openHistory(c)", with_other)
+            page.wait_for_selector(".pdialog .othl tbody tr")
+            rows_o = page.locator(".pdialog .othl tbody tr").count()
+            hollow = page.locator(".pdialog .pchart circle.dotm.oth").count()
+            plotted = sum(1 for o in hx["others"] if o["plotted"])
+            open_at(page, "purchase-files", None)
+            page.wait_for_selector(".main .grid tbody tr")
+            page.click(".main .grid tbody tr button.code:has-text('#')")
+            page.wait_for_selector(".main .updetail h3")
+            stored_words = page.inner_text(".main .updetail")
+            check("Every purchase-order line stored: a code's price popup lists its other order lines (sample, yardage, deleted ...) by type, in no "
+                  "figure, and draws those in rupees per metre as hollow dots; an upload's page says how many rows were stored and how many count",
+                  with_other and rows_o == len(hx["others"]) and (hollow >= 1) == (plotted >= 1) and "Stored: " in stored_words and "in no figure" in stored_words
+                  and not page.errors, f"{with_other} {rows_o}/{len(hx['others'])} hollow {hollow} plotted {plotted} {page.errors[:3]}")
+            page.context.close()
             # the Fab library: a code found, its page, its Fab group; a list uploaded from the page and read in the background
             page = tab()
             open_at(page, "fab-library", None)
@@ -1040,6 +1072,8 @@ def main():
                 seen["merge groups"] = at("groups", ".main .toolbar").locator("xpath=..").locator(".mergerow").count() > 0          # stage 2
                 seen["purchase upload"] = at("purchase-files", ".main .stiles").locator("xpath=..").locator(".uprow input[type=file]").count() > 0
                 seen["library upload"] = at("fab-library", ".main .rp-lib .stiles").locator("xpath=..").locator(".uprow input[type=file]").count() > 0   # the Fab library
+                seen["order types"] = at("purchase-lines", ".main .plfilters").locator("xpath=..").locator("select[aria-label^='Order type of']").count() > 0
+                seen["exchange rate entry"] = at("fx").locator("#fx-rate").count() > 0
                 page.context.close()
                 return seen, page.refused + page.errors
 
@@ -1047,7 +1081,8 @@ def main():
             addresses = [(a, a, ".pgbox > .pg") for a, _ in PAGES] + [("rightcost", "rightcost", ".grid tbody tr td .code"),
                          ("item", where["item"], ".dhead h1"), ("supplier", where["supplier"], ".dhead h1"), (None, "lib/Payment terms", ".main .title"),
                          ("users", "users", ".main .ua-card"), ("group", where["group"], ".main .dhead h1"), ("groups", "groups", ".main .toolbar"),
-                         ("purchase-files", "purchase-files", ".main .stiles"), ("fab-library", "fab-library", ".main .rp-lib .stiles")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
+                         ("purchase-files", "purchase-files", ".main .stiles"), ("fab-library", "fab-library", ".main .rp-lib .stiles"),
+                         ("purchase-lines", "purchase-lines", ".main .plfilters")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
 
             def walk(who):
                 """Every address as this person, each from a fresh load: what the role may open draws, what it may not says so
@@ -1077,7 +1112,7 @@ def main():
                     if addr == "dashboard":
                         page.wait_for_function("() => typeof RPA !== 'undefined' && !!RPA.me")
                         menus = set(page.evaluate(OFFERED))
-                        want = {a for a in ["dashboard", "pilot", "yarn", "cotton", "intake", "rates", "ratecard", "costsheets", "settings", "cost", "bulk", "compare", "pack"] if may(a)}
+                        want = {a for a in ["dashboard", "pilot", "yarn", "cotton", "intake", "rates", "ratecard", "costsheets", "settings", "fx", "cost", "bulk", "compare", "pack"] if may(a)}
                         if menus != want:
                             wrong.append(f"the menus offer {sorted(menus - want)} too, and not {sorted(want - menus)}")
                 page.context.close()
@@ -1086,7 +1121,7 @@ def main():
             want = {"Viewer": set(), "Buyer": {"mark seen", "list upload", "list remove", "add to list", "cost sheet upload"}}
             want["Rates editor"] = want["Admin"] = {"edit rates", "bring in prices", "dated rate entry", "rate tables edit", "add cotton", "cost sheet upload",
                                                     "apply drafts", "mark seen", "list upload", "list remove", "add to list", "intake page",
-                                                    "merge groups", "purchase upload", "library upload"}
+                                                    "merge groups", "purchase upload", "library upload", "order types", "exchange rate entry"}
             for who, role in people:
                 seen, refused = offered(who)
                 got = {k for k, v in seen.items() if v}

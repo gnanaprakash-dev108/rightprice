@@ -81,7 +81,38 @@ VENDOR_NO = re.compile(r"^\d+\s+")
 # a newer file showing a line like this removes it from what was bought
 REMOVING = {"Deleted or blocked in SAP", "Not a bulk order", "Not in rupees", "Not per metre", "No price", "No quantity"}
 need_db = fab_groups.need_db
-Line = namedtuple("Line", "row po item date type code supplier qty price")
+Line = namedtuple("Line", "row po item date type code supplier qty price unit qty_po price_po", defaults=("M", None, None))
+# qty and price of a Line are in metres and rupees per metre (a yard or a centimetre converted exactly: GP, 28 Nov 2026);
+# unit, qty_po and price_po are as the file gives them
+# a row stored though it counts in no figure (GP, 28 Nov 2026: every row of a purchase file is stored): a sample or yardage
+# order, a line deleted or blocked, another currency or unit, no price or quantity; kind: why, in a few words
+Other = namedtuple("Other", "row po item date type code supplier qty price currency unit deletion kind")
+# the order types (GP, 28 Nov 2026): SAP's purchasing document type and what it is, kept in the table order_type (seeded with
+# these, read from the data; corrected on Purchase lines). Bulk counts; ZLOI, a letter of intent, is kept apart as before; a
+# type not in the table is Other, and the upload lists it
+CATEGORIES = ("Bulk", "Letter of intent", "Sampling", "Stock transfer", "Return", "Other")
+SEED_TYPES = {"BO": "Bulk", "BF": "Bulk", "ZLOI": "Letter of intent", "BA": "Sampling", "YB": "Stock transfer", "ZB": "Stock transfer",
+              "UB1": "Stock transfer", "UB": "Stock transfer", "UBRF": "Stock transfer", "RK": "Return"}
+TO_METRES = {"M": 1.0, "YD": 0.9144, "CM": 0.01}     # exact: a yard is 0.9144 m by definition
+
+
+def order_types(c=None):
+    """{SAP type: order type} from the table (a database), else the seed."""
+    st = store.get()
+    if st.kind == "files":
+        return dict(SEED_TYPES)
+
+    def read(cur):
+        return dict(cur.all("SELECT sap_type, category FROM order_type"))
+    try:
+        return read(c) if c is not None else st._read(read)
+    except store.StoreUnavailable:
+        return dict(SEED_TYPES)
+
+
+def counted_types(types):
+    """The SAP types whose lines are kept (they count, or as ZLOI are kept apart): the Bulk ones, and ZLOI where it is a letter of intent."""
+    return {t for t, cat in types.items() if cat == "Bulk"} | {t for t in OUTLIER_TYPES if types.get(t) == "Letter of intent"}
 
 
 def _now():
@@ -289,9 +320,10 @@ class Read:
         self.latest = self.report = None         # its latest document date, any row; a report date it carries
         self.future = []                         # rows dated in the future (after it was uploaded): not used to date it
         self.dating = {}
+        self.unknown_types = {}                  # SAP types not in the table of order types (Other): listed on the upload
 
 
-def read_po_file(data, filename="", at=None):
+def read_po_file(data, filename="", at=None, types=None):
     """Read a purchase-order file row by row (little memory, whatever its size). Refused when it is not a workbook in the
     SAP export's shape. `at`: when it was uploaded, UTC (else now). A document date after the upload's day in India
     cannot be real (a mistyped year): it would otherwise date the file after every export saved before that day. Such
@@ -317,7 +349,8 @@ def read_po_file(data, filename="", at=None):
                                       f"column{'s' if len(missing) > 1 else ''} {', '.join(missing)} {'are' if len(missing) > 1 else 'is'} missing. "
                                       "It needs the SAP columns Purchasing Document, Item, Document Date, Material, Short Text, Order "
                                       "Quantity, Order Unit, Net Price, Name of Supplier, Currency, Purchasing Doc. Type and Deletion Indicator.")
-        bulk, first, names = set(pilot.BULK_TYPES), {}, {}
+        types = types if types is not None else dict(SEED_TYPES)
+        bulk, first, names = counted_types(types), {}, {}
         text_col = col.get("Short Text")
         report_col = next((i for h, i in col.items() if h.lower() in REPORT_COLUMNS), None)
         for n, values in enumerate(rows):
@@ -329,11 +362,11 @@ def read_po_file(data, filename="", at=None):
             po, item = _text_id(get("Purchasing Document")), _text_id(get("Item"))
             material = "" if _blank(get("Material")) else str(get("Material")).strip()
 
-            def skip(kind, why):
+            def skip(kind, why, stored=False):
                 if len(out.skipped) < MAX_LISTED:
-                    out.skipped.append((row, po, item, material, kind, why))
+                    out.skipped.append((row, po, item, material, kind, why, stored))
                 else:
-                    out.skipped.append((None, None, None, None, kind, None))       # counted, not listed
+                    out.skipped.append((None, None, None, None, kind, None, stored))       # counted, not listed
             if not po or not item:
                 skip("No order number", "No order number or item: a total line or an empty row")
                 continue
@@ -344,6 +377,8 @@ def read_po_file(data, filename="", at=None):
             first[(po, item)] = row
             text = lambda c: "" if _blank(get(c)) else str(get(c)).strip()
             dtype, flag, cur, unit = text("Purchasing Doc. Type"), text("Deletion Indicator"), text("Currency"), text("Order Unit")
+            if dtype not in types:
+                out.unknown_types[dtype] = out.unknown_types.get(dtype, 0) + 1
             price, qty = _number(get("Net Price")), _number(get("Order Quantity"))
             supplier = text("Name of Supplier")
             day, day_why = _date(get("Document Date"))
@@ -360,11 +395,12 @@ def read_po_file(data, filename="", at=None):
             if flag:
                 why = ("Deleted or blocked in SAP", f"Deletion indicator {flag} in SAP ({'deleted' if flag == 'L' else 'blocked' if flag == 'S' else 'marked'})")
             elif dtype not in bulk:
-                why = ("Not a bulk order", f"Order type {dtype or '(blank)'} is not a bulk order (bulk: {', '.join(pilot.BULK_TYPES)})")
+                cat = types.get(dtype, "Other")
+                why = ("Not a bulk order", f"Order type {dtype or '(blank)'}: {cat if cat != 'Other' else 'not in the table of order types (Other)'}, not a bulk order")
             elif cur != "INR":
-                why = ("Not in rupees", f"Priced in {cur or '(no currency)'}, not rupees")
-            elif unit != "M":
-                why = ("Not per metre", f"Ordered in {unit or '(no unit)'}, not metres")
+                why = ("Not in rupees", f"Priced in {cur or '(no currency)'}: an import, kept apart from the rupee figures")
+            elif unit not in TO_METRES:
+                why = ("Not per metre", f"Ordered per {unit or '(no unit)'}" + (": per kg, its own per-kg figures" if unit == "KG" else ", not metres: kept apart"))
             elif price is None or price <= 0:
                 why = ("No price", "No net price")
             elif qty is None or qty <= 0:
@@ -376,12 +412,23 @@ def read_po_file(data, filename="", at=None):
             elif day is None:
                 why = ("Date not read", day_why)
             if why:
-                skip(*why)
+                # stored all the same (GP, 28 Nov 2026), shown in the price history by its type, in no figure: what a line needs
+                # to be shown is its fabric, its mill and its date
+                stored = why[0] in REMOVING and bool(material and supplier and day)
+                skip(*why, stored=stored)
                 if why[0] in REMOVING:
-                    out.removing.append((po, item, why[1]))
+                    other = None
+                    if stored:
+                        other = Other(row, po, item, day, dtype, names.setdefault(material, material), names.setdefault(supplier, supplier),
+                                      qty, price, cur or None, unit or None, flag or None, why[0])
+                        st_ = "" if text_col is None or _blank(values[text_col] if text_col < len(values) else None) else str(values[text_col]).strip()
+                        if st_ and material not in out.texts:
+                            out.texts[material] = ((day, po, item), st_)
+                    out.removing.append((po, item, why[1], other))
                 continue
             supplier = names.setdefault(supplier, supplier)            # one string per spelling, not one per line
-            out.kept.append(Line(row, po, item, day, dtype, names.setdefault(material, material), supplier, qty, price))
+            f_ = TO_METRES[unit]                                       # a yard or a centimetre: converted to metres exactly
+            out.kept.append(Line(row, po, item, day, dtype, names.setdefault(material, material), supplier, qty * f_, price / f_, unit, qty, price))
             st = "" if text_col is None or _blank(values[text_col] if text_col < len(values) else None) else str(values[text_col]).strip()
             if st:
                 k = (day, po, item)
@@ -675,7 +722,7 @@ def _load(st, uid):
     with _job_tx(st, KIND) as c:            # a fresh start (also after a restart): this upload's own evidence is written again
         data, up = dp.upload_file(c, uid), dp.upload(c, uid)
         dp.forget_evidence(c, uid)
-    rd = read_po_file(data or b"", up["filename"], utc_of(up["uploaded_at"]))
+    rd = read_po_file(data or b"", up["filename"], utc_of(up["uploaded_at"]), types=order_types())
     data = None
     name, dating_ = up["filename"], rd.dating
     kinds = {}
@@ -683,13 +730,13 @@ def _load(st, uid):
         kinds[s[4]] = kinds.get(s[4], 0) + 1
     _status(uid, step="Matching the mills", rows_total=rd.total, rows_skipped=len(rd.skipped),
             rows_outliers=sum(1 for l in rd.kept if l.type in OUTLIER_TYPES), **{k: v for k, v in dating_.items() if k != "notes"},
-            skipped=[{"row": s[0], "po": s[1], "item": s[2], "material": s[3], "kind": s[4], "why": s[5]} for s in rd.skipped if s[0] is not None])
+            skipped=[{"row": s[0], "po": s[1], "item": s[2], "material": s[3], "kind": s[4], "why": s[5], "stored": s[6]} for s in rd.skipped if s[0] is not None])
     at = _now()
 
     # mills: one each, every spelling kept
     with _job_tx(st, KIND) as c:
         known, held = dp.aliases(c), dp.mills(c)
-        spellings = sorted({l.supplier for l in rd.kept})
+        spellings = sorted({l.supplier for l in rd.kept} | {o.supplier for *_, o in rd.removing if o})
         new_sp = [s for s in spellings if s not in known]
         plain = lambda s: VENDOR_NO.sub("", s).strip()
         learned = mills.mill_aliases({plain(s) for s in set(known) | set(spellings)})
@@ -722,7 +769,8 @@ def _load(st, uid):
     # fabrics: one per material code; then every fabric's Fab group worked out again (new codes placed, corrected ones
     # moved, a group whose codes' specification was corrected renamed), each change recorded
     first = {}
-    for l in rd.kept:
+    others = [o for *_, o in rd.removing if o]           # rows stored though they count in no figure (GP, 28 Nov 2026)
+    for l in list(rd.kept) + others:
         k = (l.date, l.po, l.item)
         if l.code not in first or k < first[l.code]:
             first[l.code] = k
@@ -762,7 +810,8 @@ def _load(st, uid):
             add, change, touch, disagree = [], [], [], []
             for l in part:
                 line = {"po_number": l.po, "item": l.item, "doc_date": l.date, "doc_type": l.type, "fabric_id": fabric_id[l.code],
-                        "mill_id": mill_of[l.supplier], "supplier": l.supplier, "qty_m": float(l.qty), "price": float(l.price),
+                        "mill_id": mill_of[l.supplier], "supplier": l.supplier, "qty_m": float(l.qty), "price": float(l.price), "unit": l.unit or "M",
+                        "qty_po": float(l.qty_po if l.qty_po is not None else l.qty), "price_po": float(l.price_po if l.price_po is not None else l.price),
                         "upload_id": uid, "state_upload_id": uid, "state_from": me[1], "state_to": me[2], "state_saved": me[3]}
                 old = have.get((l.po, l.item))
                 if old is None:                 # never held: taken, whatever other files have of its order (GP, 28 Nov 2026)
@@ -803,18 +852,36 @@ def _load(st, uid):
     # lines this file shows as no longer bought (deleted, blocked, not bulk, not rupees ...): removed where it is newer,
     # and marked where no file has given them yet, so an older file does not bring them back. A line simply not in a file
     # is never taken as cancelled (GP, 28 Nov 2026): the history keeps it.
+    # Each such row is stored with its figures (GP, 28 Nov 2026: every row of a purchase file is stored), and shown in the
+    # price history by its type; it counts in no figure.
+    def figures(o_, why):
+        f_ = TO_METRES.get(o_.unit or "")              # metres and rupees per metre where the unit and currency allow it
+        return {"po_number": o_.po, "item": o_.item, "doc_date": o_.date, "doc_type": o_.type or None, "fabric_id": fabric_id[o_.code],
+                "mill_id": mill_of[o_.supplier], "supplier": o_.supplier, "qty_m": None if o_.qty is None or not f_ else float(o_.qty) * f_,
+                "price": None if o_.price is None or not f_ or o_.currency != "INR" else float(o_.price) / f_,
+                "qty_po": None if o_.qty is None else float(o_.qty), "price_po": None if o_.price is None else float(o_.price),
+                "currency": o_.currency, "unit": o_.unit, "deletion": o_.deletion,
+                "not_counted": o_.kind, "removed_why": f"{name}: {why}", "upload_id": uid, "state_upload_id": uid, "state_from": me[1],
+                "state_to": me[2], "state_saved": me[3]}
+    n["other_new"] = 0
     for i in range(0, len(rd.removing), CHUNK):
         part = rd.removing[i:i + CHUNK]
         with _job_tx(st, KIND) as c:
-            have = dp.lines_by_key(c, [(po, item) for po, item, _ in part])
-            gone, touch, marks, disagree = [], [], [], []
-            for po, item, why in part:
+            have = dp.lines_by_key(c, [(po, item) for po, item, _, _ in part])
+            gone, touch, marks, disagree, stored, refig = [], [], [], [], [], []
+            for po, item, why, o_ in part:
+                fig = None if o_ is None else figures(o_, why)
                 old = have.get((po, item))
                 if old is None:
-                    marks.append((po, item, f"{name}: {why}", me))
+                    if fig:
+                        stored.append(fig)              # stored with its figures, in no figure
+                    else:
+                        marks.append((po, item, f"{name}: {why}", me))
                     continue
                 o, by = vs(old)
                 if o > 0:
+                    if fig:
+                        refig.append(dict(fig, id=old["id"]))       # this newer file's figures, still in no figure
                     if old["removed_upload_id"] is None:
                         gone.append((f"{name}: {why}", old["id"]))
                         touched.add(old["fabric_id"])
@@ -829,13 +896,18 @@ def _load(st, uid):
                 elif o < 0 and by == "saved" and old["removed_upload_id"] is None:
                     count(lost, old["state_upload_id"])
             dp.add_marks(c, marks)
+            dp.add_other_lines(c, stored)
             dp.remove_lines(c, gone, me)
             dp.touch_lines(c, touch)
+            dp.set_other_figures(c, refig)
             dp.add_disagreements(c, uid, disagree)
             n["removed"] += len(gone)
             n["listed"] += len(disagree)
+            n["other_new"] += len(stored)
     _status(uid, step="Working out the costing choices", rows_removed=n["removed"], rows_dropped=0, rows_disagree=n["disagree"],
-            rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"])
+            rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"],
+            # what was stored (every row of the file that has its order, fabric, mill and date: GP, 28 Nov 2026) and what counts
+            rows_stored=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"] + len(others), rows_other=len(others))
 
     # the costing choices of every fabric of this file, or whose lines or specification changed, that are not worked out
     # on what they rest on now (its metres, which set the quantity band; its specification; the rate master's lists). Not
@@ -861,6 +933,11 @@ def _load(st, uid):
                    "not_grouped": sorted(not_grouped.items(), key=lambda x: -x[1]), "grouped": grouped, "costed": costed,
                    "regrouped": sum(1 for m_ in rg["moves"] if m_[1] != m_[2]), "respecified": len(rg["respecified"]), "renamed": len(rg["renamed"]),
                    "disagreements": n["listed"], "listed": min(len(rd.skipped), MAX_LISTED),
+                   # the rows stored though they count in no figure, by why, and how many of them were new to the history
+                   "other_by_kind": sorted(((k_, sum(1 for o_ in others if o_.kind == k_)) for k_ in {o_.kind for o_ in others}), key=lambda x: -x[1]),
+                   "other_new": n["other_new"],
+                   # SAP types not in the table of order types: Other, listed for an admin to put in it (Purchase lines)
+                   "unknown_types": sorted(rd.unknown_types.items(), key=lambda x: -x[1]),
                    # rows dated in the future: kept as they are, not used to date the file
                    "changed_lines": changed_lines, "dating_notes": dating_["notes"], "future_count": len(rd.future), "future": [{"row": r_[0], "po": r_[1], "item": r_[2], "material": r_[3], "date": r_[4]} for r_ in rd.future[:300]]}
         # which uploads the saved date decided against, with when each was saved, for the upload's page
@@ -1073,8 +1150,9 @@ def skipped_download(uid):
     if up is None:
         raise common.Refused(404, "No such upload.")
     df = pd.DataFrame([{"Row": s["row"], "Purchasing Document": s["po"], "Item": s["item"], "Material": s["material"],
-                        "Left out": s["kind"], "Why": s["why"]} for s in up["skipped"]],
-                      columns=["Row", "Purchasing Document", "Item", "Material", "Left out", "Why"])
+                        "Not counted": s["kind"], "Why": s["why"], "Stored": "stored, shown in the price history" if s.get("stored") else "left out"}
+                       for s in up["skipped"]],
+                      columns=["Row", "Purchasing Document", "Item", "Material", "Not counted", "Why", "Stored"])
     buf = io.BytesIO()
     df.to_excel(buf, index=False)
     return common.Download(buf.getvalue(), f"Rows left out of upload {up['id']}.xlsx")
@@ -1099,6 +1177,8 @@ def history(code, frm=None, to=None):
         own = dp.lines(c, [fab["id"]])
         lines = [fab_groups._line(r) for r in own]
         outliers = [fab_groups._line(r) for r in dp.lines(c, [fab["id"]], outliers=True)]
+        types_ = order_types(c)
+        others_rows = dp.lines_other(c, [fab["id"]])
         groups = dp.groups(c)
         gid = fab_groups.final(groups, fab["fab_group_id"]) if fab["fab_group_id"] is not None else None
         got = fab_groups.gather(c, gid, groups) if gid is not None else None
@@ -1106,7 +1186,12 @@ def history(code, frm=None, to=None):
     grp = fab_groups.history(got, p) if got is not None else None
     should, why, on = fab_groups.shoulds({code: fab}, own)[code]          # on its order month's yarn rates, as in Right cost
     s = fab_groups.short_spec(fab["spec"]) if fab["spec"] else {}
-    out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "should": should, "should_why": why, "should_on": on,
+    from rules import fx
+    rates_ = fx.table()
+    others = [fab_groups.other_line(r, types_, rates_) for r in others_rows]
+    out = {"code": code, "description": fab["description"], "lines": lines, "outliers": outliers, "others": others[-300:][::-1], "others_count": len(others),
+           **fab_groups.apart(others, p),
+           "should": should, "should_why": why, "should_on": on,
            "metres": round(sum(x["metres"] for x in lines), 2), "orders": len({x["po"] for x in lines}),
            "period": p, "months": fab_groups.months_held(first_, last_),
            "in_period": (lambda ls: {"lines": len(ls), "metres": round(sum(x["metres"] for x in ls), 2), "orders": len({x["po"] for x in ls}),
@@ -1423,3 +1508,114 @@ def outliers_for_mill(key):
     _, _, zl = bought_lines()
     return [_outlier(code, po, item, day, sup, qty, price) for code, po, item, day, typ, sup, qty, price in reversed(zl)
             if mills.mill_key(VENDOR_NO.sub("", sup).strip()) == key]
+
+
+# ------------------------------------------------------------------ the order types (GP, 28 Nov 2026)
+def classify(dtype, flag, cur, unit, price, qty, types):
+    """Why a line counts in no rupees-per-metre figure, as read_po_file says it: (kind, words), or None when it counts (a
+    bulk order, or ZLOI kept apart, in rupees, per metre or converted to metres, priced, with a quantity)."""
+    if flag:
+        return "Deleted or blocked in SAP", f"Deletion indicator {flag} in SAP"
+    if dtype not in counted_types(types):
+        cat = types.get(dtype, "Other")
+        return "Not a bulk order", f"Order type {dtype or '(blank)'}: {cat if cat != 'Other' else 'not in the table of order types (Other)'}, not a bulk order"
+    if (cur or "") != "INR":
+        return "Not in rupees", f"Priced in {cur or '(no currency)'}: an import, kept apart from the rupee figures"
+    if (unit or "") not in TO_METRES:
+        return "Not per metre", f"Ordered per {unit or '(no unit)'}"
+    if price is None or price <= 0:
+        return "No price", "No net price"
+    if qty is None or qty <= 0:
+        return "No quantity", "No order quantity"
+    return None
+
+
+def order_types_page():
+    """The table of order types on Purchase lines: each SAP type, its order type, where the mapping is from, and how many
+    lines of the purchase history have it; and the types the history has that the table does not (Other)."""
+    st = need_db()
+    with st.tx() as c:
+        rows = c.all("SELECT sap_type, category, basis, changed_by, changed_at FROM order_type ORDER BY sap_type")
+        n = dict(c.all("SELECT coalesce(doc_type, ''), count(*) FROM purchase_line WHERE fabric_id IS NOT NULL GROUP BY coalesce(doc_type, '')"))
+    held = {r[0] for r in rows}
+    return {"categories": list(CATEGORIES), "types": [{"sap_type": t, "category": cat, "basis": b, "changed_by": by, "changed_at": at, "lines": n.get(t, 0)}
+                                                       for t, cat, b, by, at in rows],
+            "not_in_table": [{"sap_type": t, "lines": k} for t, k in sorted(n.items(), key=lambda x: -x[1]) if t not in held],
+            "rule": "Only Bulk counts in prices, ranges and verdicts (domestic, per metre); ZLOI, a letter of intent, is kept apart; every "
+                    "other order type is stored and shown by its type, in no figure. A type not in the table is Other."}
+
+
+def set_order_type(payload, who=""):
+    """An admin or rates editor puts a SAP type in an order type ({sap_type, category}). The lines of that type are counted
+    again on it at once (a type moved into Bulk counts from now on; one moved out of it, in no figure), and their fabrics'
+    costing choices worked out again. An action of do:edit_rates."""
+    st = need_db()
+    p = payload or {}
+    t = str(p.get("sap_type") or "").strip().upper()
+    cat = str(p.get("category") or "").strip()
+    if not re.fullmatch(r"[A-Z0-9]{1,8}", t):
+        raise common.Refused(400, "Give the SAP purchasing document type as it is written (BO, BA, YB ...).")
+    hit = next((x for x in CATEGORIES if x.lower() == cat.lower()), None)
+    if hit is None:
+        raise common.Refused(400, "The order type is one of " + ", ".join(CATEGORIES) + ".")
+    with st.tx(write=KIND) as c:
+        old = c.one("SELECT category FROM order_type WHERE sap_type = %s", (t,))
+        if old:
+            c.run("UPDATE order_type SET category = %s, basis = %s, changed_by = %s, changed_at = %s WHERE sap_type = %s",
+                  (hit, "Set by a person", who or "", _now(), t))
+        else:
+            c.run("INSERT INTO order_type (sap_type, category, basis, changed_by, changed_at) VALUES (%s, %s, %s, %s, %s)", (t, hit, "Set by a person", who or "", _now()))
+    moved = recount(t)
+    return {"sap_type": t, "category": hit, "was": old[0] if old else "Other (not in the table)", "lines_now_counted": moved["counted"],
+            "lines_now_apart": moved["apart"], "recorded_as": who or ""}
+
+
+def recount(sap_type):
+    """The lines of one SAP type counted again on the table of order types, from what is stored of each (its type,
+    deletion indicator, currency, unit, price and quantity as its newest file gave them). A line removed by a newer file
+    without figures of its own (or settled so) is left as it is."""
+    st = store.get()
+    types = order_types()
+    with st.tx() as c:
+        rows = c.all("SELECT id, doc_date, doc_type, deletion, currency, unit, qty_po, price_po, removed_upload_id, not_counted, state_upload_id, fabric_id "
+                     "FROM purchase_line WHERE fabric_id IS NOT NULL AND doc_type = %s", (sap_type,))
+    to_count, to_apart, touched = [], [], set()
+    for i, day, dtype, flag, cur, unit, qty, price, removed, kind, state_uid, fid in rows:
+        if removed is not None and kind is None:
+            continue                            # removed by a newer file (or settled): stays as it is
+        why = classify(dtype, flag, cur, unit, price, qty, types)
+        if why is None and removed is not None:
+            f_ = TO_METRES[unit]
+            to_count.append((float(qty) * f_, float(price) / f_, i))
+            touched.add(fid)
+        elif why is not None and (removed is None or kind != why[0]):
+            to_apart.append((state_uid, f"order types: {why[1]}", why[0], i))
+            if removed is None:
+                touched.add(fid)
+    for k in range(0, len(to_count), CHUNK):
+        with _job_tx(st, KIND) as c:
+            dp._many(c, "UPDATE purchase_line SET qty_m = %s, price = %s, removed_upload_id = NULL, removed_why = NULL, not_counted = NULL WHERE id = %s",
+                     to_count[k:k + CHUNK])
+    for k in range(0, len(to_apart), CHUNK):
+        with _job_tx(st, KIND) as c:
+            dp._many(c, "UPDATE purchase_line SET removed_upload_id = %s, removed_why = %s, not_counted = %s WHERE id = %s", to_apart[k:k + CHUNK])
+    if touched:
+        recost(st, stale(st, touched))
+    return {"counted": len(to_count), "apart": sum(1 for x in to_apart if x[2] == "Not a bulk order")}
+
+
+def imports_for_mill(key, limit=300):
+    """A mill's import lines (GP, 28 Nov 2026): bulk orders priced in another currency, kept apart from every rupee figure,
+    shown converted on their order month's exchange rate (blank, with why, where none is entered); the newest first."""
+    st = store.get()
+    if st.kind == "files":
+        return []
+    from rules import fx
+    with st.tx() as c:
+        rows = dp._dicts(c, "SELECT l.id, l.po_number, l.item, l.doc_date, l.doc_type, l.qty_m, l.price, l.qty_po, l.price_po, l.currency, l.unit, l.deletion, "
+                            "l.not_counted, l.removed_why, l.supplier, l.fabric_id, f.code AS fabric_code, l.mill_id, m.name AS mill, m.key AS mill_key "
+                            "FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id JOIN mill m ON m.id = l.mill_id "
+                            f"WHERE m.key = %s AND l.not_counted = 'Not in rupees' AND l.price_po > 0 ORDER BY l.doc_date DESC, l.po_number DESC LIMIT {int(limit)}", (key,))
+        types = order_types(c)
+    rates = fx.table()
+    return [fab_groups.other_line(r, types, rates) for r in rows]
