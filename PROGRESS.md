@@ -180,7 +180,40 @@ faults; all were fixed the same day (below, "After the cold review").
 
 ### Where things stand
 
-- **28 Nov, morning (UTC, second session of the day): where everything stands. Start here.** (The "early morning"
+- **28 Nov, 17:50 UTC: where everything stands. Start here.**
+  - **Live (main 2602e35, `/mcp/health` code 17:40 UTC, postgres, 52 tools):** stage 2 (PR 28, merged df2a9d2,
+    deploy green) and stage 4 (PR 29, merged 2602e35, deploy green). Streamlit and the framed screens are retired.
+  - **GP's year of purchases is loaded on the live site** (by the AI assistant, 28 Nov 16:4x UTC): the shipped
+    4-month file first (upload 1, 6,265 lines), then Fabric_Inward_Me2M_2 and _1, each split by order date into three
+    parts (uploads 2 to 7; rows unchanged) because the MCP transport refuses a request over 4 MB (the `mcp` package's
+    limit, not RightPrice's 25 MB). Totals as in the tests: 23,778 lines held (15,678 counted, 8,100 ZLOI), 6 changed,
+    6 removed, 0 for an admin. Right cost on the live site was up to date afterwards (verdicts ready).
+  - **Next, in order:**
+    1. **Ask GP to confirm each moved page by eye** on the live site (stage 4), and stage 2's pages (Fab groups,
+       Purchase files, the Fab group column, the price popup). He may delete the app setting `RIGHTPRICE_UI`.
+    2. **Stage 2 stall fix**: a fresh builder is on branch `claude/sleepy-dirac-dknzrp-stage2-fix` (worktree
+       `/home/user/wt-stage2fix`, from main). Fault: Right cost's purchase-order rows can be left "ready False, updating
+       False" (seen once on a quiet machine in stage 4's run, on PG; it heals at the next page's ask). Suspects from the
+       review of 201d084: `_passes` ends without re-checking the key (rules/purchases.py ~1480-1503); `kick_right_cost`
+       racing the first `_work_rows` without `_first_lock`; the verdict worker finishing on an older key. Open a PR
+       when pushed; merge on green.
+    3. **Stage 2b** (PR 35, now based on main, branch `claude/sleepy-dirac-dknzrp-stage2b`, head 054c69e; worktree
+       `/home/user/wt-stage2b-new`): merge main (stages 2 and 4 are in it now; keep stage 2's Purchase files upload fix,
+       drop 2b's duplicate), raise the MCP transport's 4 MB request limit (or let the Fab library tool take the zip in
+       parts) so the PLM zip (3.7 MB, 4.9 MB as base64) can go through the assistant, three checks, a cold review, merge.
+       Then load on the live site: the PLM list (`/home/user/plm-input/PLM_fabric_list_slim.zip`) and the RBI rates
+       (scratchpad `fx/rbi_reference_monthly.csv`). Open items found there: pages wait up to 13 s during a regroup of
+       ~42k fabrics (stage 2's fix moved regroup to short transactions; check 2b after the merge); Purchase lines' Fab
+       group filter 2.4 s at a million lines (an index).
+    4. **Stage 6**, the learned benchmark, last.
+  - Smaller, from the review of 201d084 (not urgent): a new code's Fab group placement can be recorded under another
+    upload, and group numbers come out of order, when two uploads interleave; recost gives up silently after 5 rounds of
+    another writer's changes.
+  - The scheduled task "resume every 5 hours" was deleted after stages 2 and 4 merged, as GP asked.
+  - GP's files exist only in this container (`/home/user/po-input`, `/home/user/plm-input`): a new container will not
+    have them; the purchase files are already in the live database.
+
+- **28 Nov, morning (UTC, second session of the day): where things stood then.** (The "early morning"
   bullet below is the state this session started from.)
   - **Live site: unchanged** (main a497405, `/mcp/health` ok, postgres, 45 tools). Nothing was merged this session yet.
   - **GP's decisions today** (all to be recorded in docs/QUESTIONS_FOR_GP.md by the branch that builds them):
