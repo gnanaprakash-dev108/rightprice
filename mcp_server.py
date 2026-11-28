@@ -1325,7 +1325,8 @@ def upload_purchase_file(file_base64: str, file_name: str) -> dict:
     """Upload a purchase-order file as SAP exports it (.xlsx, sent as base64 with its name), as Purchase files does: it is
     read in the background (purchase_upload_status says where it stands). THIS ADDS TO AND CHANGES THE PURCHASE HISTORY
     EVERYONE SEES (each order line once; a file newer than what is held, or covering the same orders and saved later,
-    changes or removes lines; Fab groups, price over time, Right cost's purchase-order rows follow); the person must
+    changes or removes lines; Fab groups, price over time, Right cost's purchase-order rows follow; when the purchase file
+    that came with the code is not in yet, it is loaded first, as its own upload: shipped_first); the person must
     confirm the file first. Recorded as uploaded by "AI assistant"."""
     out = _purch()[0].upload(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT)
     return dict(out, recorded_as=ASSISTANT, next="purchase_upload_status with this upload_id says where it stands")

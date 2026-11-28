@@ -61,7 +61,7 @@ def add_aliases(c, rows, at):
 
 
 # ------------------------------------------------------------------ fabrics
-FABRIC = "id, code, description, fab_group_id, not_grouped, signature, spec, spec_sha, choices, problems"
+FABRIC = "id, code, description, fab_group_id, not_grouped, signature, spec, spec_sha, choices, problems, choices_lists, choices_metres, choices_spec"
 
 
 def _fabric(r):
@@ -132,9 +132,34 @@ def set_fabrics(c, rows, at):
 
 
 def set_choices(c, rows, at):
-    """rows: dicts with id, choices and problems: the costing choices worked out again."""
-    _many(c, "UPDATE fabric SET choices = %s, problems = %s, updated_at = %s WHERE id = %s",
-          [(None if r["choices"] is None else json.dumps(r["choices"], default=str), json.dumps(r["problems"]), at, r["id"]) for r in rows])
+    """rows: dicts with id, choices, problems and what they were worked out on (lists: the fingerprint of the rate master's
+    lists, metres, spec: the specification's SHA-256): the costing choices worked out again."""
+    _many(c, "UPDATE fabric SET choices = %s, problems = %s, choices_lists = %s, choices_metres = %s, choices_spec = %s, updated_at = %s WHERE id = %s",
+          [(None if r["choices"] is None else json.dumps(r["choices"], default=str), json.dumps(r["problems"]), r.get("lists"), r.get("metres"),
+            r.get("spec"), at, r["id"]) for r in rows])
+
+
+def choices_basis(c, ids=None):
+    """{fabric id: (lists fingerprint, metres, spec SHA-256 the choices were worked out on, the specification's SHA-256 now)}
+    for these fabrics, or every one."""
+    sql = "SELECT id, choices_lists, choices_metres, choices_spec, spec_sha FROM fabric"
+    if ids is None:
+        return {r[0]: tuple(r[1:]) for r in c.all(sql)}
+    out = {}
+    for part in _chunks(ids):
+        out.update({r[0]: tuple(r[1:]) for r in c.all(sql + f" WHERE id IN {store._in(len(part))}", part)})
+    return out
+
+
+def top_suppliers(c, fabric_ids):
+    """{fabric id: the supplier as written on most of its metres still counted, ZLOI left out}"""
+    best = {}
+    for part in _chunks(sorted(set(fabric_ids))):
+        for f, sup, q in c.all(f"SELECT l.fabric_id, l.supplier, sum(l.qty_m) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER} "
+                               f"AND l.fabric_id IN {store._in(len(part))} GROUP BY l.fabric_id, l.supplier", part):
+            if f not in best or (q, sup) > best[f]:
+                best[f] = (q, sup)
+    return {f: sup for f, (q, sup) in best.items()}
 
 
 def add_regroups(c, rows, at, upload_id):
@@ -218,7 +243,7 @@ def set_merged(c, group_id, into_id, at, who):
 
 # ------------------------------------------------------------------ uploads
 UPLOAD = ("id, kind, filename, uploaded_by, uploaded_at, status, step, started_at, finished_at, alive_at, runner, error, file_date, "
-          "file_date_from, covers_from, covers_to, report_date, saved_at, rows_total, rows_loaded, rows_new, rows_changed, rows_same, "
+          "file_date_from, covers_from, covers_to, covers_saved, report_date, report_used, saved_at, rows_total, rows_loaded, rows_new, rows_changed, rows_same, "
           "rows_removed, rows_dropped, rows_older, rows_disagree, rows_outliers, rows_skipped, fabrics_new, groups_new, mills_new, summary, sha256")
 
 
@@ -237,7 +262,14 @@ def _upload(r):
 
 
 def uploads(c, limit=50):
-    return [_upload(r) for r in _dicts(c, f"SELECT {UPLOAD} FROM upload ORDER BY id DESC LIMIT {int(limit)}")]
+    """The newest uploads, and every older one with disagreements still open (never out of reach), newest first, each with
+    how many of its disagreements are open."""
+    opened = "(SELECT count(*) FROM line_disagreement d WHERE d.upload_id = upload.id AND d.settled_at IS NULL) AS disagree_open"
+    rows = _dicts(c, f"SELECT {UPLOAD}, {opened} FROM upload ORDER BY id DESC LIMIT {int(limit)}")
+    have = {r["id"] for r in rows}
+    rows += [r for r in _dicts(c, f"SELECT {UPLOAD}, {opened} FROM upload WHERE id IN (SELECT upload_id FROM line_disagreement WHERE settled_at IS NULL) "
+                                  "ORDER BY id DESC") if r["id"] not in have]
+    return [_upload(r) for r in rows]
 
 
 def upload(c, upload_id, skipped=False):
@@ -263,7 +295,8 @@ def upload_dates(c, ids):
     a file the saved date decided against."""
     out = {}
     for part in _chunks(sorted(set(ids))):
-        for r in _dicts(c, f"SELECT id, filename, saved_at, report_date, covers_to FROM upload WHERE id IN {store._in(len(part))}", part):
+        for r in _dicts(c, f"SELECT id, filename, uploaded_at, saved_at, report_date, report_used, covers_to, covers_saved FROM upload "
+                           f"WHERE id IN {store._in(len(part))}", part):
             out[r["id"]] = r
     return out
 
@@ -273,6 +306,11 @@ def waiting_uploads(c):
     return c.all("SELECT id, status, alive_at, runner FROM upload WHERE status IN ('queued', 'working') ORDER BY id")
 
 
+def shipped_in(c, sha):
+    """Whether a file with this SHA-256 has been read in full, or is waiting or being read."""
+    return c.one("SELECT count(*) FROM upload WHERE sha256 = %s AND status IN ('queued', 'working', 'done')", (sha,))[0] > 0
+
+
 def shipped_loaded(c, sha):
     """Whether a file with this SHA-256 has been read in full."""
     return c.one("SELECT count(*) FROM upload WHERE sha256 = %s AND status = 'done'", (sha,))[0] > 0
@@ -280,7 +318,7 @@ def shipped_loaded(c, sha):
 
 # ------------------------------------------------------------------ purchase lines
 LINE = ("id, po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, upload_id, removed_upload_id, removed_why, "
-        "state_upload_id, state_from, state_to")
+        "state_upload_id, state_from, state_to, state_saved")
 
 
 def lines_by_key(c, keys):
@@ -303,61 +341,45 @@ def lines_of_orders(c, pos):
 
 
 def add_lines(c, rows):
-    """rows: dicts with the line's columns (its state: state_upload_id, state_from, state_to, included)."""
+    """rows: dicts with the line's columns (its state: state_upload_id, state_from, state_to, state_saved, included)."""
     _many(c, "INSERT INTO purchase_line (po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, upload_id, "
-             "state_upload_id, state_from, state_to) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+             "state_upload_id, state_from, state_to, state_saved) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
           [(r["po_number"], r["item"], r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"],
-            r["upload_id"], r["state_upload_id"], r["state_from"], r["state_to"]) for r in rows])
+            r["upload_id"], r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"]) for r in rows])
 
 
 def add_marks(c, rows):
-    """rows: (po, item, why, (upload id, from, to)): a line a file shows deleted, or leaves out of an order it has, before
+    """rows: (po, item, why, (upload id, from, to, saved)): a line a file shows deleted (blocked, no longer bulk ...) before
     any file gave its figures: kept as a mark (no figures), so an older file does not bring it back."""
-    _many(c, "INSERT INTO purchase_line (po_number, item, upload_id, removed_upload_id, removed_why, state_upload_id, state_from, state_to) "
-             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", [(po, item, s[0], s[0], why, s[0], s[1], s[2]) for po, item, why, s in rows])
+    _many(c, "INSERT INTO purchase_line (po_number, item, upload_id, removed_upload_id, removed_why, state_upload_id, state_from, state_to, state_saved) "
+             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)", [(po, item, s[0], s[0], why, s[0], s[1], s[2], s[3]) for po, item, why, s in rows])
 
 
 def change_lines(c, rows):
     """rows: dicts with id and the line's columns: a newer file's figures, the line counted again."""
     _many(c, "UPDATE purchase_line SET doc_date = %s, doc_type = %s, fabric_id = %s, mill_id = %s, supplier = %s, qty_m = %s, price = %s, "
-             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s WHERE id = %s",
+             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s, state_saved = %s "
+             "WHERE id = %s",
           [(r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"], r["upload_id"],
-            r["state_upload_id"], r["state_from"], r["state_to"], r["id"]) for r in rows])
+            r["state_upload_id"], r["state_from"], r["state_to"], r["state_saved"], r["id"]) for r in rows])
 
 
 def touch_lines(c, rows):
-    """rows: ((upload id, from, to), id): a newer file says the same (the same figures, or removed too): it is the evidence now."""
-    _many(c, "UPDATE purchase_line SET state_upload_id = %s, state_from = %s, state_to = %s WHERE id = %s", [(s[0], s[1], s[2], i) for s, i in rows])
+    """rows: ((upload id, from, to, saved), id): a newer file says the same (the same figures, or removed too): it is the
+    evidence now."""
+    _many(c, "UPDATE purchase_line SET state_upload_id = %s, state_from = %s, state_to = %s, state_saved = %s WHERE id = %s",
+          [(s[0], s[1], s[2], s[3], i) for s, i in rows])
 
 
 def remove_lines(c, rows, state):
     """rows: (why, id): a newer file says the line is no longer a priced bulk order in rupees per metre, or leaves it out of
-    an order it has. state: (upload id, from, to) of that file."""
-    _many(c, "UPDATE purchase_line SET removed_upload_id = %s, removed_why = %s, state_upload_id = %s, state_from = %s, state_to = %s WHERE id = %s",
-          [(state[0], why, state[0], state[1], state[2], i) for why, i in rows])
-
-
-def add_orders_seen(c, upload_id, orders):
-    """orders: {po: set of items}: what the file has of each order (kept or not)."""
-    _many(c, "INSERT INTO order_seen (po_number, upload_id, items) VALUES (%s, %s, %s)",
-          [(po, upload_id, json.dumps(sorted(items))) for po, items in orders.items()])
-
-
-def orders_seen(c, pos, but=None):
-    """{po: [(upload id, set of items, covers_from, covers_to, file name)]}: the files (but this one) that have these
-    orders, the uploads still being read included (their evidence counts from the moment they are read)."""
-    out = {}
-    for part in _chunks(sorted(set(pos))):
-        for po, uid, items, lo, hi, name in c.all("SELECT o.po_number, o.upload_id, o.items, u.covers_from, u.covers_to, u.filename FROM order_seen o "
-                                                  f"JOIN upload u ON u.id = o.upload_id WHERE o.po_number IN {store._in(len(part))}", part):
-            if uid != but and lo is not None:
-                out.setdefault(po, []).append((uid, set(json.loads(items)), lo, hi, name))
-    return out
+    an order it has. state: (upload id, from, to, saved) of that file."""
+    _many(c, "UPDATE purchase_line SET removed_upload_id = %s, removed_why = %s, state_upload_id = %s, state_from = %s, state_to = %s, "
+             "state_saved = %s WHERE id = %s", [(state[0], why, state[0], state[1], state[2], state[3], i) for why, i in rows])
 
 
 def forget_evidence(c, upload_id):
-    """What an upload said order by order, and its disagreements not settled: written again when it is read again."""
-    c.run("DELETE FROM order_seen WHERE upload_id = %s", (upload_id,))
+    """An upload's disagreements not settled: written again when it is read again."""
     c.run("DELETE FROM line_disagreement WHERE upload_id = %s AND settled_at IS NULL", (upload_id,))
 
 

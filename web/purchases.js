@@ -109,7 +109,7 @@
   async function openHistory(code) {
     closePopups();
     const body = h("div", { class: "pbody" }, h("div", { class: "empty" }, "Loading…"));
-    const d = h("div", { class: "dialog pdialog", role: "dialog", "aria-modal": "true", "aria-label": "Price over time: " + code },
+    const d = h("div", { class: "dialog pdialog rp-purch", role: "dialog", "aria-modal": "true", "aria-label": "Price over time: " + code },
       h("div", { class: "phead" }, h("h2", {}, "Price over time: " + code), ib("x", "Close", () => s.remove())), body);
     const s = h("div", { class: "scrim pdlg", onmousedown: e => { if (e.target === s) s.remove(); } }, d);
     $("#layer").append(s);
@@ -160,15 +160,15 @@
     const p = page.group || {}, d = p.data;
     const top = crumbs(["Right cost", "#rightcost"], ["Fab groups", "#groups"], (d && d.code) || p.code || "");
     $("#selbar").hidden = true;
-    if (p.error) return fill(main, top, h("div", { class: "empty" }, p.error));
-    if (!d) return fill(main, top, h("div", { class: "empty" }, "Loading…"));
+    if (p.error) return fillP(main, top, h("div", { class: "empty" }, p.error));
+    if (!d) return fillP(main, top, h("div", { class: "empty" }, "Loading…"));
     document.title = d.code + " - RightPrice";
     const r = d.range, sh = d.should, series = millSeries(d.mills), shown = new Set(series.map(x => x.key));
     const pts = d.lines.map(l => ({ date: l.date, price: l.price, metres: l.metres, series: shown.has(l.mill_key) ? l.mill_key : "*", text: `${l.mill}, ${l.code}` }));
     const marks = [sh.median ? { y: sh.median, label: "Should-cost", cls: "should" } : null, r.enough ? { y: r.median, label: "Median paid", cls: "median" } : null].filter(Boolean);
     const vsShould = sh.median && r.median ? (r.median / sh.median - 1) * 100 : null;
     const inList = (state.rows || []).filter(x => x.fab_group === d.code).length;
-    fill(main, top,
+    fillP(main, top,
       h("div", { class: "dhead" }, h("div", {}, h("div", { class: "small" }, `Fab group · ${n0(d.fabrics.length)} fabric ${d.fabrics.length === 1 ? "code" : "codes"} · the same construction in any colour` + (d.first ? ` · bought ${day(d.first)} to ${day(d.last)}` : "")),
         h("h1", {}, d.code), h("div", { class: "gname" }, d.name)),
         h("div", { class: "dicons noprint" }, ib("pdf", "Print this page", () => print()),
@@ -177,7 +177,8 @@
       h("div", { class: "stiles" },
         tile("Purchases", `${n0(d.purchases)}`, `${n0(d.orders)} ${d.orders === 1 ? "order" : "orders"}, ${n0(d.metres)} m` + (d.outliers.length ? `; ${d.outliers.length} ZLOI ${d.outliers.length === 1 ? "line" : "lines"} left out` : "")),
         (() => { const bought = d.mills.filter(m => m.lines), only = d.mills.length - bought.length;
-          return tile("Mills", `${bought.length}`, bought.slice(0, 3).map(m => m.name).join(", ") + (bought.length > 3 ? ` and ${bought.length - 3} more` : "") + (only ? ` · ${only} more with ZLOI lines only, not counted` : "")); })(),
+          return tile("Mills", `${bought.length}`, [bought.slice(0, 3).map(m => m.name).join(", ") + (bought.length > 3 ? ` and ${bought.length - 3} more` : ""),
+            only ? `${bought.length ? only + " more" : only} with ZLOI lines only, not counted` : ""].filter(Boolean).join(" · ")); })(),
         tile("Median price paid", r.median ? `Rs ${n2(r.median)}` : "None", r.median ? `paid Rs ${n2(r.low)} to ${n2(r.high)}` : ""),
         tile("Usual range", rangeWords(r), rangeSub(r, d.min_for_range), r.enough ? "" : "amber"),
         tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + (sh.dated && sh.dated.length ? `on the order months' yarn rates (some dated)` : `on today's rates`) + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
@@ -226,8 +227,8 @@
     tip.hidden = true;
     const top = crumbs(["Right cost", "#rightcost"], "Fab groups");
     $("#selbar").hidden = true;
-    if (list.error) return fill(main, top, h("h1", { class: "ptitle" }, "Fab groups"), h("p", { class: needsDb(list.error) ? "note" : "err" }, list.error));
-    if (!list.data) return fill(main, top, h("div", { class: "empty" }, "Loading…"));
+    if (list.error) return fillP(main, top, h("h1", { class: "ptitle" }, "Fab groups"), h("p", { class: needsDb(list.error) ? "note" : "err" }, list.error));
+    if (!list.data) return fillP(main, top, h("div", { class: "empty" }, "Loading…"));
     const d = list.data, q = list.q.trim().toLowerCase();
     const rows = d.groups.filter(g => !q || (g.code + " " + g.name).toLowerCase().includes(q)).sort((a, b) => b.purchases - a.purchases || a.code.localeCompare(b.code));
     const search = h("input", { type: "search", class: "search", placeholder: "Search a code or the construction (e.g. Twill 40s)", value: list.q, "aria-label": "Search the Fab groups" });
@@ -259,7 +260,7 @@
       catch (e) { toast(e.message, false); }
     };
     const c = d.counts;
-    fill(main, top, h("div", { class: "headrow" }, h("h1", { class: "ptitle" }, "Fab groups")),
+    fillP(main, top, h("div", { class: "headrow" }, h("h1", { class: "ptitle" }, "Fab groups")),
       h("p", { class: "muted" }, `${n0(c.groups)} groups of ${n0(c.fabrics_grouped)} fabric codes (the same construction in any colour, across mills), from ${n0(c.lines)} purchase lines` + (c.first ? `, ${day(c.first)} to ${day(c.last)}` : "") + `. ${n0(c.fabrics - c.fabrics_grouped)} codes are not grouped` + (d.not_grouped.length ? ` (${d.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")})` : "") + ".",
         " ", may("page:purchase_files") ? h("a", { href: "#purchase-files" }, "Purchase files") : null),
       h("div", { class: "toolbar" }, search, h("button", { type: "button", class: "btn line", onclick: () => { list.q = search.value; list.shown = 100; render(); } }, "Search"), h("span", { class: "count" }, `${n0(rows.length)} groups`)),
@@ -274,9 +275,11 @@
   }
   function confirmBox(title, body, yes) {
     return new Promise(done => {
-      const s = dialog(title, h("div", {}, body), [h("button", { type: "button", class: "btn", onclick: () => { s.remove(); done(false); } }, "Cancel"), h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); done(true); } }, yes)]);
+      const s = dialog(title, h("div", { class: "rp-purch" }, body), [h("button", { type: "button", class: "btn", onclick: () => { s.remove(); done(false); } }, "Cancel"), h("button", { type: "button", class: "btn fill", onclick: () => { s.remove(); done(true); } }, yes)]);
     });
   }
+  // stage 2's pages draw inside a wrapper of their own, so this file's styles (.note, .err ...) never reach other pages
+  const fillP = (main, ...kids) => fill(main, h("div", { class: "rp-purch" }, ...kids));
   const reloadCosts = () => { try { load(); } catch (e) { /* the list reloads at its next look */ } };
 
   // ---------------------------------------------------------------- #purchase-files: the admin upload
@@ -302,26 +305,30 @@
     const top = crumbs("Purchase files");
     $("#selbar").hidden = true;
     const title = h("div", { class: "headrow" }, h("h1", { class: "ptitle" }, "Purchase files"));
-    if (files.error) return fill(main, top, title, h("p", { class: needsDb(files.error) ? "note" : "err" }, files.error));
-    if (!files.data) return fill(main, top, title, h("div", { class: "empty" }, "Loading…"));
+    if (files.error) return fillP(main, top, title, h("p", { class: needsDb(files.error) ? "note" : "err" }, files.error));
+    if (!files.data) return fillP(main, top, title, h("div", { class: "empty" }, "Loading…"));
     const d = files.data, c = d.counts;
     const input = h("input", { type: "file", accept: ".xlsx,.xlsm", "aria-label": "Purchase-order file" });
+    const big = () => input.files.length ? tooBig(input.files[0].size, d.max_bytes, input.files[0].name) : null;
+    input.addEventListener("change", () => { files.uploadError = big(); render(); });     // said at once, before anything is sent
     const send = async () => {
       if (!input.files.length) return toast("Choose the purchase-order file first", false);
+      files.uploadError = big();
+      if (files.uploadError) return render();
       const fd = new FormData(); fd.append("file", input.files[0]);
-      try { const r = await api("/api/purchases/upload", { method: "POST", body: fd }); files.open = r.id; files.detail = null; toast("Uploaded: it is read in the background"); enterFiles(); }
-      catch (e) { toast(e.message, false); }
+      try { const r = await api("/api/purchases/upload", { method: "POST", body: fd }); files.open = r.id; files.detail = null; toast(r.shipped_first ? "Uploaded: the purchase file that came with the code is read first, then this one, in the background" : "Uploaded: it is read in the background"); enterFiles(); }
+      catch (e) { files.uploadError = e.message; render(); }
     };
     const shipped = async () => {
       try { const r = await api("/api/purchases/load-shipped", { method: "POST" }); files.open = r.id; files.detail = null; toast("Loading the purchase file that came with the code"); enterFiles(); }
       catch (e) { toast(e.message, false); }
     };
     const row = u => {
-      const counts = u.status === "done" || u.rows_loaded !== null ? [u.rows_total !== null ? `${n0(u.rows_total)} rows` : null, u.rows_loaded !== null ? `${n0(u.rows_loaded)} order lines kept (` + [`${n0(u.rows_new || 0)} new`, `${n0(u.rows_changed || 0)} changed`, `${n0(u.rows_same || 0)} already in`,
+      const counts = u.status === "done" || u.rows_loaded !== null ? [u.rows_total !== null ? `${n0(u.rows_total)} rows` : null, u.rows_loaded !== null ? `${n0(u.rows_loaded)} order lines kept (` + [`${n0(u.rows_new || 0)} new`, `${n0(u.rows_changed || 0)} changed`, `${n0(u.rows_same || 0)} already in, the same`,
           u.rows_older ? `${n0(u.rows_older)} not used: a newer file has them (newer by what it covers, or saved later)` : null, u.rows_disagree ? `${n0(u.rows_disagree)} not used: the history disagrees and which is newer cannot be told, nor by when they were saved` : null].filter(Boolean).join(", ") + ")" : null,
-        savedNote(u),
+        savedNote(u), u.disagree_open ? `${n0(u.disagree_open)} ${u.disagree_open === 1 ? "disagreement" : "disagreements"} open, for an admin` : null,
         (u.summary || {}).disagreements ? `${n0(u.summary.disagreements)} ${u.summary.disagreements === 1 ? "disagreement" : "disagreements"} with the history listed for an admin (open the upload)` : null, u.rows_removed ? `${n0(u.rows_removed)} removed (this newer file shows them deleted, blocked or no longer bulk)` : null,
-        u.rows_dropped ? `${n0(u.rows_dropped)} removed (not in this newer file, which has the rest of their orders)` : null, u.rows_outliers ? `${n0(u.rows_outliers)} ZLOI lines, kept apart` : null,
+        u.rows_outliers ? `${n0(u.rows_outliers)} ZLOI ${u.rows_outliers === 1 ? "line" : "lines"}, kept apart` : null,
         u.rows_skipped !== null ? `${n0(u.rows_skipped)} left out` : null].filter(Boolean).join(" · ") : "";
       return h("tr", { class: files.open === u.id ? "picked" : null },
         h("td", {}, h("button", { type: "button", class: "code", onclick: async () => { files.open = files.open === u.id ? null : u.id; files.detail = null; if (files.open) { try { files.detail = await api("/api/purchases/uploads/" + u.id); } catch (e) { toast(e.message, false); } } render(); } }, `#${u.id}`)),
@@ -330,24 +337,37 @@
         h("td", { class: "w" }, counts, u.status === "done" ? h("div", { class: "muted" }, `${n0(u.fabrics_new || 0)} new fabric codes, ${n0(u.groups_new || 0)} new Fab groups, ${n0(u.mills_new || 0)} new mills`) : null));
     };
     const det = files.open && files.detail && files.detail.id === files.open ? files.detail : null;
-    fill(main, top, title,
+    fillP(main, top, title,
       h("p", { class: "muted" }, "Purchase-order files, as SAP exports them (Purchasing Document, Item, Document Date, Material, Short Text, Order Quantity, Net Price, Name of Supplier, Purchasing Doc. Type, Deletion Indicator ...). Each is read in the background: the page shows where it stands. The same order line uploaded twice is one line. Uploading is an admin action (Admin and Rates editor; see Users and roles)."),
       h("div", { class: "stiles" }, tile("Purchase lines on record", n0(c.lines), c.first ? `${day(c.first)} to ${day(c.last)}` : "none yet"), tile("Fabric codes", n0(c.fabrics), `${n0(c.fabrics_grouped)} in Fab groups`),
         tile("Fab groups", n0(c.groups), c.groups_merged ? `${c.groups_merged} merged into others` : "", ""), tile("Mills", n0(c.mills), "every spelling kept")),
+      // where Right cost's purchase-order rows come from: the file that came with the code until the history holds a file, then the history alone
+      d.shipped.available && !d.shipped.loaded ? h("p", { class: "note" }, d.shipped.history
+        ? "The purchase file that came with the code (the pilot's purchases, 1 Aug to 23 Nov 2026) is not loaded. Right cost's purchase-order rows, the price popup and the Fab groups read only the files uploaded here, so a pilot fabric that is in none of them shows no price paid." + (may("do:upload_purchases") ? " Load it below to have them all." : " An admin can load it here.")
+        : "Nothing is loaded yet: Right cost's purchase-order rows show the pilot's purchases as the purchase file that came with the code has them. The purchase history always starts from that file (GP, 28 Nov 2026): it is loaded first, as its own upload, when the first file is uploaded here (or with the button below), and from then on Right cost, the price popup and the Fab groups read the history.") : null,
       !may("do:upload_purchases") ? h("p", { class: "note" }, `Your role${typeof RPA !== "undefined" && RPA.me && RPA.me.role ? " (" + RPA.me.role + ")" : ""} may look at the uploads but not upload: that is an admin action.`) :
       h("section", { class: "sec" }, h("h2", {}, "Upload a purchase-order file"), h("div", { class: "uprow" }, input, h("button", { type: "button", class: "btn fill", onclick: send }, "Upload")),
-        d.shipped.available ? [h("h3", {}, "Or load the file that came with the code"),
+        files.uploadError ? h("p", { class: "err", role: "alert" }, files.uploadError) : h("p", { class: "muted" }, `Up to ${Math.floor(d.max_bytes / 1048576)} MB a file: a longer period goes in as several files, by 6 months or by year.`),
+        d.shipped.available ? [h("h3", {}, "Or load the file that came with the code" + (d.shipped.loaded ? " (loaded already)" : "")),
           h("p", { class: "muted" }, "inputs/Fabric _ 3Months_4746.xlsx: the purchase orders of 1 Aug to 23 Nov 2026 that the pilot was run on, as SAP exported them on 23 Nov 2026. Each order line is kept once, and it never undoes a newer file, nor one covering the same orders saved later."),
           h("button", { type: "button", class: "btn line", onclick: shipped }, "Load the purchase file that came with the code")] : null),
-      h("section", { class: "sec" }, h("h2", {}, "Uploads"),
+      h("section", { class: "sec" }, h("h2", {}, "Uploads"), c.disagreements ? h("p", { class: "note" }, `${n0(c.disagreements)} ${c.disagreements === 1 ? "disagreement" : "disagreements"} between a file and the history ${c.disagreements === 1 ? "is" : "are"} open, for an admin: the uploads with them are listed below, however old.`) : null,
         d.uploads.length ? h("div", { class: "gridscroll sup pgt" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Upload", "File", "Where it stands", "What was read"].map(t => h("th", {}, t)))), h("tbody", {}, d.uploads.map(row))))
           : h("p", { class: "muted" }, "No file uploaded yet."),
         det ? skippedView(det) : null),
-      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026); a saved date counts only when it is not before the file's latest order, and a report date a file carries counts in its place. The upload's page says which file won and why, with both saved times. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre, or left out of an order the file has; an older or earlier-saved file never changes it or brings it back. Only where even the saved dates cannot tell (both saved at the same moment, or either file without a saved date that can be used) and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification (data/plm_specs_for_po.csv) and Fab group; a code whose specification is missing or incomplete is not grouped."));
+      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins. Which is newer is read first from what a file covers: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved; one file taken after the other for certain is newer, and that decides. Where what they cover cannot tell (a correction of the same orders, the same file saved again), the file saved later wins, exactly as a newer file does (GP's decision, 28 Nov 2026). Nothing dated after the upload is trusted: a saved date after it (a clock set wrong), or before the file's latest order, is not used, and the file is dated by its upload instead; a report date counts only between its latest order and when it was saved; a document date after the upload is not used to date the file. Document dates are days in India; saved times are UTC. The upload's page says which file won and why, with both saved times, and every date it did not use. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre; an older or earlier-saved file never changes it or brings it back. A line simply not in a newer file is never taken as cancelled: the history keeps it (GP, 28 Nov 2026), so a later download covering a longer span takes each line once. Only where two files carry the very same dates, to the second, and a file disagrees with the history, the history stands and the upload lists the disagreement, for an admin to keep or to take the file's figures. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification and Fab group; a code whose specification is missing or incomplete is not grouped. The PLM specifications are the extract deployed with the code (data/plm_specs_for_po.csv in the code's own folder, not the data folder): a corrected extract goes in with a code change, and is read at the next upload."));
   }
+  // TOO BIG: what a file over the limit is told on the screen at once, before it is sent (as rules/purchases.py too_big;
+  // check_server.py runs this function and compares the two)
+  function tooBig(size, max, name) {
+    return size > max ? `${name} is ${(size / 1048576).toFixed(1)} MB: larger than ${Math.floor(max / 1048576)} MB, the most read at once. Split it in SAP by 6 months or by year, and upload each part.` : null;
+  }
+  // END TOO BIG
   // what the saved date decided (GP, 28 Nov 2026): where what two files cover cannot tell which is newer, the file saved
   // later wins; the upload's page says which won and why, with both saved times
-  const savedWhen = x => x.report_date ? `taken on ${x.report_date.slice(0, 10)}, the report date it carries` : x.saved_at ? `saved ${x.saved_at.slice(0, 16).replace("T", " ")} UTC` : "no saved date";
+  const utc = t => `${t.slice(0, 16).replace("T", " ")} UTC`;
+  const savedWhen = x => (x.report_used ? `taken on ${x.report_used.slice(0, 10)} (the report date it carries), ` : "") +
+    (x.covers_saved && x.covers_saved === x.saved_at ? `saved ${utc(x.covers_saved)}` : x.covers_saved ? `uploaded ${utc(x.covers_saved)} (no saved date it can be dated by)` : "no saved date");
   const upName = x => `upload #${x.id}${x.filename ? " (" + x.filename + ")" : ""}`;
   const nLines = k => `${n0(k)} ${k === 1 ? "line" : "lines"}`;
   function savedNote(u) {
@@ -359,7 +379,7 @@
     const s = u.summary || {}, later = s.saved_later_than || [], earlier = s.saved_earlier_than || [];
     if (!later.length && !earlier.length) return null;
     return [h("h3", {}, "Decided by when the files were saved"),
-      h("p", { class: "muted" }, "What these files cover cannot tell which is newer (each could have been taken before the other), so the file saved later wins, as a newer file does: its figures, the lines it shows deleted or no longer bulk, and the lines it leaves out of an order (GP's decision, 28 Nov 2026)."),
+      h("p", { class: "muted" }, "What these files cover cannot tell which is newer (each could have been taken before the other), so the file saved later wins, as a newer file does: its figures, and the lines it shows deleted or no longer bulk (GP's decision, 28 Nov 2026)."),
       later.map(x => h("p", {}, `This file won on ${nLines(x.lines)} over ${upName(x)}, because it was saved later: this file ${savedWhen(u)}; ${upName(x)} ${savedWhen(x)}. This file's word replaced that one's.`)),
       earlier.map(x => h("p", {}, `${upName(x)} won on ${nLines(x.lines)} where this file says otherwise, because it was saved later: ${upName(x)} ${savedWhen(x)}; this file ${savedWhen(u)}. Its word stands there; this file's is not used.`))];
   }
@@ -373,14 +393,26 @@
       catch (e) { toast(e.message, false); }
     };
     return [h("h3", {}, `This file and the history disagree on ${n0(u.disagree_count)} ${u.disagree_count === 1 ? "line" : "lines"}`),
-      h("p", { class: "muted" }, "Which of the two is newer could not be told: not from what they cover (their latest document dates, a report date), and not from when they were saved, because they were saved at the same moment or one of them has no saved date that can be used (none, or one before its latest order). So nothing was guessed: the history's figures were kept." + (u.disagree_open ? " An admin can keep them, or take this file's." : " Settled.")),
+      h("p", { class: "muted" }, "Which of the two is newer could not be told: not from what they cover (their latest document dates, a report date), and not from when they were saved, because both carry the very same dates, to the second (a file with no saved date it can be dated by counts as saved when it was uploaded). So nothing was guessed: the history's figures were kept." +
+        (u.disagree_open ? " An admin can keep them, or take this file's." : u.disagreements.some(x => x.settled_as === "file") ? " Settled: this file's figures were taken." : " Settled: the history's figures were kept.")),
       u.disagree_open && may("do:upload_purchases") ? h("div", { class: "acts" }, h("button", { type: "button", class: "btn line", onclick: () => settle("kept") }, "Keep the history's figures"), h("button", { type: "button", class: "btn fill", onclick: () => settle("file") }, "Take this file's figures")) : null,
       table(["Order", "Item", "Kept (from)", "This file says", "Settled"], u.disagreements.map(x => [x.po, x.item, wide(side(x.kept) + (x.kept.file ? ` [${x.kept.file}]` : "")), wide(side(x.file)), x.settled_at ? `${day(x.settled_at)}${x.settled_by ? " by " + x.settled_by : ""}: ${x.settled_as === "file" ? "this file's taken" : "the history's kept"}` : "open"]), []),
       u.disagree_count > u.disagreements.length ? h("p", { class: "muted" }, `The first ${u.disagreements.length} are shown; settling covers all ${n0(u.disagree_count)}.`) : null];
   }
   function skippedView(u) {
     const s = u.summary || {};
+    const fut = s.future || [], notes = s.dating_notes || [], ch = s.changed_lines || [];
+    const brief = x => x.removed ? `not counted: ${x.removed}` : `${day(x.date)} · ${x.type} · ${n0(x.metres)} m at Rs ${n2(x.price)}`;
+    const noSpec = (s.not_grouped || []).filter(([k]) => /PLM specification/.test(k)).reduce((a, [, n]) => a + n, 0);
     return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`), savedView(u), disagreeView(u),
+      u.status === "done" ? h("p", {}, `Already in the history: ${n0(u.rows_same || 0)} order lines, the same in this file (one line each, counted once). Updated by this file: ${n0((u.rows_changed || 0) + (u.rows_removed || 0))}` +
+        ((u.rows_changed || 0) + (u.rows_removed || 0) ? ` (${n0(u.rows_changed || 0)} with its newer figures, ${n0(u.rows_removed || 0)} it shows no longer bought)` : "") + ". New: " + n0(u.rows_new || 0) + ".") : null,
+      ch.length ? table(["Order", "Item", "Was", "Now (this file)"], ch.map(x => [x.po, x.item, wide(brief(x.was)), wide(brief(x.now))]), []) : null,
+      ch.length && ch.length < (u.rows_changed || 0) + (u.rows_removed || 0) ? h("p", { class: "muted" }, `The first ${ch.length} are shown.`) : null,
+      noSpec ? h("p", { class: "note" }, `${n0(noSpec)} ${noSpec === 1 ? "code has" : "codes have"} no PLM specification, or an incomplete one: ${noSpec === 1 ? "its lines are" : "their lines are"} loaded and counted in ${noSpec === 1 ? "its" : "their"} prices like any other, with the construction blank (not in a Fab group, no should-cost).`) : null,
+      notes.filter(t => !/dated after it was uploaded/.test(t)).length ? h("p", { class: "note" }, "Dates not used to put this file in order: " + notes.filter(t => !/dated after it was uploaded/.test(t)).join("; ") + ".") : null,
+      s.future_count ? h("p", { class: "note" }, `${n0(s.future_count)} ${s.future_count === 1 ? "row is" : "rows are"} dated after the file was uploaded, so the ${s.future_count === 1 ? "date is" : "dates are"} not used to date the file: ` +
+        fut.slice(0, 5).map(x => `row ${x.row} (order ${x.po}/${x.item}, ${x.date})`).join(", ") + (s.future_count > 5 ? ` and ${n0(s.future_count - 5)} more` : "") + ". Check them in SAP; the rows are kept as they are.") : null,
       u.status === "done" ? h("p", {}, `Order lines dated ${day(s.first)} to ${day(s.last)}, from ${n0(s.mills)} ${s.mills === 1 ? "spelling of a mill" : "mill spellings"}, for ${n0(s.fabrics)} fabric codes: ${n0(s.grouped)} in Fab groups, ${n0(s.costed)} costed.` +
         (s.not_grouped && s.not_grouped.length ? ` Not grouped: ${s.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")}.` : "")) : null,
       u.skipped_count ? [h("p", {}, `Left out: ${n0(u.skipped_count)} rows. ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",

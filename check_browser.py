@@ -22,7 +22,8 @@ the code is loaded through the app (stage 2's purchase history), so every page i
    alone in light colours); a Right cost row opened in Create cost, from the fabric's page and from its Negotiation tab,
    at the row's should-cost; the keys (Ctrl+F is the browser's find except on the list; Escape closes a chart's tooltip
    before the popup); the supplier page and a Prices page printing at their own type size with no other page's print
-   rules; a rate table saved; prices brought in; a cotton price added (with Enter); a mill cost sheet's draft applied;
+   rules; a rate table saved; prices brought in; a cotton price added (with Enter); a mill cost sheet's draft applied
+   (and after it every page answers at once: Right cost is worked out again in the background);
    the rate master's lists read afresh for each popup (a yarn added since shows without a reload); stage 5's dated yarn
    rates (a rate entered on Yarn prices shows in its card and moves the purchase orders of its month, and no other;
    Bring in prices adds its rows as dated rates after asking the month and GST); a bookmark of the retired /classic;
@@ -244,6 +245,7 @@ class App:
 
 def main():
     sys.path.insert(0, HERE)
+    import masters
     from playwright.sync_api import sync_playwright
 
     ok = True
@@ -658,10 +660,17 @@ def main():
             page.wait_for_selector(".pg .notice.info:has-text('Applied.')")
             check("Mill cost sheets: a ticked draft is applied after asking once more", asked.endswith("sure?") and draft["id"] not in {d["id"] for d in app.api("/api/costsheet")["drafts"]}
                   and not page.errors, f"{asked!r} {page.errors[:3]}")
+            # a change of rates (the draft just applied) holds up no page: Right cost is worked out again in the background,
+            # showing the rows last worked out meanwhile, so Create cost, Right cost and the Dashboard answer at once
+            took = {}
+            for name, path, body in (("Create cost's costing", "/api/cost", masters.EXAMPLE_ROW), ("Right cost", "/api/costs", None),
+                                     ("the Dashboard", "/api/insights", None), ("the quote alerts", "/api/alerts", None)):
+                t0 = time.time()
+                app.api(path, body)
+                took[name] = round(time.time() - t0, 1)
+            check("After a change of rates every page answers at once (within 10 s each; Right cost is worked out again in the background)",
+                  max(took.values()) <= 10, str(took))
             page.context.close()
-            # after a change of rates the server works Right cost out again (with stage 2, every request waits on it, for
-            # about half a minute here): that work done first, so a page's wait below is the page's own
-            app.costs()
 
             # the rate master's lists are read afresh for each popup: a yarn added since (by someone else) shows without a reload
             page = tab()
@@ -681,7 +690,6 @@ def main():
             first = warp_yarns()
             yarn_table = app.api("/api/table/Yarn_Rates")
             app.api("/api/table/Yarn_Rates", {"columns": yarn_table["columns"], "rows": yarn_table["rows"] + [["Cotton 99S", "Cotton", "99S", 99, 500, time.strftime("%Y-%m-%d"), "Browser check"]]}, method="PUT")
-            app.costs()
             second = warp_yarns()
             app.api("/api/table/Yarn_Rates", {"columns": yarn_table["columns"], "rows": yarn_table["rows"]}, method="PUT")     # as it was
             check("Create cost reads the rate master's lists afresh each time the popup opens: a yarn added since shows without a reload",
@@ -769,7 +777,6 @@ def main():
             # stage 2's main paths: on a purchase order's page the price popup, and from it the Fab group; on the group's page a
             # code's price popup; the list of Fab groups searched and a group opened; Purchase files: an upload's detail, and
             # the purchase file that came with the code loaded again from the page (it changes nothing)
-            app.costs()             # the dated rates above: Right cost worked out again first
             page = tab()
             open_at(page, "item/Purchase orders|" + rich["code"], None)
             page.wait_for_selector(".dhead h1")

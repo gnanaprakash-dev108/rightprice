@@ -37,11 +37,12 @@
 .pdialog h3 { font-size: 13px; margin: 14px 0 6px; color: var(--text2); }
 .pdialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .pdialog .stiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-/* .err and .note are this file's own: scoped to its pages, the price popup and its dialogs, so they do not reach the shell's other
-   pages (a stat's note on Pilot results or Cotton prices, an error notice) or the profile flyout's notes */
-:is(.rp-page, .dialog) .err { color: #C0362C; font-size: 13px; }
-:root[data-theme="dark"] :is(.rp-page, .dialog) .err { color: #F28B82; }
-:is(.rp-page, .pdialog) .note { background: var(--selected); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 13px; max-width: 900px; }
+/* scoped to stage 2's own pages and dialogs (web/purchases.js draws them inside .rp-purch): never other pages' notes */
+.rp-purch .err { color: #C0362C; font-size: 13px; }
+:root[data-theme="dark"] .rp-purch .err { color: #F28B82; }
+.rp-purch .note { background: var(--selected); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 13px; max-width: 900px; }
+/* a long button label wraps on a phone instead of being cut off */
+.rp-purch .btn { height: auto; min-height: 34px; white-space: normal; text-align: left; line-height: 1.3; padding-top: 6px; padding-bottom: 6px; }
 
 /* pages */
 .ptitle { font-size: 24px; font-weight: 800; letter-spacing: -.02em; margin: 6px 0 4px; }

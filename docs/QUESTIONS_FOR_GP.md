@@ -16,14 +16,32 @@
   (or a report date it carries) and no later than it was saved, and one taken after the other for certain is newer.
   Only where that cannot tell (a correction covering the same orders, the same file saved again), **the file saved later
   replaces the history's figures automatically**, with no admin's choice: its figures, the lines it shows deleted or no
-  longer bulk, the lines it leaves out of an order, exactly as a certainly newer file. So the first file saved again
-  later now wins over the correction. A saved date counts only when it is there and not before the file's latest order
-  (the upload says "not used" otherwise); a file carrying a report date counts as taken on that date. The upload's page
-  says which file won and why ("saved later", with both saved times). An earlier-saved file read after, or at the same
-  moment in another server process, brings nothing back. **What is still left with no way to tell** (both saved at the
-  same moment, or either file without a saved date that can be used) keeps the earlier behaviour for that remainder
-  only: the history stands and the disagreement is listed on the upload for an admin to keep or to take the file's
-  figures (Purchase files, and the assistant's settle_purchase_disagreements). Done.
+  longer bulk, exactly as a certainly newer file. So the first file saved again later now wins over the correction. A
+  file whose saved date cannot be used is dated by its upload (see the date rules below). The upload's page says which
+  file won and why ("saved later", with both saved times). An earlier-saved file read after, or at the same moment in
+  another server process, brings nothing back. **What is left with no way to tell** (two files with the very same dates,
+  to the second) keeps the earlier behaviour for that remainder only: the history stands and the disagreement is listed
+  on the upload for an admin to keep or to take the file's figures (Purchase files, and the assistant's
+  settle_purchase_disagreements). Done.
+- **The history starts from the purchase file that came with the code** ("load it for entire analysis"; GP will upload
+  the past 10 years himself). When the first file of any kind is uploaded and that one is not in yet, it is loaded
+  first, as its own upload by the same person, and the uploaded one after it; the usual rules put them in order. The
+  Load button stays. Done.
+- **A line simply not in a newer file of the same order is kept** ("keep it"): never taken as cancelled or dropped.
+  Only a line a file shows deleted, blocked, no longer bulk, not in rupees or per metre, or with other figures is
+  changed or removed. So a later download covering a longer span (July to date after August to date) takes each line
+  once; the upload says how many were already in and lists the ones it updated. Done.
+- **Every purchase order is loaded, whatever its construction details**: a code with no PLM specification (or an
+  incomplete one) is counted in its prices like any other, with its construction blank; the upload and the price popup
+  say "No PLM specification". Done. (Sample and yardage order types: still being asked; the kept types are unchanged.)
+- **File size: one file per year or per 6 months.** A file over the limit (40 MB now; the limit itself is still to be
+  decided) is refused on the screen as soon as it is chosen, before anything is sent, naming the limit and saying to
+  split it by 6 months or by year. Done.
+- **Dates a file carries (the reviewers' data-validity rule, not a decision of GP's):** nothing dated after the upload
+  is trusted. A saved date after the upload (a clock set wrong) or before the file's latest order is not used, and the
+  file is dated by its upload; a report date counts only between its latest order and its saved date, and two files of
+  the same report date go by their saved dates; a document date after the upload's day is kept but does not date the
+  file. Document dates are compared as days in India with saved times in UTC. Each date not used is said on the upload.
 - **Width tolerance: chain, as built.** Codes alike in the other eight fields whose widths are within half an inch of
   each other, directly or through other codes, are one group, so a group can run over more than half an inch from end
   to end (57, 57.4 and 57.8 in are one group). Kept; no change.
@@ -76,8 +94,18 @@ S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rat
   was taken after the other for certain: a later SAP export, with orders dated after the earlier one was saved, is.
   SAP's own export carries no report date. Where that cannot tell, the file saved later wins (GP, 28 Nov 2026, above).
 - **Every order line keeps the word of the newest file that covered it**: its figures, or that it was deleted, blocked,
-  no longer bulk, not in rupees or per metre, or left out of an order the file has, even before any file gave its
-  figures. So an older file read after a newer one (or at the same time, in two server processes) brings nothing back.
+  no longer bulk, not in rupees or per metre, even before any file gave its figures. So an older file read after a newer
+  one (or at the same time, in two server processes) brings nothing back.
+- **Right cost's purchase-order rows read the purchase history alone once it holds a file**, as the price popup and the
+  Fab group pages do, so the two never disagree. Before any file is loaded they show the pilot's purchases as the
+  purchase file that came with the code has them; the first upload loads that file first (GP, 28 Nov 2026, above). The Suppliers tab of Right cost counts as the supplier list does (a code bought only on ZLOI is not
+  counted). A code that moves group says what changed in its specification, or that a new code joined its widths; a
+  code not costed now shows its specification as it is now.
+- **Found and fixed in the second review of 28 Nov:** an older file's deletion never overrides a newer file's figures;
+  a document date in the future (a mistyped year) no longer dates a file
+  as newer than every export; costing choices a restart left half-done, or worked out on the rate master's lists as they
+  were, are worked out again; Right cost's purchase-order rows keep their supplier in the choices they open in Cost a
+  fabric. A row whose choices differ from the pilot's says what differs, not that its specification changed.
 - A code bought only on ZLOI orders is not counted as bought on the supplier list and pages; a group's mill with only
   ZLOI lines is listed, not counted; Pilot results says it is the pilot as run, ZLOI included (1,696 fabrics), beside
   the 1,512 every other page counts.
