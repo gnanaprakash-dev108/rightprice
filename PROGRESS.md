@@ -180,7 +180,67 @@ faults; all were fixed the same day (below, "After the cold review").
 
 ### Where things stand
 
-- **28 Nov, early morning (UTC): where everything stands. Start here.**
+- **28 Nov, morning (UTC, second session of the day): where everything stands. Start here.** (The "early morning"
+  bullet below is the state this session started from.)
+  - **Live site: unchanged** (main a497405, `/mcp/health` ok, postgres, 45 tools). Nothing was merged this session yet.
+  - **GP's decisions today** (all to be recorded in docs/QUESTIONS_FOR_GP.md by the branch that builds them):
+    - Fab group widths: chain within half an inch, as built.
+    - Purchase files: what two files cover decides first; where it cannot tell, **the file saved later wins**; only what
+      still cannot be told (same saved moment, or no usable saved date) is listed for an admin. The simplified rule given
+      to the stage 2 builder (orchestrator's wording, data validity): from = latest usable document date (India days) or
+      a usable report date's start; to = usable saved date, else the upload time; certain when A.from > B.to; else saved
+      later wins when both have usable saved dates; else admin. A row dated after its file was saved (or the upload) is
+      left out and listed "check it in SAP".
+    - A line simply absent from a newer file is **kept** (never taken as cancelled). Unique line = (PO, item): GP said
+      "fabric & PO"; the 4-month file has 49 bulk (PO, fabric) pairs on two items each (e.g. 840 m + 1,400 m), so the
+      item number stays in the key and both count.
+    - The history always starts from the purchase file that came with the code (the first upload of any file loads it
+      first). Every PO is loaded whatever its construction (blanks).
+    - Right cost's purchase-order costings **follow the rates in use** (or the order month's dated rate).
+    - Usual range / median / "above its group": **the last 12 months, rolling, ending today**, with a time slider on the
+      Fab group page and the price popup (a view only).
+    - **Fab library** tab: GP's PLM list uploaded by an admin, stored in the database, the source of construction; a
+      code missing from a later list keeps its last specification.
+    - **Store every PO line**; only domestic bulk per-metre lines count. Each line: order type category (Bulk, Letter of
+      intent, Sampling, Stock transfer, Return, Other; editable table), mode of sourcing (Domestic INR / Import other
+      currencies), unit (per metre or per kg, both kept; knits' per-kg should-cost logic later from GP), price in the
+      PO's currency and unit, the month's exchange rate, price in Rs. Imports kept apart, shown converted. Exchange rates:
+      **RBI reference rate by default, editable where the rate paid differs** (a task collected RBI/FBIL monthly averages
+      Nov 2025 to Nov 2026 with sources into the scratchpad, `fx/rbi_reference_monthly.csv`; check it before loading).
+    - GP: the Claude API key **is set** on the web app (read a few real drafts on the live site after stage 2 merges).
+    - GP sent: the full PLM list (418,877 codes, CSV in a zip, 26 KEEP columns; identical to the deployed 19,669) and a
+      one-year PO dump (SAP ME2M, Nov 2025 to Nov 2026, two files, no saved date in either). Kept **outside the
+      repository** in this container only: `/home/user/plm-input/PLM_fabric_list_slim.zip`,
+      `/home/user/po-input/Fabric_Inward_Me2M_1.xlsx`, `_2.xlsx` (a new container will not have them: ask GP to send them
+      again). GP asked the build session to load them on the live site once the code is live (through the assistant's
+      upload tools: the shipped file first, then file 2, then file 1; the PLM zip once the Fab library is live). A deep
+      analysis of the year was sent to GP (summary: Rs 661.5 crore of domestic bulk per-metre buying; about 43% of bulk
+      spend in USD/EUR/kg; a typing slip PO 3310092944/10 at Rs 71,158.75 a metre = Rs 12.5 crore; a price-slip guard
+      was given to stage 2).
+  - **Stage 2** (PR 28, branch `claude/sleepy-dirac-dknzrp-stage2`, pushed head d438c21; builder's worktree
+    `/home/user/wt-stage2b`, local branch `stage2-work`). Confirmed fixed by running (three reviews): N1 to N6, width
+    tolerance, saved later wins on plain SAP exports, two processes at once, restarts mid-upload, the rate-save wait
+    (58 s to 1.7 s). GitHub's checks job FAILED on d438c21 once (postgres, assistant section: Right cost rows for
+    F327PRS811038 and F327PCS810616 after an own export first), suspected race with the background working-out; it passed
+    in stage 4's job on the same code. Being fixed: that race; the simplified dating rule; the price-slip guard (over 10x
+    or under a tenth of the code's other lines: held apart "price to check in SAP"); **the Purchase files page drops the
+    chosen file (cannot upload from the page)**; wording after "rates in use"; Fab groups search by every word; dark print
+    of the group chart; "Rs 208.00 to 208.00". Then: full check, a last short re-review, merge on green, confirm deploy.
+  - **Stage 4** (PR 29, branch `...-stage4`, head d59422a green; worktree `/home/user/wt-stage4`). Cold review in
+    Chromium against live main: everything moved matches figure for figure, side panel geometry identical; fixes asked:
+    dark print black frame (pack, Create cost), a person not let in opening the New cost popup by address, Yarn prices
+    print page 1, a browser check uploading through Purchase files. Merge after stage 2, then GP confirms pages by eye.
+  - **Stage 2b** (new; branch `claude/sleepy-dirac-dknzrp-stage2b` from stage 4 d59422a, head 01dc57d WIP, no PR yet;
+    worktree `/home/user/wt-stage2b-new`): Fab library (db/006, rules/fab_library.py, web/library.js), the 12-month window
+    and slider, every PO line stored (db/007, order types, sourcing, units, exchange rates page web/pages/fx.js, Purchase
+    lines page). Measured on the real files: PLM list 94 to 102 s, pages under 2 s meanwhile; 12,123 codes, 11,295
+    grouped, 5,043 costed, 3,625 groups. **Checks not yet ALL OK.** Merge after stage 4.
+  - **Stage 6**: not started (after 2b).
+  - **Scheduled task** "RightPrice stages 2 and 4: resume every 5 hours" (trig_015Yt2FBUfpCXipE2oZBSs2A) fires into
+    this session; delete it once stages 2 and 4 are merged.
+  - Review worktrees `/home/user/wt-review3`, `wt-review4`, `wt-main` are read-only copies; remove them when done.
+
+- **28 Nov, early morning (UTC): where everything stood at the start of the second session.**
   - **Live and checked on the live site (through `/mcp/health` and the read-only MCP tools):** stage 1 (database,
     PostgreSQL since 27 Nov 12:13 UTC), stage 3 (users and roles, merged PR 26, off until `RIGHTPRICE_ADMINS`), stage 5
     (dated yarn rates, PR 27), and the **Admin-level AI assistant** (PR 31, merge aabd614: 46 tools; `/mcp/health` showed
