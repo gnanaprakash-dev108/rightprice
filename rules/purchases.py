@@ -817,7 +817,8 @@ def upload(filename, data, who=""):
 
 def upload_shipped(who=""):
     """The purchase file that came with the code (inputs/Fabric _ 3Months_4746.xlsx, 1 Aug to 23 Nov 2026), read as
-    any upload is: its date is the date SAP exported it, so it never undoes a newer file."""
+    any upload is: it covers its latest order (23 Nov 2026) up to when SAP saved it (05:48 UTC that day), so it never
+    undoes a newer file, nor one covering the same orders saved later."""
     need_db()
     if not os.path.exists(pilot.PO_FILE):
         raise common.Refused(404, "The purchase file that came with the code is not on this server.")
