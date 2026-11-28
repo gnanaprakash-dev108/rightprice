@@ -29,12 +29,14 @@ the code is loaded through the app (stage 2's purchase history), so every page i
    Bring in prices adds its rows as dated rates after asking the month and GST); a bookmark of the retired /classic;
    stage 2: a purchase order's price popup from its page and the Fab group from the popup, a code's popup from the
    group's page, a group found on the list of Fab groups, an upload's detail on Purchase files and the purchase file
-   loaded again from that page (read in the background, changing nothing);
+   loaded again from that page (read in the background, changing nothing), and a purchase-order file chosen and uploaded
+   on that page; Create cost, the pack and a page of the shell printed in dark colours come out on white paper (no dark
+   edge with background graphics ticked), and Yarn prices' table starts on page 1;
 3. with users and roles on (stage 3): a Viewer, a Buyer, a Rates editor and an Admin each see only the buttons their role
    may use; each walks every address (every page, every tab of the popup, Right cost, a fabric's page, a supplier's
    page, a setup list, Users and roles, a Fab group, the list of Fab groups, Purchase files): what the role may open draws, what it may not says so, the menus offer exactly
    what it may open, and the server is asked for nothing it refuses; and the same walk for a Buyer with each page
-   unticked in turn.
+   unticked in turn; someone signed in but never added gets no New cost popup from its address.
 A crash fails the run like any check, and whenever something failed the data folder and the servers' logs are kept.
 """
 import io
@@ -125,6 +127,18 @@ def mill_sheet_file():
     return buf.getvalue()
 
 
+def purchase_file(code):
+    """Stage 2: a purchase-order file as SAP exports it (the columns Purchase files reads): two bulk order lines, made up,
+    of a fabric code of the pilot, dated before the upload."""
+    import pandas as pd
+    row = lambda po, price: {"Purchasing Document": float(po), "Plant": "F007", "Document Date": pd.Timestamp("2026-11-24"), "Item": 10.0,
+                             "Material": code, "Short Text": "made up for the browser check", "Purchasing Doc. Type": "BO", "Order Quantity": 800,
+                             "Order Unit": "M", "Net Price": price, "Name of Supplier": "1200094    ARVIND LTD", "Currency": "INR", "Deletion Indicator": None}
+    buf = io.BytesIO()
+    pd.DataFrame([row(9700000001, 180), row(9700000002, 182)]).to_excel(buf, index=False)
+    return buf.getvalue()
+
+
 def cost_sheet_file(template):
     """Two mills' cost sheets on the template, differing from the rate master on overhead (as check_server.build does)."""
     import pandas as pd
@@ -151,6 +165,17 @@ def pdf_text(data):
     """The pages of a PDF: (count, landscape?, text)."""
     doc = _pdf(data)
     return doc.page_count, all(p.rect.width > p.rect.height for p in doc), "\n".join(p.get_text() for p in doc)
+
+
+def paper_edges(data):
+    """The colours at the four corners of a PDF's first page (printed with "Background graphics" ticked): on white paper
+    they are white, whatever the screen's theme."""
+    pix = _pdf(data)[0].get_pixmap(dpi=36)
+    return [tuple(pix.pixel(x, y)[:3]) for x, y in ((1, 1), (pix.width - 2, 1), (1, pix.height - 2), (pix.width - 2, pix.height - 2))]
+
+
+def white(colours):
+    return all(min(c) >= 245 for c in colours)
 
 
 def type_on_paper(page, sels):
@@ -256,7 +281,8 @@ def main():
         print(f"{name}: {'OK' if good else 'MISMATCH'} {detail}")
 
     data = tempfile.mkdtemp(prefix="rightprice-browser-")
-    files = {"sheet": os.path.join(data, "mill sheet.xlsx"), "prices": os.path.join(data, "yarn prices.csv"), "costsheet": os.path.join(data, "cost sheets.xlsx")}
+    files = {"sheet": os.path.join(data, "mill sheet.xlsx"), "prices": os.path.join(data, "yarn prices.csv"), "costsheet": os.path.join(data, "cost sheets.xlsx"),
+             "orders": os.path.join(data, "purchase orders for the check.xlsx")}
     app = None
     try:
         with open(files["sheet"], "wb") as f:
@@ -443,12 +469,14 @@ def main():
             during = page.evaluate("""() => [document.body.classList.contains('printing'), !!document.querySelector('.cost-out .print-stamp'),
                 [...document.querySelectorAll('style')].some(s => /@page \\{ margin: 14mm/.test(s.textContent))]""") + page.evaluate(look)
             count, _, text = pdf_text(page.pdf())
+            edges = paper_edges(page.pdf(print_background=True))
             page.evaluate("dispatchEvent(new Event('afterprint'))")
             after = page.evaluate("""() => [document.body.classList.contains('printing'), [...document.querySelectorAll('style')].some(s => /@page/.test(s.textContent))]""") + page.evaluate(look)
-            check("Create cost: Print lays out the cost alone (stamped, every table open), the cost light and the shell left dark, then puts the page back",
+            check("Create cost: Print lays out the cost alone (stamped, every table open), in light colours on white paper (no dark edge with background graphics "
+                  "ticked) while the screen stays dark, then puts the page back",
                   during == [True, True, True, "dark", THEME["dark"][0], THEME["light"][1]] and "Rs 181.40" in text and "printed" in text and "Load the example" not in text
-                  and "Settings and account" not in text and "Table of every line" in text and after == [False, False, "dark", THEME["dark"][0], THEME["dark"][1]],
-                  f"{during} {count} pages {after}")
+                  and "Settings and account" not in text and "Table of every line" in text and white(edges) and after == [False, False, "dark", THEME["dark"][0], THEME["dark"][1]],
+                  f"{during} {count} pages, paper's corners {edges}, {after}")
             check("No error in the console in Create cost", not page.errors, str(page.errors[:3]))
             page.context.close()
 
@@ -511,12 +539,14 @@ def main():
             page.wait_for_function("() => window.__printed === 1")
             during = page.evaluate("""() => [document.body.classList.contains('printing-pack'), [...document.querySelectorAll('style')].some(s => /A4 landscape/.test(s.textContent))]""") + page.evaluate(look)
             count, landscape, text = pdf_text(page.pdf(prefer_css_page_size=True))
+            edges = paper_edges(page.pdf(prefer_css_page_size=True, print_background=True))
             page.evaluate("dispatchEvent(new Event('afterprint'))")
             after = [page.evaluate("document.body.classList.contains('printing-pack')")] + page.evaluate(look)
-            check("Negotiation pack: Print gives the pack alone on A4 landscape, the pack light and the shell left dark, then puts the page back",
+            check("Negotiation pack: Print gives the pack alone on A4 landscape, in light colours on white paper (no dark edge with background graphics "
+                  "ticked) while the screen stays dark, then puts the page back",
                   during == [True, True, "dark", THEME["dark"][0], THEME["light"][1]] and landscape and "negotiation pack" in text
-                  and "Back to the list" not in text and "Settings and account" not in text and after == [False, "dark", THEME["dark"][0], THEME["dark"][1]],
-                  f"{during} {count} pages {after}")
+                  and "Back to the list" not in text and "Settings and account" not in text and white(edges) and after == [False, "dark", THEME["dark"][0], THEME["dark"][1]],
+                  f"{during} {count} pages, paper's corners {edges}, {after}")
             page.click(".popup a:has-text('Back to the list')")
             page.wait_for_selector(".popup table.list")
             check("Negotiation pack: Back to the list", page.get_attribute(".scrim[data-popup]", "data-tab") == "bulk")
@@ -603,6 +633,16 @@ def main():
             open_at(page, "yarn")
             off = type_on_paper(page, [".main .title", ".pg .card-head h2", ".pg .sub"])
             check("Yarn prices prints its type at the size it has on screen", not off, "; ".join(off))
+            first = app.api("/api/table/Yarn_Rates")["rows"][0][0]
+            doc = _pdf(page.pdf())
+            check("Yarn prices on paper: the yarn master's table starts on page 1 (a card with a table is not pushed whole to the next page)",
+                  "Yarn master" in doc[0].get_text() and first in doc[0].get_text(), f"{doc.page_count} pages; page 1: {doc[0].get_text()[-160:]!r}")
+            page.context.close()
+            page = tab("dark")
+            open_at(page, where["supplier"], None)
+            page.wait_for_selector(".dhead h1")
+            edges = paper_edges(page.pdf(print_background=True))
+            check("A page of the shell printed in dark colours with background graphics ticked prints on white paper (the supplier page)", white(edges), str(edges))
             page.context.close()
 
             # a rate table saved (a note, so no rate changes), prices brought in, a cotton price added with Enter
@@ -831,6 +871,22 @@ def main():
             check("Purchase files: an upload opens to what it held; the file that came with the code, loaded again from the page, is read in the background and changes nothing",
                   detail.startswith(f"Upload #{shipped['id']}: ") and "Loading the purchase file" in page.inner_text("#toast") and "already in" in newest
                   and after == before and not page.errors, f"{detail!r} {newest[:160]!r} {page.errors[:3]}")
+            # the page's own upload: choose a purchase-order file, press Upload, the job is read in the background, its counts show
+            with open(files["orders"], "wb") as f:
+                f.write(purchase_file(rich["code"]))
+            page.set_input_files(".main .uprow input[type=file]", files["orders"])
+            page.click(".main .uprow button:has-text('Upload')")
+            # read (three uploads, all read), or the page said why not (a refusal on the page, or a toast that nothing was sent)
+            page.wait_for_function("""() => { const t = document.querySelector('.main .grid'), toast = document.querySelector('#toast');
+                return (!!t && t.tBodies[0].rows.length === 3 && t.querySelectorAll('.upst.done').length === 3) || !!document.querySelector('.main [role=alert]')
+                    || (!!toast && !toast.hidden && /^Choose the purchase-order file first|refused|could not/i.test(toast.textContent)) }""", timeout=300000)
+            newest = page.locator(".main .grid tbody tr").first.inner_text()
+            if "purchase orders for the check.xlsx" not in newest:
+                newest = f"not uploaded: the page says {(page.inner_text('.main [role=alert]') if page.locator('.main [role=alert]').count() else '')[:120]!r}, toast {page.inner_text('#toast')[:120]!r}"
+            got = app.api("/api/purchases/status")["counts"]
+            check("Purchase files: a file chosen on the page and uploaded is read in the background and its counts show (2 order lines kept, 2 new)",
+                  "purchase orders for the check.xlsx" in newest and "2 order lines kept (2 new" in newest and got["lines"] == after["lines"] + 2 and not page.errors,
+                  f"{newest[:200]!r} lines {after['lines']} then {got['lines']} {page.errors[:3]}")
             page.context.close()
             app.costs()             # Right cost worked out again after the load, before the next checks
             browser.close()
@@ -952,6 +1008,16 @@ def main():
                 wrong = walk(who)
                 check(f"Roles: {an} {role} walks every address ({len(addresses)}): each opens or says it is not open as the role says, the menus agree, nothing refused",
                       not wrong, "; ".join(wrong[:4]))
+            # someone signed in but never added (permissions on): at a popup screen's address no popup opens over the page that
+            # says so, nothing is asked of the server that it refuses, and the address keeps no popup
+            page = person("stranger@example.com")
+            page.goto(f"{app.base}/?at={time.time()}#dashboard?new=bulk")
+            page.wait_for_function("() => /not been given access/.test((document.querySelector('.main .ua-nopage') || {}).textContent || '')", timeout=60000)
+            page.wait_for_timeout(1500)
+            check("Someone not let in, at the address of a New cost screen, gets no popup: only the page that says they have no access, nothing refused asked, no popup in the address",
+                  page.locator(".scrim[data-popup]").count() == 0 and "new=" not in page.url and not page.refused and not page.errors,
+                  f"{page.url} popups {page.locator('.scrim[data-popup]').count()} refused {page.refused[:3]} {page.errors[:3]}")
+            page.context.close()
             # the profile's notes (the e-mail, the role) stay as the shell draws them: stage 2's .note is its pages' own
             page = person("gp@example.com")
             page.goto(f"{app.base}/?at={time.time()}#dashboard")

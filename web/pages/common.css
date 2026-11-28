@@ -217,10 +217,15 @@
 
 /* ---------- on paper: the page in full, not the part in view */
 @media print {
+  /* paper is light whatever the theme: what is round the printed page (its margins too, with "Background graphics"
+     ticked) prints white, not the dark shell's background */
+  html, body { background: #fff !important; color-scheme: light !important; }
   .pgbox { container-type: normal; overflow: visible !important; height: auto !important; margin: 0 !important; }
   .pg { padding: 0 !important; }
   .pg.paper { background: none; min-height: 0; }
   .pg .card { box-shadow: none; break-inside: avoid; border-color: #c9d2de; }
+  .pg .card:has(table) { break-inside: auto; }        /* a card with a table starts on the page it reaches (a long one breaks between rows) */
+  .pg tr { break-inside: avoid; }
   .pg .table-wrap { max-height: none !important; overflow: visible !important; }
   .pg details > summary { list-style: none; font-weight: 700; }
   .pg details > summary::-webkit-details-marker { display: none; }

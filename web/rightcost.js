@@ -330,7 +330,8 @@ function route() {
   // the earlier addresses of the costing screens open them in the popup, over the Dashboard
   if (CONFIG.popupTabs.some(t => t[0] === full.split("/")[0])) { history.replaceState(null, "", "#dashboard?new=" + full.split("/")[0]); full = "dashboard?new=" + full.split("/")[0]; }
   let [hsh, q] = full.split("?"), want = new URLSearchParams(q || "").get("new"), open = document.querySelector(".scrim[data-popup]");
-  if (want && !CONFIG.popupTabs.some(t => t[0] === want)) { want = "cost"; history.replaceState(null, "", "#" + hsh + "?new=cost"); }
+  if (want && !CONFIG.popupTabs.length) { want = null; history.replaceState(null, "", "#" + hsh); }      // no screen of the popup open to this person (web/access.js)
+  else if (want && !CONFIG.popupTabs.some(t => t[0] === want)) { want = "cost"; history.replaceState(null, "", "#" + hsh + "?new=cost"); }
   if (want && !open) openPopup(want, undefined, true);
   else if (!want && open) { open.remove(); load(); }
   else if (want && open && open.dataset.tab !== want) open.switchTo(want, true);
@@ -955,7 +956,11 @@ function openPopup(tab = "cost", r = null, fromAddress = false) {
   // first what this person may use (web/access.js) and the rate master's lists, read afresh: a fabric opened from Right
   // cost needs the lists to find its yarns, and a yarn added by someone else since shows without a reload
   (async () => {
-    try { if (RP.known()) await RP.known(); await RP.loadMeta(); } catch (e) { /* the tab says the rate master could not be read */ }
+    try { if (RP.known()) await RP.known(); } catch (e) { /* asked again by web/access.js */ }
+    if (!s.isConnected) return;
+    // not let in, or no screen of the popup open to this role: no popup, and nothing asked of the server (the page says why)
+    if (shutOut() || !CONFIG.popupTabs.length) { s.remove(); history.replaceState(null, "", popupHash(null)); return; }
+    try { await RP.loadMeta(); } catch (e) { /* the tab says the rate master could not be read */ }
     if (!s.isConnected) return;
     let now = s.dataset.tab;                       // the address may have moved to another tab meanwhile
     if (!CONFIG.popupTabs.some(t => t[0] === now)) now = (CONFIG.popupTabs[0] || ["cost"])[0];
