@@ -16,9 +16,12 @@
 --     fabric_regroup records each move, for the group pages.
 --   - each order line keeps the evidence of the newest file that covered it (the second review, 27 Nov 2026): when that
 --     file can have been taken, from what it covers (its latest document date, or a report date it carries) to when it
---     was saved. A line a file shows deleted, or leaves out of an order it has, is kept as a mark even before any file
---     gave its figures, so an older file never brings it back. Where two files cannot be put in order and disagree, the
---     figures kept stand and the disagreement is listed for a person to settle (line_disagreement).
+--     was saved. Where what two files cover cannot tell which is newer, the one saved later wins (GP, 28 Nov 2026): the
+--     line's state_to is that file's saved date where it can be used (a report date it carries, else none). A line a
+--     file shows deleted, or leaves out of an order it has, is kept as a mark even before any file gave its figures, so
+--     an older file never brings it back. Where two files still cannot be put in order (saved at the same moment, or
+--     either without a saved date that can be used) and disagree, the figures kept stand and the disagreement is listed
+--     for a person to settle (line_disagreement).
 --     ZLOI lines are kept, and left out of every calculation (GP's decision).
 
 -- the mills: one record each, however the name is written (rules/mills.py, mill_key)
@@ -118,9 +121,11 @@ CREATE TABLE upload (
     file_date     TEXT,                     -- what the file covers: its latest document date (or the report date it carries)
     file_date_from TEXT,                    -- in words: what the file covers and when it was saved
     covers_from   TEXT,                     -- the earliest it can have been taken: its report date, else its latest document date
-    covers_to     TEXT,                     -- the latest: its report date, else when the workbook was saved (empty: not known)
+    covers_to     TEXT,                     -- the latest: its report date, else when the workbook was saved (empty: not known,
+                                            -- or saved before its latest document date). Where covers_from and covers_to
+                                            -- cannot tell two files apart, the later covers_to wins: saved later wins
     report_date   TEXT,                     -- a report or export date the file carries in a column of its own, if any
-    saved_at      TEXT,                     -- when the workbook says it was saved (not used to put files in order)
+    saved_at      TEXT,                     -- when the workbook says it was saved, as read (used through covers_to)
     error         TEXT,                     -- why it failed
     rows_total    BIGINT,                   -- rows in the file
     rows_loaded   BIGINT,                   -- order lines kept (new + changed + already in)
@@ -129,8 +134,8 @@ CREATE TABLE upload (
     rows_same     BIGINT,                   -- in an earlier file with the same figures: one line, not two
     rows_removed  BIGINT,                   -- in an earlier file; this newer one shows it deleted, blocked, not bulk, not rupees ...: marked removed
     rows_dropped  BIGINT,                   -- in an earlier file; this newer one has the rest of its order but not it: marked removed
-    rows_older    BIGINT,                   -- a newer file already gave these lines: this file's figures are not used for them
-    rows_disagree BIGINT,                   -- this file and the history disagree, and which is newer cannot be told: kept as they were, listed
+    rows_older    BIGINT,                   -- a newer (or later-saved) file already gave these lines: this file's figures are not used for them
+    rows_disagree BIGINT,                   -- this file and the history disagree, and which is newer cannot be told even by the saved dates: kept as they were, listed
     rows_outliers BIGINT,                   -- ZLOI lines among those kept: left out of every calculation, shown apart
     rows_skipped  BIGINT,                   -- left out (why in skipped)
     fabrics_new   BIGINT,
@@ -160,7 +165,8 @@ CREATE TABLE purchase_line (
     removed_why        TEXT,
     state_upload_id    BIGINT NOT NULL,     -- the newest file that covered it (set its figures, or removed or marked it),
     state_from         TEXT NOT NULL,       -- when that file can have been taken: from (upload.covers_from)
-    state_to           TEXT,                -- to (upload.covers_to; empty: not known)
+    state_to           TEXT,                -- to (upload.covers_to: its saved date or report date; empty: not known);
+                                            -- where from and to cannot tell two files apart, the later state_to wins
     UNIQUE (po_number, item)                -- the same order line uploaded twice is one line
 );
 CREATE INDEX purchase_line_fabric ON purchase_line (fabric_id, doc_date);
@@ -175,7 +181,8 @@ CREATE TABLE order_seen (
     PRIMARY KEY (po_number, upload_id)
 );
 
--- a file and the history disagree on a line and which is newer cannot be told: the history's figures were kept
+-- a file and the history disagree on a line and which is newer cannot be told, from what they cover nor from when they
+-- were saved (the same moment, or either without a saved date that can be used): the history's figures were kept
 CREATE TABLE line_disagreement (
     id          @ID@,
     upload_id   BIGINT NOT NULL REFERENCES upload(id),
