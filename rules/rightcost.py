@@ -1,6 +1,7 @@
 """Right cost: every costing in one list, the purchase-order costings of the pilot and the fabric list, each with
 its verdict on today's rates."""
 import io
+import hashlib
 import json
 import os
 import re
@@ -119,8 +120,11 @@ def costs():
                 "choices": r["Costing choices"] if "Costing choices" in r else _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS)),
                 "outliers": r["Outliers (ZLOI)"], "worked_out_again": r["Worked out again"]})
     version = store.get().version("rates")
-    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"],
-                             (version, dv, len(out), bool(cats), pkey, ins[0] if ins else None)) if out else {}
+    po_rows = [r for r in out if r["source"] == "Purchase orders"]
+    # the verdicts rest on each row's choices and metres (and the rates): rows served while new ones are worked out
+    # (purchases.pilot_rows) with the same choices need no second round
+    basis = hashlib.sha256(json.dumps([(r["code"], r["choices"], r["metres"]) for r in po_rows], sort_keys=True, default=str).encode()).hexdigest()
+    verdicts = _pilot_briefs(po_rows, (version, dv, len(out), bool(cats), basis, ins[0] if ins else None)) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
         r["rates"] = None           # the rates the costing is on: the order month's (worked out with the verdict)
@@ -187,12 +191,15 @@ def costs():
     mills._learn_mill_names({r["supplier"] for r in out})
     for r in out:
         r["mill"] = mills.mill_key(r["supplier"])
+        for o in r.get("outliers") or []:  # each ZLOI line's own mill (the Suppliers tab names those, not the row's supplier)
+            o["mill_key"] = mills.mill_key(o["mill"])
     groups = fab_groups.by_code()
     for r in out:           # stage 2: the purchase-order fabric's Fab group, from the purchase history
         if r["source"] == "Purchase orders":
             g = groups.get(str(r["code"])) or {}
             r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
-    val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
+    fresh = purchases.rows_up_to_date()     # the purchase-order rows are worked out again in the background after a change
+    val = {"rows": out, "ready": verdicts is not None and fresh, "updating": not fresh, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
     _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey), val=val)
     return val

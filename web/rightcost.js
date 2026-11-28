@@ -389,7 +389,7 @@ function render() {
   const title = h("button", { type: "button", class: "title", "aria-haspopup": "menu", onclick: e => menu(e.currentTarget, mod.classes.map(([k, label]) => ({ label: `${label} (${k === "*" ? state.rows.length : state.counts[k] || 0})`, on: k === state.cls, run: () => { state.cls = k; store.set("cls", k); state.selection.clear(); rerunWithSkeleton(); } }))) },
     CONFIG.appName, h("span", { class: "caret" }, "▾"));
   const tabs = h("div", { class: "tabs", role: "tablist" }, mod.tabs.map(([k, label]) => h("button", { type: "button", role: "tab", class: "tab" + (state.tab === k ? " on" : ""), "aria-selected": String(state.tab === k), onclick: () => { state.tab = k; render(); } }, label)));
-  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1])), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
+  fill(main, crumbs, h("div", { class: "tabsrow" }, h("div", {}, h("div", { class: "headrow" }, title, h("span", { class: "headsub" }, cls[1] + (state.updating ? " · being brought up to date (the figures shown are the last worked out)" : ""))), tabs), newCostButton()), toolbar(rows), chipsRow(), state.tab === "items" ? body(rows) : state.tab === "suppliers" ? suppliersTab(rows) : h("div", { class: "empty" }, "No records to view"));
   renderSelbar();
 }
 
@@ -514,15 +514,24 @@ function cardView(rows) {
   return grid;
 }
 // SUPPLIER COUNTS: what the Suppliers tab counts for each mill, as /api/suppliers counts it (rules/supplier.py): a
-// purchase-order code only with a price paid (one bought only on ZLOI orders is listed apart, never counted: GP, 27 Nov
-// 2026); a fabric-list row unless it repeats another. check_server.py runs this function on the server's rows and
-// compares it with /api/suppliers.
+// purchase-order code only with a price paid (one bought only on ZLOI orders is never counted: GP, 27 Nov 2026); a
+// fabric-list row unless it repeats another. Beside them, each mill's codes it sold on ZLOI orders and is not counted
+// for, named by the ZLOI lines' own mill (not the row's supplier). check_server.py runs this function on the server's
+// rows and compares it with /api/suppliers.
 function supplierCounts(rows) {
-  const by = {};
+  const by = {}, at = k => by[k] = by[k] || { counted: [], zloi: [], names: {}, ids: new Set() };
   for (const r of rows) {
-    const x = by[r.mill || "(none)"] = by[r.mill || "(none)"] || { counted: [], zloi: [] };
-    if (r.source === "Purchase orders" ? r.price !== null && r.price !== undefined : !r.duplicate_of) x.counted.push(r);
-    else if (r.source === "Purchase orders" && (r.outliers || []).length) x.zloi.push(r);
+    if (r.source === "Purchase orders" ? r.price !== null && r.price !== undefined : !r.duplicate_of) { const x = at(r.mill || "(none)"); x.counted.push(r); x.ids.add(r); }
+  }
+  for (const r of rows) {
+    if (r.source !== "Purchase orders") continue;
+    const seen = new Set();
+    for (const o of r.outliers || []) {
+      const k = o.mill_key || "(none)", x = at(k);
+      x.names[o.mill] = (x.names[o.mill] || 0) + 1;
+      if (!seen.has(k) && !x.ids.has(r)) x.zloi.push(r);
+      seen.add(k);
+    }
   }
   return by;
 }
@@ -531,14 +540,15 @@ function suppliersTab(rows) {
   if (!rows.length) return h("div", { class: "empty" }, "No records to view");
   const by = supplierCounts(rows);
   const nameOf = rs => { const n = {}; rs.forEach(r => { if (r.supplier) n[r.supplier] = (n[r.supplier] || 0) + 1; }); return (Object.entries(n).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || ["(no supplier)"])[0]; };
-  const list = Object.entries(by).filter(([, x]) => x.counted.length).map(([k, x]) => { const rs = x.counted, m = rs.filter(r => r.metres && r.price && r.should && !r.duplicate_of); const met = m.reduce((a, r) => a + r.metres, 0); return { k, s: nameOf(rs.concat(x.zloi)), n: rs.length, zloi: x.zloi.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" && !r.duplicate_of).length, high: rs.filter(r => r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
-  const zOnly = Object.entries(by).filter(([, x]) => !x.counted.length && x.zloi.length).map(([k, x]) => ({ k, s: nameOf(x.zloi), n: x.zloi.length })).sort((a, b) => b.n - a.n);
+  const list = Object.entries(by).filter(([, x]) => x.counted.length).map(([k, x]) => { const rs = x.counted, m = rs.filter(r => r.metres && r.price && r.should && !r.duplicate_of); const met = m.reduce((a, r) => a + r.metres, 0); return { k, s: nameOf(rs), n: rs.length, zloi: x.zloi.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" && !r.duplicate_of).length, high: rs.filter(r => r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
+  const zName = x => (Object.entries(x.names).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || ["(no supplier)"])[0];
+  const zOnly = Object.entries(by).filter(([, x]) => !x.counted.length && x.zloi.length).map(([k, x]) => ({ k, s: zName(x), n: x.zloi.length })).sort((a, b) => b.n - a.n);
   const anyZ = list.some(x => x.zloi) || zOnly.length;
   const millLink = x => x.k === "(none)" ? x.s : h("button", { type: "button", class: "code", onclick: () => { location.hash = "#supplier/" + encodeURIComponent(x.k); } }, x.s);
   return h("div", {}, list.length ? h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier (opens its page)", "Fabrics", "Metres", "Price Rs/m (average over metres)", "Should-cost Rs/m", "Price above (average over metres)", "Above range (Push)", "Look high, tool unsure", "Other unsure", ""].map((t, i) => h("th", { class: i && i < 9 ? "n" : "" }, t)))),
     h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, millLink(x)), h("td", { class: "n" }, n0(x.n), x.zloi ? h("div", { class: "muted", style: "font-size:11px" }, `+ ${n0(x.zloi)} ZLOI only, not counted`) : null), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.high)), h("td", { class: "n" }, n0(x.unsure)),
       h("td", {}, h("button", { type: "button", class: "btn line", style: "height:26px;font-size:12px", onclick: () => { state.filters.mill = [x.k]; state.tab = "items"; rerunWithSkeleton(); } }, "In the list"))))))) : h("div", { class: "empty" }, "No fabric bought (with a price paid) or quoted among these rows"),
-    anyZ ? h("p", { class: "muted", style: "margin-top:10px;font-size:12px" }, "A fabric bought only on ZLOI orders (letters of intent) is not counted as bought: it has no price paid (GP, 27 Nov 2026); its mill's page lists it apart." +
+    anyZ ? h("p", { class: "muted", style: "margin-top:10px;font-size:12px" }, "A fabric bought from a mill only on ZLOI orders (letters of intent) is not counted for that mill (GP, 27 Nov 2026): the figure under a mill's count is how many it sold only on ZLOI, named by the ZLOI lines' own mill; its page lists them apart." +
       (zOnly.length ? " Bought only on ZLOI orders, so not in the table: " : ""), zOnly.map((x, i) => [i ? ", " : "", millLink(x), ` (${n0(x.n)} ${x.n === 1 ? "fabric" : "fabrics"})`])) : null);
 }
 
@@ -1175,7 +1185,7 @@ async function load() {
   try {
     const [d, ng] = await Promise.all([(await fetch("/api/costs")).json(), fetch("/api/negotiations").then(x => x.json()).catch(() => ({ items: {}, kinds: [] }))]);
     state.negos = ng.items || {}; state.negoKinds = ng.kinds || [];
-    state.rows = d.rows; state.counts = d.counts;
+    state.rows = d.rows; state.counts = d.counts; state.updating = !!d.updating;      // the rows last worked out, while new ones are
     clearTimeout(load.t); if (!d.ready) load.t = setTimeout(load, 4000);       // the verdicts are worked out in the background
     if (!state.counts[state.cls] && state.cls !== "*") state.cls = state.counts["Purchase orders"] ? "Purchase orders" : "Fabric list";
     if (!state.frame) render();

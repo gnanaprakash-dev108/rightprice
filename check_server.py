@@ -699,32 +699,37 @@ def _stage2_file(rows, saved=None, extra=()):
 
 
 def _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl):
-    """The second review of stage 2 (27 Nov 2026): every order line keeps the word of the newest file that covered it, so
-    an older file read after a newer one brings nothing back, one after the other and both at once; which file is newer
-    is read first from what it covers (its latest document date, a report date it carries), and where that cannot tell,
-    from when it was saved (GP, 28 Nov 2026: the file saved later wins); where even that cannot tell and a file disagrees
-    with the history, the history stands and the disagreement is listed, for an admin to keep or to take the file's
-    figures. Made-up orders 99000000 30 to 62."""
+    """The second reviews of stage 2 (27 and 28 Nov 2026) and GP's decisions of 28 Nov: every order line keeps the word of
+    the newest file that covered it, so an older file read after a newer one brings nothing back, one after the other and
+    both at once; which file is newer is read first from what it covers (its latest document date, a report date it
+    carries), and where that cannot tell, from when it was saved (saved later wins); nothing dated after the upload is
+    trusted; a line simply not in a newer file stays; only two files with the very same dates are listed for an admin.
+    Made-up orders 99000000 30 to 82. Every saved date made up here is before 28 Nov 2026, so none is after its upload."""
     import pandas as pd
     import store
     import data_purchases as dp
     from rules import purchases
     st = store.get()
+    up = lambda name, data: wait(c.post("/api/purchases/upload", files={"file": (name, io.BytesIO(data))}).json()["id"])
+    detail = lambda u: c.get(f"/api/purchases/uploads/{u['id'] if isinstance(u, dict) else u}").json()
     held = lambda po: {r[0]: (r[1], r[2], r[3]) for r in st._read(lambda cur: cur.all(
-        "SELECT item, price, doc_type, removed_why FROM purchase_line WHERE po_number = %s ORDER BY item", (po,)))}
+        "SELECT item, price, doc_type, removed_why FROM purchase_line WHERE po_number = %s ORDER BY item", (str(po),)))}
     counted = lambda po: {i: (p, t) for i, (p, t, gone) in held(po).items() if gone is None}
-    # N1, one after the other: the newer file read first (item 10 deleted in SAP, item 20 left out of its order), the older after it
+    state_of = lambda po: {r[0]: (r[1], r[2]) for r in st._read(lambda cur: cur.all(
+        "SELECT item, state_upload_id, state_to FROM purchase_line WHERE po_number = %s ORDER BY item", (str(po),)))}
+    by_saved = lambda u, side: [(x["id"], x["saved_at"], x["lines"]) for x in u["summary"].get(side, [])]
+    # N1, one after the other: the newer file read first (item 10 deleted in SAP; item 20 not in it), the older after it
     p1 = lambda po, item, **kw: row(po, item, a2, "2026-11-05", raj, 400, 110 + item / 10, **kw)
     newer1 = lambda po: _stage2_file([p1(po, 10, **{"Deletion Indicator": "L"}), p1(po, 30), row(po + 1, 10, a2, "2026-11-24", raj, 50, 112)],
                                      saved="2026-11-25T08:00:00")
     older1 = lambda po: _stage2_file([p1(po, 10), p1(po, 20), p1(po, 30, **{"Net Price": 99})], saved="2026-11-12T08:00:00")
-    n1 = wait(c.post("/api/purchases/upload", files={"file": ("newer first.xlsx", io.BytesIO(newer1(9900000030)))}).json()["id"])
-    o1 = wait(c.post("/api/purchases/upload", files={"file": ("older after it.xlsx", io.BytesIO(older1(9900000030)))}).json()["id"])
-    check(f"{k} a newer file read first (a line deleted in SAP, a line left out of its order), then an older one: neither line comes back, nor the "
-          "older price; the older file's lines are all counted as not used",
-          counted("9900000030") == {"30": (113.0, "BO")} and set(held("9900000030")) == {"10", "20", "30"} and o1["rows_older"] == 3 and o1["rows_new"] == 0
-          and o1["rows_loaded"] == 3 and n1["covers_from"] == "2026-11-24T00:00:00" and o1["covers_to"] == "2026-11-12T08:00:00",
-          f"{held('9900000030')} {({x: o1[x] for x in o1 if x.startswith('rows')})}")
+    n1, o1 = up("newer first.xlsx", newer1(9900000030)), up("older after it.xlsx", older1(9900000030))
+    check(f"{k} a newer file read first (a line deleted in SAP), then an older one: the deleted line does not come back, nor the older price; "
+          "the line the newer file does not have stays, from the older one (GP, 28 Nov 2026: a line not in a newer file is not cancelled); "
+          "document dates are days in India, saved times UTC",
+          counted(9900000030) == {"20": (112.0, "BO"), "30": (113.0, "BO")} and o1["rows_older"] == 2 and o1["rows_new"] == 1 and o1["rows_loaded"] == 3
+          and n1["covers_from"] == "2026-11-23T18:30:00" and o1["covers_to"] == "2026-11-12T08:00:00",
+          f"{held(9900000030)} {({x: o1[x] for x in o1 if x.startswith('rows')})} {n1['covers_from']}")
     # N1, both at once in two server processes (the newer one in the other)
     for _ in range(200):
         if purchases._jobs["thread"] is None:
@@ -739,82 +744,140 @@ def _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl):
     _, err_ = other.communicate(timeout=300)
     both = [wait(u_new), wait(u_old)]
     check(f"{k} the same two files read at once in two server processes: the same outcome, nothing brought back",
-          other.returncode == 0 and all(x["status"] == "done" for x in both) and counted("9900000040") == {"30": (113.0, "BO")}, f"{err_[-300:]} {held('9900000040')}")
+          other.returncode == 0 and all(x["status"] == "done" for x in both) and counted(9900000040) == {"20": (112.0, "BO"), "30": (113.0, "BO")},
+          f"{err_[-300:]} {held(9900000040)}")
+    # an older file's deletion never overrides a newer file's figures (GP, 28 Nov 2026)
+    tri = lambda po, item, day, price, **kw: row(po, item, b1, day, nsl, 100, price, **kw)
+    up("order 9900000080, live at 999 (saved 6 Nov).xlsx", _stage2_file([tri(9900000080, 10, "2026-11-05", 145), tri(9900000080, 20, "2026-11-05", 999)],
+                                                                        saved="2026-11-06T08:00:00"))
+    up("order 9900000080, deleted (saved 2 Nov).xlsx", _stage2_file([tri(9900000080, 10, "2026-11-01", 140), tri(9900000080, 20, "2026-11-01", 140, **{"Deletion Indicator": "L"})],
+                                                                   saved="2026-11-02T08:00:00"))
+    check(f"{k} an older file showing a line deleted, read after a newer one that has it live: the newer figures stand",
+          counted(9900000080) == {"10": (145.0, "BO"), "20": (999.0, "BO")}, str(held(9900000080)))
     # N2, GP's decision of 28 Nov 2026 ("saved later wins"): a correction covering the same orders as the file it corrects
     # (what they cover cannot tell which is newer) wins because it was saved later, and so does the first file saved
-    # again after it; the one saved earlier, read after, brings nothing back. Only a pair the saved dates cannot tell
-    # apart either (the same moment; a file with no saved date, or one before its latest order) is listed for an admin.
+    # again after it; the one saved earlier, read after, brings nothing back
     q = lambda po, price, item=10, **kw: row(po, item, b1, "2026-11-15", nsl, 282, price, **kw)
     base_rows = [q(9900000050, 282), q(9900000051, 300), q(9900000052, 310, **{"Purchasing Doc. Type": "ZLOI"}), q(9900000053, 280), q(9900000053, 281, item=20)]
-    u_f = wait(c.post("/api/purchases/upload", files={"file": ("first.xlsx", io.BytesIO(_stage2_file(base_rows, saved="2026-11-16T08:00:00")))}).json()["id"])["id"]
-    corr = _stage2_file([q(9900000050, 292), q(9900000051, 300, **{"Deletion Indicator": "L"}), q(9900000052, 310), q(9900000053, 280)], saved="2026-11-27T08:00:00")
-    u_c = wait(c.post("/api/purchases/upload", files={"file": ("correction.xlsx", io.BytesIO(corr))}).json()["id"])["id"]
-    det = c.get(f"/api/purchases/uploads/{u_c}").json()
+    u_f = up("first.xlsx", _stage2_file(base_rows, saved="2026-11-16T08:00:00"))["id"]
+    corr = _stage2_file([q(9900000050, 292), q(9900000051, 300, **{"Deletion Indicator": "L"}), q(9900000052, 310), q(9900000053, 280)], saved="2026-11-26T08:00:00")
+    u_c = up("correction.xlsx", corr)["id"]
+    det = detail(u_c)
     now = lambda: [counted(f"99000000{n}") for n in (50, 51, 52, 53)]
-    state_of = lambda po: {r[0]: (r[1], r[2]) for r in st._read(lambda cur: cur.all(
-        "SELECT item, state_upload_id, state_to FROM purchase_line WHERE po_number = %s ORDER BY item", (po,)))}
-    by_saved = lambda u, side: [(x["id"], x["saved_at"], x["lines"]) for x in u["summary"].get(side, [])]
     after_corr = now()
     check(f"{k} a correction covering the same orders as the first file, saved later: what they cover cannot tell which is newer, so the one saved "
-          "later wins at once, no admin asked: its price, its order type (ZLOI to BO, now counted), the line it shows deleted and the line it leaves "
-          "out of an order; nothing listed; the upload says it won on 4 lines over the first file, saved later, with both saved times",
-          after_corr == [{"10": (292.0, "BO")}, {}, {"10": (310.0, "BO")}, {"10": (280.0, "BO")}] and det["disagree_count"] == 0 and det["summary"]["disagreements"] == 0
-          and (det["rows_changed"], det["rows_same"], det["rows_removed"], det["rows_dropped"], det["rows_disagree"], det["rows_loaded"]) == (2, 1, 1, 1, 0, 3)
-          and by_saved(det, "saved_later_than") == [(u_f, "2026-11-16T08:00:00", 4)] and det["saved_at"] == "2026-11-27T08:00:00"
-          and all(v == (u_c, "2026-11-27T08:00:00") for po in ("9900000050", "9900000051", "9900000053") for v in state_of(po).values()),
-          f"{after_corr} {({x: det[x] for x in det if x.startswith('rows')})} {det['summary'].get('saved_later_than')} {state_of('9900000053')}")
-    u_r = wait(c.post("/api/purchases/upload", files={"file": ("first, saved again.xlsx", io.BytesIO(_stage2_file(base_rows, saved="2026-11-28T08:00:00")))}).json()["id"])["id"]
-    det_r = c.get(f"/api/purchases/uploads/{u_r}").json()
+          "later wins at once, no admin asked: its price, its order type (ZLOI to BO, now counted), the line it shows deleted; the line it does not "
+          "have stays; nothing listed; the upload says it won on 3 lines over the first file, saved later, with both saved times, and lists them",
+          after_corr == [{"10": (292.0, "BO")}, {}, {"10": (310.0, "BO")}, {"10": (280.0, "BO"), "20": (281.0, "BO")}] and det["disagree_count"] == 0
+          and (det["rows_changed"], det["rows_same"], det["rows_removed"], det["rows_dropped"], det["rows_disagree"], det["rows_loaded"]) == (2, 1, 1, 0, 0, 3)
+          and by_saved(det, "saved_later_than") == [(u_f, "2026-11-16T08:00:00", 3)] and det["saved_at"] == "2026-11-26T08:00:00"
+          and sorted((x["po"], x["now"].get("price"), bool(x["now"].get("removed"))) for x in det["summary"]["changed_lines"])
+          == [("9900000050", 292.0, False), ("9900000051", None, True), ("9900000052", 310.0, False)]
+          and all(v == (u_c, "2026-11-26T08:00:00") for po in (9900000050, 9900000051) for v in state_of(po).values())
+          and state_of(9900000053) == {"10": (u_c, "2026-11-26T08:00:00"), "20": (u_f, "2026-11-16T08:00:00")},
+          f"{after_corr} {({x: det[x] for x in det if x.startswith('rows')})} {det['summary'].get('saved_later_than')} {state_of(9900000053)}")
+    u_r = up("first, saved again.xlsx", _stage2_file(base_rows, saved="2026-11-27T08:00:00"))["id"]
+    det_r = detail(u_r)
     after_r = now()
     check(f"{k} the first file saved again later now wins over the correction (saved later): its figures replace the correction's (282, the line "
-          "deleted there counted again, ZLOI again, the line left out there back); the upload says so with both saved times; each line carries its saved date",
+          "deleted there counted again, ZLOI again); the upload says so with both saved times; each line carries its saved date",
           after_r == [{"10": (282.0, "BO")}, {"10": (300.0, "BO")}, {"10": (310.0, "ZLOI")}, {"10": (280.0, "BO"), "20": (281.0, "BO")}]
-          and det_r["disagree_count"] == 0 and (det_r["rows_changed"], det_r["rows_same"]) == (4, 1) and by_saved(det_r, "saved_later_than") == [(u_c, "2026-11-27T08:00:00", 4)]
-          and all(v == (u_r, "2026-11-28T08:00:00") for po in ("9900000050", "9900000051", "9900000052", "9900000053") for v in state_of(po).values()),
+          and det_r["disagree_count"] == 0 and (det_r["rows_changed"], det_r["rows_same"]) == (3, 2) and by_saved(det_r, "saved_later_than") == [(u_c, "2026-11-26T08:00:00", 3)]
+          and all(v == (u_r, "2026-11-27T08:00:00") for po in (9900000050, 9900000051, 9900000052, 9900000053) for v in state_of(po).values()),
           f"{after_r} {({x: det_r[x] for x in det_r if x.startswith('rows')})} {det_r['summary'].get('saved_later_than')}")
-    u_c2 = wait(c.post("/api/purchases/upload", files={"file": ("correction, read again.xlsx", io.BytesIO(corr))}).json()["id"])["id"]
-    det_c2 = c.get(f"/api/purchases/uploads/{u_c2}").json()
-    check(f"{k} the correction read again after it, saved earlier: it brings nothing back nor changes anything (no price, no deletion, no line left "
-          "out); its lines are counted as not used, and the upload says the later-saved file stands on the 4 lines where they differ",
-          now() == after_r and det_c2["disagree_count"] == 0 and (det_c2["rows_older"], det_c2["rows_changed"], det_c2["rows_removed"], det_c2["rows_dropped"]) == (3, 0, 0, 0)
-          and by_saved(det_c2, "saved_earlier_than") == [(u_r, "2026-11-28T08:00:00", 4)] and not det_c2["summary"].get("saved_later_than"),
+    det_c2 = detail(up("correction, read again.xlsx", corr))
+    check(f"{k} the correction read again after it, saved earlier: it brings nothing back nor changes anything; its lines are counted as not used, "
+          "and the upload says the later-saved file stands on the 3 lines where they differ",
+          now() == after_r and det_c2["disagree_count"] == 0 and (det_c2["rows_older"], det_c2["rows_changed"], det_c2["rows_removed"]) == (3, 0, 0)
+          and by_saved(det_c2, "saved_earlier_than") == [(u_r, "2026-11-27T08:00:00", 3)] and not det_c2["summary"].get("saved_later_than"),
           f"{now()} {({x: det_c2[x] for x in det_c2 if x.startswith('rows')})} {det_c2['summary'].get('saved_earlier_than')}")
-    # what the saved dates cannot tell either: saved at the same moment; saved before its latest order; no saved date
-    same_moment = _stage2_file([q(9900000050, 289)] + base_rows[1:], saved="2026-11-28T08:00:00")
-    u_s = wait(c.post("/api/purchases/upload", files={"file": ("first, edited, saved the same moment.xlsx", io.BytesIO(same_moment))}).json()["id"])
-    det_s = c.get(f"/api/purchases/uploads/{u_s['id']}").json()
+    # what nothing can tell: two files with the very same dates, to the second
+    gp_ = {"X-MS-CLIENT-PRINCIPAL-NAME": "gp@example.com"}            # the sign-in's name (permissions are off in this run)
+    det_s = detail(up("first, edited, saved the same moment.xlsx", _stage2_file([q(9900000050, 289)] + base_rows[1:], saved="2026-11-27T08:00:00")))
     check(f"{k} a file covering the same orders saved at the very same moment: nothing can tell, so the history stands and the one line it differs "
           "on is listed for an admin",
           now() == after_r and det_s["disagree_count"] == 1 and det_s["rows_disagree"] == 1 and det_s["rows_same"] == 4
           and [(x["po"], x["kept"].get("price"), x["file"].get("price")) for x in det_s["disagreements"]] == [("9900000050", 282.0, 289.0)], str(det_s["disagreements"])[:300])
-    gp_ = {"X-MS-CLIENT-PRINCIPAL-NAME": "gp@example.com"}            # the sign-in's name (permissions are off in this run)
-    kept = c.post("/api/purchases/disagreements", json={"upload_id": u_s["id"], "take": "kept"}, headers=gp_)
-    twice = c.post("/api/purchases/disagreements", json={"upload_id": u_s["id"], "take": "kept"})
-    bad = [c.post("/api/purchases/disagreements", json=b).status_code for b in ({}, {"upload_id": u_s["id"], "take": "both"}, {"upload_id": 999999, "take": "kept"})]
-    det_s2 = c.get(f"/api/purchases/uploads/{u_s['id']}").json()
+    kept = c.post("/api/purchases/disagreements", json={"upload_id": det_s["id"], "take": "kept"}, headers=gp_)
+    twice = c.post("/api/purchases/disagreements", json={"upload_id": det_s["id"], "take": "kept"})
+    bad = [c.post("/api/purchases/disagreements", json=b).status_code for b in ({}, {"upload_id": det_s["id"], "take": "both"}, {"upload_id": 999999, "take": "kept"})]
+    det_s2 = detail(det_s["id"])
     check(f"{k} keeping the history's figures changes nothing and settles them, with who and how; settling twice, or without saying which upload "
           "or which way, is refused",
           kept.status_code == 200 and kept.json()["settled"] == 1 and now() == after_r and det_s2["disagree_open"] == 0
           and [(x["settled_as"], x["settled_by"]) for x in det_s2["disagreements"]] == [("kept", "gp@example.com")]
           and twice.status_code == 400 and "nothing left to settle" in twice.json()["detail"] and bad == [400, 400, 404],
           f"{kept.text[:200]} {twice.status_code} {twice.text[:120]} {bad} {[(x['settled_as'], x['settled_by']) for x in det_s2['disagreements']]}")
-    early = _stage2_file([q(9900000052, 315)], saved="2026-11-10T08:00:00")
-    u_e = wait(c.post("/api/purchases/upload", files={"file": ("saved before its latest order.xlsx", io.BytesIO(early))}).json()["id"])
-    check(f"{k} a file saved before its latest order: that saved date is not used, so nothing can tell; the history stands and the line is listed",
-          u_e["covers_to"] is None and "not used" in u_e["file_date_from"] and u_e["rows_disagree"] == 1 and now() == after_r, str({x: u_e[x] for x in u_e if x.startswith(("rows", "file", "covers"))}))
+    det_t = detail(up("first, edited again, saved the same moment.xlsx", _stage2_file([base_rows[0], q(9900000051, 305)] + base_rows[2:], saved="2026-11-27T08:00:00")))
+    took = c.post("/api/purchases/disagreements", json={"upload_id": det_t["id"], "take": "file"}, headers=gp_)
+    settled_t = [(x["settled_as"], x["settled_by"]) for x in detail(det_t["id"])["disagreements"]]
+    check(f"{k} an admin takes that file's figures: the line follows it (305), settled as the file's, by whom; the other lines as they were",
+          det_t["disagree_count"] == 1 and took.status_code == 200 and took.json()["settled"] == 1 and counted(9900000051) == {"10": (305.0, "BO")}
+          and [now()[0]] + now()[2:] == [after_r[0]] + after_r[2:] and settled_t == [("file", "gp@example.com")], f"{took.text[:200]} {settled_t} {now()}")
+    # nothing dated after the upload is trusted; a file with no saved date it can be dated by is dated by its upload
+    early = up("saved before its latest order.xlsx", _stage2_file([q(9900000052, 315)], saved="2026-11-10T08:00:00"))
+    check(f"{k} a file saved before its latest order: that saved date is not used and it says why; it is dated by its upload, so it comes after "
+          "the files saved before it was uploaded: its figures are taken",
+          early["covers_to"] == early["covers_saved"] > "2026-11-27T08:00:00" and "before its latest order" in early["file_date_from"]
+          and counted(9900000052) == {"10": (315.0, "BO")}, str({x: early[x] for x in early if x.startswith(("rows", "file", "covers"))}))
     nosave = _stage2_file([row(9900000060, 10, b1, "2026-08-21", nsl, 100, 150), row(9900000061, 10, b1, "2026-08-20", nsl, 100, 151),
                            row(9900000050, 10, b1, "2026-08-21", nsl, 282, 295)], saved="none")
-    u_n = wait(c.post("/api/purchases/upload", files={"file": ("no saved date.xlsx", io.BytesIO(nosave))}).json()["id"])
-    check(f"{k} a file with no saved date covers its latest document date and could have been taken any time since: its new lines are taken, and "
-          "where it differs from the history nothing is lost or guessed: listed",
-          u_n["file_date"] == "2026-08-21" and u_n["covers_to"] is None and "no saved date" in u_n["file_date_from"] and u_n["rows_new"] == 2
-          and u_n["rows_disagree"] == 1 and counted("9900000060") == {"10": (150.0, "BO")} and counted("9900000050") == {"10": (282.0, "BO")},
-          str({x: u_n[x] for x in u_n if x.startswith(("rows", "file", "covers"))}))
-    took = c.post("/api/purchases/disagreements", json={"upload_id": u_n["id"], "take": "file"}, headers=gp_)
-    settled_n = [(x["settled_as"], x["settled_by"]) for x in c.get(f"/api/purchases/uploads/{u_n['id']}").json()["disagreements"]]
-    check(f"{k} an admin takes that file's figures: the line follows it (295), settled as the file's, by whom; the other lines as they were",
-          took.status_code == 200 and took.json()["settled"] == 1 and counted("9900000050") == {"10": (295.0, "BO")} and now()[1:] == after_r[1:]
-          and settled_n == [("file", "gp@example.com")], f"{took.text[:200]} {settled_n} {now()}")
+    u_n = up("no saved date.xlsx", nosave)
+    check(f"{k} a file with no saved date is dated by its upload: its new lines are taken, and the line it differs on takes its figures, as the "
+          "later file (nothing pushed to an admin again and again)",
+          u_n["file_date"] == "2026-08-21" and u_n["covers_to"] == u_n["covers_saved"] > "2026-11-27T08:00:00" and "no saved date it can be dated by" in u_n["file_date_from"]
+          and (u_n["rows_new"], u_n["rows_changed"], u_n["rows_disagree"]) == (2, 1, 0) and counted(9900000060) == {"10": (150.0, "BO")}
+          and counted(9900000050) == {"10": (295.0, "BO")}, str({x: u_n[x] for x in u_n if x.startswith(("rows", "file", "covers"))}))
+    # an order dated a day in India against a saved time in UTC: saved 19:30 UTC on 27 Nov is 01:00 on 28 Nov in India
+    ist = lambda price, saved: _stage2_file([tri(9900000063, 10, "2026-11-28", price)], saved=saved)
+    u_x = up("taken just after midnight in India.xlsx", ist(120, "2026-11-27T19:30:00"))
+    u_y = up("taken that morning.xlsx", ist(125, "2026-11-28T05:00:00"))
+    check(f"{k} an export taken just after midnight in India with that day's orders: its saved date counts (no 'before its latest order'), and the "
+          "one saved later that morning wins",
+          u_x["covers_to"] == "2026-11-27T19:30:00" and "not used" not in u_x["file_date_from"] and counted(9900000063) == {"10": (125.0, "BO")}
+          and u_y["rows_changed"] == 1, f"{u_x['file_date_from']} {held(9900000063)}")
+    # a saved date in the future (the workbook's clock set wrong) is not used: a real export saved later wins
+    u_fu = up("saved by a clock a year on.xlsx", _stage2_file([tri(9900000064, 10, "2026-11-15", 130)], saved="2027-11-20T00:00:00"))
+    time.sleep(1.5)
+    u_re = up("the real export, saved now.xlsx", _stage2_file([tri(9900000064, 10, "2026-11-15", 135)], saved=purchases.utc_now()))
+    check(f"{k} a workbook saved by a clock a year on: that saved date is not used (said on the upload), it is dated by its upload, and the real "
+          "export saved after it wins",
+          u_fu["covers_to"] == u_fu["covers_saved"] < "2027-01-01" and "clock was wrong" in u_fu["file_date_from"] and counted(9900000064) == {"10": (135.0, "BO")}
+          and u_re["rows_changed"] == 1, f"{u_fu['file_date_from']} {held(9900000064)}")
+    # report dates: used only between the latest order and the saved date
+    rpt = lambda rows_, saved, report: _stage2_file([dict(r_, **{"Report Date": pd.Timestamp(report)}) for r_ in rows_], saved=saved, extra=["Report Date"])
+    up("the real export (orders to 15 Nov).xlsx", _stage2_file([tri(9900000065, 10, "2026-11-15", 140), tri(9900000065, 20, "2026-11-15", 150, **{"Deletion Indicator": "L"})],
+                                                                saved="2026-11-20T08:00:00"))
+    u_o = up("an October file, report date typed 2027.xlsx", rpt([tri(9900000065, 10, "2026-10-01", 120), tri(9900000065, 20, "2026-10-01", 150)], "2026-10-05T08:00:00", "2027-10-02"))
+    up("report date before its orders (1 Nov, orders 25 Nov).xlsx", rpt([tri(9900000066, 10, "2026-11-25", 150), tri(9900000066, 20, "2026-11-25", 160, **{"Deletion Indicator": "L"})],
+                                                                        "2026-11-26T08:00:00", "2026-11-01"))
+    up("a later export (orders to 10 Nov).xlsx", _stage2_file([tri(9900000066, 10, "2026-11-10", 140), tri(9900000066, 20, "2026-11-10", 160)], saved="2026-11-12T08:00:00"))
+    up("an export, orders to 22 Nov.xlsx", _stage2_file([tri(9900000067, 10, "2026-11-22", 160)], saved="2026-11-23T08:00:00"))
+    u_late_rep = up("report date after it was saved.xlsx", rpt([tri(9900000067, 10, "2026-11-15", 150)], "2026-11-20T08:00:00", "2026-11-27"))
+    check(f"{k} a report date counts only between the file's latest order and its saved date: one typed a year on, one before its orders, one after "
+          "the file was saved are not used (each said on the upload), and the files are dated by their orders and saved dates: nothing brought back",
+          counted(9900000065) == {"10": (140.0, "BO")} and counted(9900000066) == {"10": (150.0, "BO")} and counted(9900000067) == {"10": (160.0, "BO")}
+          and u_o["report_used"] is None and "is after it was saved: not used" in u_o["file_date_from"] and u_late_rep["report_used"] is None,
+          f"{held(9900000065)} {held(9900000066)} {held(9900000067)} {u_o['file_date_from']}")
+    s1 = rpt([tri(9900000068, 10, "2026-11-20", 170)], "2026-11-21T08:00:00", "2026-11-20")
+    s2 = rpt([tri(9900000068, 10, "2026-11-20", 175)], "2026-11-22T08:00:00", "2026-11-20")
+    u_s1 = up("report date 20 Nov, saved 21 Nov.xlsx", s1)
+    u_s2 = up("report date 20 Nov, saved 22 Nov.xlsx", s2)
+    check(f"{k} two files with the same report date: the one saved later wins, as for any file (no admin asked); the report date is used, from the "
+          "start to the end of that day in India",
+          counted(9900000068) == {"10": (175.0, "BO")} and u_s2["rows_changed"] == 1 and u_s2["rows_disagree"] == 0 and u_s1["report_used"] == "2026-11-20"
+          and (u_s1["covers_from"], u_s1["covers_to"]) == ("2026-11-19T18:30:00", "2026-11-20T18:29:59"), f"{held(9900000068)} {u_s1['covers_from']} {u_s1['covers_to']}")
+    # a mistyped document date a year on does not date the file: its saved date still puts it in order
+    ahead = (_dt.date.today() + _dt.timedelta(days=400)).isoformat()
+    up("saved last.xlsx", _stage2_file([tri(9900000082, 10, "2026-11-20", 150), tri(9900000082, 20, "2026-11-20", 160, **{"Deletion Indicator": "L"})], saved="2026-11-27T08:00:00"))
+    u_ty = up("a date typed a year on.xlsx", _stage2_file([tri(9900000082, 10, "2026-11-20", 140), tri(9900000082, 20, "2026-11-20", 160),
+                                                          tri(9900000082, 30, ahead, 170, **{"Deletion Indicator": "L"})], saved="2026-11-25T08:00:00"))
+    det_ty = detail(u_ty)
+    check(f"{k} a row dated a year on ({ahead}) in a file saved 25 Nov: the date is after the upload, so it does not date the file; its saved date "
+          "is used, the file saved 27 Nov stays newer (its price, its deletion), and the upload lists the row",
+          counted(9900000082) == {"10": (150.0, "BO")} and u_ty["covers_from"] == "2026-11-19T18:30:00" and u_ty["covers_to"] == "2026-11-25T08:00:00"
+          and "dated after it was uploaded" in u_ty["file_date_from"] and det_ty["summary"]["future_count"] == 1 and det_ty["summary"]["future"][0]["date"] == ahead,
+          f"{held(9900000082)} {({x: u_ty[x] for x in u_ty if x.startswith(('covers', 'file'))})}")
     # saved later wins also when the two are read at the very same moment in two server processes (the later-saved one in the other)
     sv = lambda po, item, price, **kw: row(po, item, b1, "2026-11-15", nsl, 200, price, **kw)
     late_saved = _stage2_file([sv(9900000056, 10, 100, **{"Deletion Indicator": "L"}), sv(9900000056, 30, 120), sv(9900000057, 10, 130)], saved="2026-11-26T08:00:00")
@@ -831,46 +894,33 @@ def _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl):
     purchases.run(u_early)
     _, err_ = other.communicate(timeout=300)
     both = [wait(u_late), wait(u_early)]
-    check(f"{k} two files covering the same orders read at once in two server processes: the one saved later wins either way (its price, its deletion, "
-          "the line it leaves out of an order), nothing brought back, nothing listed; every line, the mark included, carries its saved date",
-          other.returncode == 0 and all(x["status"] == "done" for x in both) and counted("9900000056") == {"30": (120.0, "BO")} and set(held("9900000056")) == {"10", "20", "30"}
-          and counted("9900000057") == {"10": (130.0, "BO")} and not any(x["rows_disagree"] for x in both) and not any(x["summary"]["disagreements"] for x in both)
-          and all(v == (u_late, "2026-11-26T08:00:00") for po in ("9900000056", "9900000057") for v in state_of(po).values()),
-          f"{err_[-300:]} {held('9900000056')} {held('9900000057')} {state_of('9900000056')}")
-    # a line the newest file leaves out of its order, shown deleted by an older file, then live in a third (the second review,
-    # 28 Nov 2026): the deleted line's mark takes the newest file's word, so the third brings nothing back
-    tri = lambda po, item, day, price, **kw: row(po, item, b1, day, nsl, 100, price, **kw)
-    for po_, files_ in ((9900000080, ("B", "A", "C")), (9900000081, ("B", "C"))):
-        made = {"B": _stage2_file([tri(po_, 10, "2026-11-20", 150)], saved="2026-11-25T08:00:00"),
-                "A": _stage2_file([tri(po_, 10, "2026-11-01", 140), tri(po_, 20, "2026-11-01", 140, **{"Deletion Indicator": "L"})], saved="2026-11-02T08:00:00"),
-                "C": _stage2_file([tri(po_, 10, "2026-11-05", 145), tri(po_, 20, "2026-11-05", 999)], saved="2026-11-06T08:00:00")}
-        for f_ in files_:
-            wait(c.post("/api/purchases/upload", files={"file": (f"order {po_}, file {f_}.xlsx", io.BytesIO(made[f_]))}).json()["id"])
-    mark_state = st._read(lambda cur: cur.one("SELECT removed_why FROM purchase_line WHERE po_number = '9900000080' AND item = '20'"))
-    check(f"{k} the newest file leaves a line out of its order; an older one shows it deleted (before any file gave its figures), a third, between "
-          "them, has it live: the deleted line's mark keeps the newest file's word, so the third brings nothing back, as when the older one is not read",
-          counted("9900000080") == {"10": (150.0, "BO")} and counted("9900000081") == {"10": (150.0, "BO")} and "order 9900000080, file B.xlsx" in (mark_state[0] or ""),
-          f"{held('9900000080')} {held('9900000081')} {mark_state}")
-    # a mistyped document date in the future (a year on) does not date the file: its saved date still puts it in order
-    ahead = (_dt.date.today() + _dt.timedelta(days=400)).isoformat()
-    newest = _stage2_file([tri(9900000082, 10, "2026-11-20", 150), tri(9900000082, 20, "2026-11-20", 160, **{"Deletion Indicator": "L"})], saved="2026-11-28T08:00:00")
-    typo = _stage2_file([tri(9900000082, 10, "2026-11-20", 140), tri(9900000082, 20, "2026-11-20", 160),
-                         tri(9900000082, 30, ahead, 170, **{"Deletion Indicator": "L"})], saved="2026-11-25T08:00:00")
-    wait(c.post("/api/purchases/upload", files={"file": ("saved last.xlsx", io.BytesIO(newest))}).json()["id"])
-    u_ty = wait(c.post("/api/purchases/upload", files={"file": ("a date typed a year on.xlsx", io.BytesIO(typo))}).json()["id"])
-    det_ty = c.get(f"/api/purchases/uploads/{u_ty['id']}").json()
-    check(f"{k} a row dated a year on ({ahead}) in a file saved 25 Nov: the date is in the future, so it does not date the file; its saved date "
-          "is used, the file saved 28 Nov stays newer (its price, its deletion), and the upload lists the row",
-          counted("9900000082") == {"10": (150.0, "BO")} and u_ty["covers_from"] == "2026-11-20T00:00:00" and u_ty["covers_to"] == "2026-11-25T08:00:00"
-          and "dated in the future" in u_ty["file_date_from"] and det_ty["summary"]["future_count"] == 1 and det_ty["summary"]["future"][0]["date"] == ahead,
-          f"{held('9900000082')} {({x: u_ty[x] for x in u_ty if x.startswith(('covers', 'file'))})}")
-    rep = _stage2_file([dict(row(9900000062, 10, b1, "2026-08-21", nsl, 100, 150), **{"Report Date": pd.Timestamp("2026-12-02")})], saved="2026-11-01T00:00:00", extra=["Report Date"])
-    u_rep = wait(c.post("/api/purchases/upload", files={"file": ("with a report date.xlsx", io.BytesIO(rep))}).json()["id"])
-    check(f"{k} a report date the file carries is when it was taken (before its saved date or its latest order)",
-          u_rep["report_date"] == "2026-12-02" and u_rep["covers_from"] == "2026-12-02T00:00:00" and u_rep["covers_to"] == "2026-12-02T23:59:59", str(u_rep)[:300])
+    s56 = state_of(9900000056)
+    check(f"{k} two files covering the same orders read at once in two server processes: the one saved later wins either way (its price, its "
+          "deletion), nothing brought back, nothing listed; the line only the earlier one has stays; every line, the mark included, carries its saved date",
+          other.returncode == 0 and all(x["status"] == "done" for x in both) and counted(9900000056) == {"20": (110.0, "BO"), "30": (120.0, "BO")}
+          and counted(9900000057) == {"10": (130.0, "BO")} and not any(x["rows_disagree"] for x in both) and not any(x["summary"]["disagreements"] for x in both)
+          and s56["10"] == s56["30"] == state_of(9900000057)["10"] == (u_late, "2026-11-26T08:00:00") and s56["20"] == (u_early, "2026-11-20T08:00:00"),
+          f"{err_[-300:]} {held(9900000056)} {held(9900000057)} {s56}")
+    # GP, 28 Nov 2026: an earlier file (Aug to date), then a later download covering a longer span (Jul to date) that includes it
+    ov = lambda po, day, price: row(po, 10, b1, day, nsl, 300, price)
+    before_ov = c.get("/api/purchases/status").json()["counts"]["lines"]
+    up("August to date.xlsx", _stage2_file([ov(9900000075, "2026-08-05", 100), ov(9900000076, "2026-09-05", 110), ov(9900000077, "2026-10-05", 120)], saved="2026-11-20T08:00:00"))
+    u_jul = up("July to date.xlsx", _stage2_file([ov(9900000074, "2026-07-05", 90), ov(9900000075, "2026-08-05", 100), ov(9900000076, "2026-09-05", 115),
+                                                  ov(9900000077, "2026-10-05", 120)], saved="2026-11-26T08:00:00"))
+    det_jul = detail(u_jul)
+    check(f"{k} an earlier file (August to date), then a later download covering a longer span (July to date): every line in both is one line, "
+          "counted once; the upload says how many were already in (2), which it updated (1: its newer price) and what is new (1)",
+          c.get("/api/purchases/status").json()["counts"]["lines"] == before_ov + 4 and (u_jul["rows_new"], u_jul["rows_same"], u_jul["rows_changed"]) == (1, 2, 1)
+          and [(x["po"], x["was"].get("price"), x["now"].get("price")) for x in det_jul["summary"]["changed_lines"]] == [("9900000076", 110.0, 115.0)]
+          and counted(9900000076) == {"10": (115.0, "BO")}, str({x: u_jul[x] for x in u_jul if x.startswith("rows")}))
     ups = c.get("/api/purchases/uploads").json()["uploads"]
     sums = [u["id"] for u in ups if u["status"] == "done" and u["rows_loaded"] != u["rows_new"] + u["rows_changed"] + u["rows_same"] + u["rows_older"] + (u["rows_disagree"] or 0)]
     check(f"{k} every upload's order lines kept add up in their brackets (new, changed, already in, not used: older, not used: disagreeing)", not sums, str(sums))
+    page_js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+    check(f"{k} Purchase files: a settled disagreement says how it was settled (the file's figures taken, or the history's kept); the uploads with "
+          "open disagreements are always listed, with the count open",
+          "Settled: this file's figures were taken." in page_js and "Settled: the history's figures were kept." in page_js
+          and all("disagree_open" in u for u in ups) and "however old" in page_js)
     if st.kind == "postgres":
         # the progress of a file being read waits for the purchase history's own writers, never for adding tables and copying in
         import psycopg
@@ -878,7 +928,7 @@ def _stage2_evidence(c, check, k, row, wait, a2, raj, b1, nsl):
 
         def progress_while(key):
             holder.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
-            t = threading.Thread(target=lambda: purchases._status(u_rep["id"], step=""))
+            t = threading.Thread(target=lambda: purchases._status(u_s1["id"], step=""))
             t0 = time.time()
             t.start()
             t.join(2)
@@ -912,6 +962,10 @@ def stage2_checks(c, check):
     for css in ("web/purchases.css",):
         txt = open(os.path.join(HERE, css), encoding="utf8").read()
         check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
+        loose = [ln for ln in txt.splitlines() if re.match(r"\s*(:root\[[^]]*\]\s*)?\.(note|err|btn)\b", ln)]
+        check(f"{css}: its notes, errors and buttons are styled on stage 2's own pages only (.rp-purch), never on other pages'",
+              not loose and ".rp-purch .note" in txt and ".rp-purch .err" in txt
+              and "fillP(main, " in open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read(), str(loose))
     if shutil.which("node"):
         p = subprocess.run(["node", "--check", os.path.join(HERE, "web", "purchases.js")], capture_output=True, text=True)
         check("web/purchases.js parses", p.returncode == 0, p.stderr[-300:])
@@ -950,26 +1004,36 @@ def stage2_checks(c, check):
           dates[0] == ("2026-04-03", None) and dates[1] == ("2026-09-05", None) and dates[2][0] is None and "could be 3 April or 4 March" in dates[2][1]
           and dates[3] == ("2026-04-13", None) and dates[4][0] == "2025-12-09", str(dates))
     nw = purchases.newer
-    cov = lambda latest, saved, report=None: (lambda x: (x["covers_from"], x["covers_to"]))(purchases.dating(latest, report, saved))
-    check("Stage 2: which purchase file is newer: what it covers decides first; where that cannot tell, the file saved later (GP, 28 Nov 2026); "
-          "saved at the same moment, saved before its latest order, or with no saved date, nothing tells",
+    AT = "2026-11-28T12:00:00"          # an upload time, UTC
+    cov = lambda latest, saved, report=None, at=AT: (lambda x: (x["covers_from"], x["covers_to"], x["covers_saved"]))(purchases.dating(latest, report, saved, at))
+    check("Stage 2: which purchase file is newer: what it covers decides first; where that cannot tell, the file saved later (GP, 28 Nov 2026); a "
+          "saved date after the upload, or before the latest order (a day in India), is not used and the file is dated by its upload; a report date "
+          "counts only between its latest order and its saved date, the saved date deciding between two of the same day; only the very same dates tie",
           nw(cov("2026-11-24", "2026-11-25T08:00:00"), cov("2026-11-05", "2026-11-12T08:00:00")) == (1, "covers")
           and nw(cov("2026-11-15", "2026-11-27T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (1, "saved")
           and nw(cov("2026-11-15", "2026-11-16T08:00:00"), cov("2026-11-15", "2026-11-27T08:00:00")) == (-1, "saved")
           and nw(cov("2026-11-15", "2026-11-16T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (0, None)
-          and nw(cov("2026-11-15", "2026-11-10T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (0, None)
-          and nw(cov("2026-11-15", None), cov("2026-11-15", "2026-11-16T08:00:00")) == (0, None))
+          and nw(cov("2026-11-15", "2026-11-10T08:00:00"), cov("2026-11-15", "2026-11-16T08:00:00")) == (1, "saved")
+          and nw(cov("2026-11-15", None), cov("2026-11-15", "2026-11-16T08:00:00")) == (1, "saved")
+          and nw(cov("2026-11-15", "2027-11-20T00:00:00"), cov("2026-11-15", "2026-11-28T11:00:00", at="2026-11-28T11:30:00")) == (1, "saved")
+          and nw(cov("2026-11-15", "2027-11-20T00:00:00", at="2026-11-27T00:00:00"), cov("2026-11-15", "2026-11-28T11:00:00")) == (-1, "saved")
+          and cov("2026-11-28", "2026-11-27T19:30:00")[1] == "2026-11-27T19:30:00"
+          and nw(cov("2026-11-20", "2026-11-22T00:00:00", "2026-11-20"), cov("2026-11-20", "2026-11-21T00:00:00", "2026-11-20")) == (1, "saved")
+          and nw(cov("2026-11-25", "2026-11-26T08:00:00", "2026-11-01"), cov("2026-11-10", "2026-11-12T08:00:00")) == (1, "covers")
+          and nw(cov("2026-11-15", "2026-11-20T08:00:00", "2026-11-27"), cov("2026-11-22", "2026-11-23T08:00:00")) == (-1, "covers"))
     rnd = random.Random(28)
     day_ = lambda n: (_dt.date(2026, 11, 1) + _dt.timedelta(days=n)).isoformat()
     files_ = []
-    for _ in range(70):
+    for _ in range(80):
         latest, how = rnd.randint(0, 20), rnd.random()
-        saved = None if how < 0.15 else f"{day_(latest + rnd.randint(-2, 6))}T{rnd.randint(0, 23):02d}:00:00"
-        files_.append(cov(day_(latest), saved, day_(latest + rnd.randint(0, 3)) if how > 0.85 else None))
+        saved = None if how < 0.12 else f"{day_(latest + rnd.randint(-2, 9))}T{rnd.randint(0, 23):02d}:00:00"
+        at = f"{day_(latest + rnd.randint(0, 6))}T{rnd.randint(0, 23):02d}:{rnd.choice(('00', '30'))}:00"
+        report = day_(latest + rnd.randint(-2, 3)) if how > 0.8 else None
+        files_.append(cov(day_(latest), saved, report, at))
     rel = {(i, j): nw(files_[i], files_[j])[0] for i in range(len(files_)) for j in range(len(files_))}
     circle = [(i, j, m) for (i, j), o in rel.items() if o > 0 for m in range(len(files_)) if rel[(j, m)] > 0 and rel[(i, m)] <= 0]
-    check("Stage 2: put in order that way, purchase files never go round in a circle (70 made-up files, saved dates missing, before the latest order "
-          "or of the same moment, report dates among them): newer than newer is newer, and one way round only",
+    check("Stage 2: put in order that way, purchase files never go round in a circle (80 made-up files: saved dates missing, in the future, before "
+          "the latest order or of the same moment, report dates before, within and after, uploads at any time): newer than newer is newer, one way round only",
           not circle and all(rel[(i, j)] == -rel[(j, i)] for i, j in rel) and any(nw(files_[i], files_[j])[1] == "saved" for i, j in rel), str(circle[:3]))
     if kind == "files":
         answers = [c.get("/api/purchases/uploads"), c.get("/api/groups"), c.get("/api/groups/Fab-0001"), c.get("/api/purchases/history", params={"code": "X"}),
@@ -996,6 +1060,11 @@ def stage2_checks(c, check):
     check(f"{k} the purchase history starts empty; Purchase files knows the file that came with the code is there and not loaded",
           s0["available"] is True and s0["counts"]["lines"] == 0 and s0["counts"]["groups"] == 0 and sh0["available"] is True and sh0["loaded"] is False
           and sh0["history"] is False, str(s0) + str(sh0))
+    # the made-up files below are read on a history of their own: the purchase file that came with the code, which the
+    # first upload would load first (GP, 28 Nov 2026), is out of reach until its own section further down (and the
+    # assistant's checks see it loaded first)
+    import pilot
+    shipped_at, pilot.PO_FILE = pilot.PO_FILE, os.path.join(HERE, "inputs", "not here, for the checks.xlsx")
     arv, arv2 = "1200094    ARVIND LTD", "1200094    Arvind Limited"
     raj, raj2, nsl = "1208655    RAJAPALAYAM MILLS LIMITE", "1208655    Rajapalayam Mills Limited", "1203290    NSL TEXTILES LIMITED"
     row = lambda po, item, code, day, sup, qty, price, **kw: dict({"Purchasing Document": float(po), "Item": float(item), "Material": code, "Plant": "F007",
@@ -1018,8 +1087,18 @@ def stage2_checks(c, check):
     data = _stage2_file(rows, saved="2026-11-20T10:00:00")
     bad = c.post("/api/purchases/upload", files={"file": ("orders.csv", io.BytesIO(b"a,b\n1,2\n"))})
     big = c.post("/api/purchases/upload", files={"file": ("big.xlsx", io.BytesIO(b"x" * (purchases.MAX_BYTES + 1)))})
-    check(f"{k} a file that is not an Excel workbook, or is larger than 40 MB, is refused at once (the large one unread)",
-          bad.status_code == 400 and ".xlsx" in bad.json()["detail"] and big.status_code == 413 and "40 MB" in big.json()["detail"])
+    on_screen = None
+    if shutil.which("node"):            # the page says it at once, before sending the file: its own function, run here
+        js = open(os.path.join(HERE, "web", "purchases.js"), encoding="utf8").read()
+        fn = js[js.index("// TOO BIG"):js.index("// END TOO BIG")]
+        run_ = subprocess.run(["node", "-e", fn + f"\nconsole.log(JSON.stringify([tooBig({purchases.MAX_BYTES + 1}, {purchases.MAX_BYTES}, 'big.xlsx'), "
+                                                  f"tooBig({purchases.MAX_BYTES}, {purchases.MAX_BYTES}, 'big.xlsx')]))"], capture_output=True, text=True)
+        on_screen = json.loads(run_.stdout) if run_.returncode == 0 else run_.stderr[-200:]
+    check(f"{k} a file that is not an Excel workbook, or is larger than 40 MB, is refused at once (the large one unread); the page says so on the "
+          "screen as soon as the file is chosen, before sending it, in the server's own words: the limit, and to split it by 6 months or by year",
+          bad.status_code == 400 and ".xlsx" in bad.json()["detail"] and big.status_code == 413 and "40 MB" in big.json()["detail"]
+          and "by 6 months or by year" in big.json()["detail"] and (on_screen is None or on_screen == [big.json()["detail"], None])
+          and c.get("/api/purchases/uploads").json()["max_bytes"] == purchases.MAX_BYTES, f"{big.json()} {on_screen}")
     up = c.post("/api/purchases/upload", files={"file": ("purchase orders.xlsx", io.BytesIO(data))}).json()
     check(f"{k} an upload is answered at once and queued for the background", up.get("status") == "queued" and isinstance(up.get("id"), int), str(up))
     u = wait(up["id"])
@@ -1028,7 +1107,7 @@ def stage2_checks(c, check):
     check(f"{k} the file is read in the background: done, with its counts and what it covers (its latest document date, kept or not; "
           "the date it was saved is only the latest it can have been taken)", u["status"] == "done" and u["rows_total"] == len(rows) and u["rows_loaded"] == 12
           and u["rows_new"] == 12 and u["rows_outliers"] == 1 and u["rows_skipped"] == 8 and u["fabrics_new"] == 5 and u["groups_new"] == 2 and u["mills_new"] == 3
-          and u["file_date"] == "2026-10-20" and u["covers_from"] == "2026-10-20T00:00:00" and u["covers_to"] == "2026-11-20T10:00:00"
+          and u["file_date"] == "2026-10-20" and u["covers_from"] == "2026-10-19T18:30:00" and u["covers_to"] == "2026-11-20T10:00:00"
           and u["saved_at"] == "2026-11-20T10:00:00" and u["file_date_from"].startswith("orders up to 2026-10-20; saved 2026-11-20 10:00"),
           str({x: u[x] for x in u if x.startswith("rows") or x.endswith("new") or x.startswith("file")}))
     check(f"{k} the rows left out say which and why (deleted, not bulk, not rupees, not metres, no price, repeated, a total line, a date that reads two ways)",
@@ -1048,9 +1127,12 @@ def stage2_checks(c, check):
     check(f"{k} Fab-0001 onward in order of first appearance (the earliest line, a date written as text); two codes of one construction are one group, across mills",
           gA == "Fab-0001" and gB == "Fab-0002" and h2["group"]["code"] == gA and {m["name"] for m in hist["group"]["mills"]} == {"Arvind Limited", "Rajapalayam Mills Limited"}, f"{gA} {gB}")
     ng1, ng2 = (c.get("/api/purchases/history", params={"code": x}).json() for x in (inc, "ZZCHECK001"))
-    check(f"{k} a code whose specification is incomplete, or missing, is not grouped and says why (never guessed)",
+    ngs = dict(det["summary"]["not_grouped"])
+    check(f"{k} a code whose specification is incomplete, or missing, is not grouped and says why (never guessed); its lines are loaded and "
+          "counted in its prices like any other, with the construction blank (GP, 28 Nov 2026), and the upload says how many such codes",
           ng1["group"] is None and "incomplete" in ng1["not_grouped"] and ng2["group"] is None and ng2["not_grouped"] == "No PLM specification for this code"
-          and ng2["should"] is None)
+          and ng2["should"] is None and [(x["price"], x["metres"]) for x in ng2["lines"]] == [(95.0, 600.0)] and [(x["price"], x["metres"]) for x in ng1["lines"]] == [(90.0, 500.0)]
+          and ng2["spec"] is None and ngs.get("No PLM specification for this code") == 1 and ngs.get("PLM specification incomplete") == 1, str(ngs))
     po_row = next(r for r in c.get("/api/costs").json()["rows"] if r["source"] == "Purchase orders" and r["code"] == a1)   # the pilot's choices
     loose = lambda d: {x: v for x, v in d.items() if x not in ("Quoted price (Rs/m)", "Supplier", "Description", "Fabric code", "Order quantity (m)",
                                                                   "Rate card quantity", "Order size")}
@@ -1134,16 +1216,16 @@ def stage2_checks(c, check):
     u3 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected.xlsx", io.BytesIO(newer))}).json()["id"])
     look = lambda: {(x["po"], x["item"]): x["price"] for code in (a1, a2, inc) for x in c.get("/api/purchases/history", params={"code": code}).json()["lines"]}
     after3, counts3 = look(), c.get("/api/purchases/status").json()["counts"]
-    check(f"{k} a newer file (it has an order dated after the first was saved): a changed price is taken; lines it shows deleted, or in dollars, and the "
-          "line it no longer has (the rest of its order there) are removed; the lines kept add up (new, changed, already in)",
-          u3["rows_changed"] == 1 and u3["rows_removed"] == 2 and u3["rows_dropped"] == 1 and u3["rows_new"] == 1 and after3[("9900000013", "10")] == 121.2
-          and ("9900000014", "10") not in after3 and ("9900000006", "10") not in after3 and ("9900000003", "20") not in after3 and counts3["lines"] == 9
+    check(f"{k} a newer file (it has an order dated after the first was saved): a changed price is taken; lines it shows deleted, or in dollars, are "
+          "removed; the line it does not have stays (GP, 28 Nov 2026: not cancelled); the lines kept add up (new, changed, already in)",
+          u3["rows_changed"] == 1 and u3["rows_removed"] == 2 and u3["rows_dropped"] == 0 and u3["rows_new"] == 1 and after3[("9900000013", "10")] == 121.2
+          and ("9900000014", "10") not in after3 and ("9900000006", "10") not in after3 and after3[("9900000003", "20")] == 103 and counts3["lines"] == 10
           and u3["rows_loaded"] == 10 == u3["rows_new"] + u3["rows_changed"] + u3["rows_same"] and u3["rows_disagree"] == 0,
           str({x: u3[x] for x in u3 if x.startswith("rows")}))
     u4 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders, the old one again.xlsx", io.BytesIO(data))}).json()["id"])
     check(f"{k} the older file uploaded after it changes nothing: no old price back, no removed line counted again; its 12 lines are "
-          "counted in the brackets as not used",
-          u4["rows_older"] == 12 and u4["rows_changed"] == 0 and u4["rows_removed"] == 0 and look() == after3 and u4["rows_loaded"] == 12
+          "counted in the brackets as not used (11), or already in (1: the line the newer file does not have, which is still its own)",
+          u4["rows_older"] == 11 and u4["rows_same"] == 1 and u4["rows_changed"] == 0 and u4["rows_removed"] == 0 and look() == after3 and u4["rows_loaded"] == 12
           and u4["rows_new"] + u4["rows_changed"] + u4["rows_same"] + u4["rows_older"] + u4["rows_disagree"] == 12
           and c.get("/api/purchases/status").json()["counts"] == counts3, str({x: u4[x] for x in u4 if x.startswith("rows")}))
     # two uploads read at once, one of them by another server process: the newer file wins either way
@@ -1232,6 +1314,7 @@ def stage2_checks(c, check):
           and c.post("/api/groups/unmerge", json={"code": gB}).status_code == 409)
     c.post("/api/groups/merge", json={"code": gB, "into": gA, "confirm": True})
     # the real purchase file that came with the code, loaded through the app
+    pilot.PO_FILE = shipped_at              # the purchase file that came with the code within reach again
     counts_before = c.get("/api/purchases/status").json()["counts"]
     t0 = time.time()
     real = wait(c.post("/api/purchases/load-shipped").json()["id"], limit=600)
@@ -1245,7 +1328,7 @@ def stage2_checks(c, check):
     check(f"{k} the purchase file that came with the code loads through the app ({took:.0f} s): the pilot's own bulk lines, every material code once, "
           f"its {zloi} ZLOI lines kept apart; it covers its latest order (23 Nov 2026) up to when SAP saved it (05:48:59 UTC)", real["status"] == "done" and real["rows_total"] == len(po) and real["rows_loaded"] == len(bulk) == 6265
           and real["rows_new"] == 6265 and real["rows_outliers"] == zloi == 1377 and real["file_date"] == "2026-11-23"
-          and (real["covers_from"], real["covers_to"], real["saved_at"]) == ("2026-11-23T00:00:00", "2026-11-23T05:48:59", "2026-11-23T05:48:59")
+          and (real["covers_from"], real["covers_to"], real["saved_at"]) == ("2026-11-22T18:30:00", "2026-11-23T05:48:59", "2026-11-23T05:48:59")
           and c.get("/api/purchases/uploads").json()["shipped"]["loaded"] is True
           and counts["lines"] == counts_before["lines"] + 6265 - zloi and counts["outliers"] == counts_before["outliers"] + zloi
           and counts["fabrics"] == len(set(bulk["Material"].astype(str).str.strip()) | {a1, a2, b1, inc, "ZZCHECK001"}), str({x: real[x] for x in real if x.startswith(("rows", "file", "covers", "saved"))}))
@@ -1298,7 +1381,7 @@ def stage2_checks(c, check):
         with open(rows_at, "w", encoding="utf8") as f:
             json.dump(rc["rows"], f, default=str)
         run_ = subprocess.run(["node", "-e", fn + "\nconst by = supplierCounts(JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')));\n"
-                               "console.log(JSON.stringify(Object.fromEntries(Object.entries(by).map(([k, x]) => [k, [x.counted.length, x.zloi.length]]))));",
+                               "console.log(JSON.stringify(Object.fromEntries(Object.entries(by).map(([k, x]) => [k, [x.counted.length, x.zloi.map(r => r.code).sort()]]))));",
                                rows_at], capture_output=True, text=True)
         tab = json.loads(run_.stdout) if run_.returncode == 0 else {}
         tab.pop("(none)", None)
@@ -1306,16 +1389,20 @@ def stage2_checks(c, check):
         all_n = {}
         for r in rc["rows"]:
             all_n[r["mill"]] = all_n.get(r["mill"], 0) + 1
-        z_py = {}
+        z_py = {}                       # each mill's codes it sold on ZLOI and is not counted for, by the ZLOI lines' own mill
         for r in po_rows:
-            if r["price"] is None and r["outliers"]:
-                z_py[r["mill"]] = z_py.get(r["mill"], 0) + 1
+            for key in {rules_mills.mill_key(o["mill"]) for o in r["outliers"]}:
+                if not (r["price"] is not None and r["mill"] == key):
+                    z_py.setdefault(key, []).append(r["code"])
+        z_py = {x: sorted(v) for x, v in z_py.items()}
+        moved_z = sorted(r["code"] for r in po_rows if r["price"] is None and r["outliers"] and r["mill"] not in {rules_mills.mill_key(o["mill"]) for o in r["outliers"]})
         big = max(api_n, key=lambda x: (all_n.get(x, 0) - api_n[x], x)) if api_n else None
         check(f"{k} Right cost's Suppliers tab counts each mill as the supplier list does: a code bought only on ZLOI orders is not counted, a repeated "
-              f"fabric-list row neither ({big}: {big and api_n[big]} counted of its {big and all_n.get(big)} rows); a mill bought from only on ZLOI is "
-              f"not in the table, listed apart ({len(set(z_py) - set(api_n))} such mills)",
+              f"fabric-list row neither ({big}: {big and api_n[big]} counted of its {big and all_n.get(big)} rows); the codes a mill sold only on ZLOI "
+              f"are named under the ZLOI lines' own mill, not the row's supplier ({len(moved_z)} codes bought only on ZLOI from another mill than the "
+              f"pilot's; {len(set(z_py) - set(api_n))} mills bought from only on ZLOI, listed apart)",
               run_.returncode == 0 and {x: n for x, (n, z) in tab.items() if n} == api_n and {x for x, (n, z) in tab.items() if not n and z} == set(z_py) - set(api_n)
-              and all(tab[x][1] == z_py.get(x, 0) for x in tab) and big and api_n[big] < all_n[big],
+              and {x: z for x, (n, z) in tab.items() if z} == z_py and big and api_n[big] < all_n[big],
               run_.stderr[-300:] + str({x: (tab.get(x), api_n.get(x)) for x in set(tab) | set(api_n) if (tab.get(x) or [0])[0] != api_n.get(x, 0)})[:300])
     with st.tx() as cur:
         only_zl = cur.all("SELECT f.fab_group_id, l.mill_id FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id WHERE l.removed_upload_id IS NULL "
@@ -1401,10 +1488,10 @@ def stage2_checks(c, check):
         specs[code] = wide(w)
     try:
         wait(c.post("/api/purchases/upload", files={"file": ("two widths.xlsx", io.BytesIO(_stage2_file(
-            [row(9900000071, 10, "ZZW1A", "2026-11-27", nsl, 100, 150), row(9900000072, 10, "ZZW1B", "2026-11-27", nsl, 100, 151)], saved="2026-11-28T09:00:00")))}).json()["id"])
+            [row(9900000071, 10, "ZZW1A", "2026-11-27", nsl, 100, 150), row(9900000072, 10, "ZZW1B", "2026-11-27", nsl, 100, 151)], saved="2026-11-27T09:00:00")))}).json()["id"])
         apart = {x: hist_of(x)["group"]["code"] for x in ("ZZW1A", "ZZW1B")}
         wait(c.post("/api/purchases/upload", files={"file": ("a width between.xlsx", io.BytesIO(_stage2_file(
-            [row(9900000073, 10, "ZZW1D", "2026-11-27", nsl, 100, 152)], saved="2026-11-28T10:00:00")))}).json()["id"])
+            [row(9900000073, 10, "ZZW1D", "2026-11-27", nsl, 100, 152)], saved="2026-11-27T10:00:00")))}).json()["id"])
         joined = {x: hist_of(x) for x in ("ZZW1A", "ZZW1B", "ZZW1D")}
     finally:
         for code in ("ZZW1A", "ZZW1B", "ZZW1D"):
@@ -3207,6 +3294,19 @@ def assistant_checks():
                                       "Name of Supplier": "1200094    ARVIND LTD", "Order Quantity": 500, "Net Price": price, "Purchasing Doc. Type": "BO",
                                       "Currency": "INR", "Order Unit": "M", "Short Text": "made up for the checks"}
         w_up = read_(upload("/api/purchases/upload", "orders, by the admin.xlsx", _stage2_file([po_(9800000001, a1_, 100), po_(9800000002, b1_, 150)], saved="2026-11-11T00:00:00")).json()["id"])
+        # GP, 28 Nov 2026: the history always starts from the purchase file that came with the code: the first upload loads it first
+        ups_ = web("GET", "/api/purchases/uploads").json()["uploads"]
+        first_ = next((u_ for u_ in ups_ if u_["id"] == w_up["id"] - 1), {})
+
+        class _As:                      # Right cost's checks, asking as the signed-in admin (permissions are on here)
+            get = staticmethod(lambda path, **kw: web("GET", path, **kw))
+            post = staticmethod(lambda path, **kw: web("POST", path, **kw))
+        check(tag + "the first purchase file uploaded goes in after the purchase file that came with the code, loaded first as its own upload by "
+                    "the same person (GP, 28 Nov 2026); both are in the history",
+              first_.get("filename", "").startswith("Fabric _ 3Months_4746.xlsx") and "loaded first" in first_.get("filename", "")
+              and first_.get("uploaded_by") == "gp@example.com" and first_.get("status") == "done" and first_.get("rows_loaded") == 6265
+              and w_up["rows_new"] == 2 and len(ups_) == 2, str([(u_["id"], u_["filename"], u_["uploaded_by"], u_["status"]) for u_ in ups_]))
+        _stage2_right_cost(_As, check, STORE, "after an own export uploaded first (the purchase file that came with the code loaded before it)")
         m_q = call("upload_purchase_file", file_base64=b64(_stage2_file([po_(9800000003, a1_, 101), po_(9800000004, b1_, 151)], saved="2026-11-11T00:00:00")), file_name="orders, by the assistant.xlsx")
         m_up = read_(m_q["upload_id"] if "upload_id" in m_q else m_q["id"])
         st_m, st_w = call("purchase_upload_status", upload_id=m_up["id"]), web("GET", f"/api/purchases/uploads/{m_up['id']}").json()
