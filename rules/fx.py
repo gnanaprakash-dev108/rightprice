@@ -41,9 +41,16 @@ def _rows(c, every=False):
     return [dict(zip(names, r)) for r in cur.fetchall()]
 
 
+def kind_of(source):
+    """What a source is: 'paid' (the rate actually paid), 'rbi' (the RBI reference rate, however its average is described:
+    "RBI reference rate (average of 19 daily FBIL rates)"), or 'placeholder'."""
+    t = str(source or "").strip().lower()
+    return "paid" if t.startswith(PAID) else "rbi" if t.startswith(RBI.lower()) else "placeholder"
+
+
 def _rank(r):
     """Which rate holds where several are kept for one month: a rate paid, then the RBI rate, then a placeholder; the latest."""
-    return ({PAID: 3, RBI: 2}.get(r["source"], 1), r["id"])
+    return ({"paid": 3, "rbi": 2}.get(kind_of(r["source"]), 1), r["id"])
 
 
 _memo = {"v": None, "val": None}
@@ -96,7 +103,7 @@ def rates():
         r["in_force"] = r["id"] in in_force
         r["month"] = r["month"][:7]
         if not r["in_force"] and not r["removed_at"]:
-            r["removed_why"] = "replaced: a rate paid holds for this month" if r["source"] != PAID else "replaced by a later rate paid"
+            r["removed_why"] = "replaced: a rate paid holds for this month" if kind_of(r["source"]) != "paid" else "replaced by a later rate paid"
     needed = [{"currency": cur, "month": m, "lines": n, "rate": (tab.get((cur, m)) or {}).get("rate"), "source": (tab.get((cur, m)) or {}).get("source")}
               for cur, m, n in need]
     return {"rule": RULE, "sources": list(SOURCES), "rates": rows, "needed": needed,
@@ -127,19 +134,17 @@ def add(payload, who=""):
         raise common.Refused(400, "Give the rate as a number of rupees per unit of the currency.")
     if not 0.01 <= rate <= 100000:
         raise common.Refused(400, f"Rs {rate:g} per {cur} cannot be right: give rupees per unit of the currency.")
-    source = str(p.get("source") or "").strip()
-    if source.lower() in (RBI.lower(), "rbi", "fbil"):
+    source = re.sub(r"\s+", " ", str(p.get("source") or "").strip())[:200]
+    if source.lower() in ("rbi", "fbil"):
         source = RBI
-    elif source.lower() == PAID:
-        source = PAID
-    elif source:
-        raise common.Refused(400, f'The source is "{RBI}" or "{PAID}" (leave it empty and the rate counts as a Placeholder).')
-    else:
+    elif not source:
         source = PLACEHOLDER
+    elif kind_of(source) == "placeholder":
+        raise common.Refused(400, f'The source is "{RBI}" (its average may be said in brackets) or "{PAID}" (leave it empty and the rate counts as a Placeholder).')
     note = str(p.get("note") or "").strip()[:300]
     now = store._now()
     with st.tx(write=KIND) as c:
-        same = [r for r in _rows(c) if r["currency"] == cur and r["month"][:7] == m and r["source"] == source]
+        same = [r for r in _rows(c) if r["currency"] == cur and r["month"][:7] == m and kind_of(r["source"]) == kind_of(source)]
         for r in same:
             c.run("UPDATE fx_rate SET removed_at = %s, removed_by = %s, removed_why = %s WHERE id = %s", (now, who or "", "replaced", r["id"]))
         c.run("INSERT INTO fx_rate (currency, month, rate, source, note, entered_by, entered_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
@@ -148,3 +153,50 @@ def add(payload, who=""):
     held = table().get((cur, m))
     return {"id": new_id, "currency": cur, "month": m, "rate": rate, "source": source, "replaced": len(same), "in_force": bool(held and held["id"] == new_id),
             "said": None if held and held["id"] == new_id else "kept, but the rate paid holds for this month"}
+
+
+def import_file(filename, data, who=""):
+    """A table of rates brought in as it is (.csv or .xlsx), one rate per row: month (YYYY-MM), currency, rate (or rate_inr:
+    rupees per unit), and its source (a "source" column, else RBI's reference rate, described by a "days" or "method" column:
+    "RBI reference rate (average of 19 daily FBIL rates)"), and a note (a "note" column, else the "source_url"). Every row is
+    checked first; nothing is entered unless every row reads. Each is entered as on the page (add): it takes the place of the
+    month's rate of the same kind, and a rate paid holds over the RBI rate."""
+    import io
+    import pandas as pd
+    need_db()
+    name = str(filename or "").lower()
+    try:
+        df = (pd.read_csv(io.BytesIO(data), dtype=str) if name.endswith(".csv") else pd.read_excel(io.BytesIO(data), dtype=str)
+              if name.endswith((".xlsx", ".xls")) else None)
+    except Exception as e:
+        raise common.Refused(400, f"{filename} could not be read as a table ({type(e).__name__}).")
+    if df is None:
+        raise common.Refused(400, "Bring in the rates as a .csv or an .xlsx table: month, currency, rate (rupees per unit), source.")
+    df = df.fillna("")
+    df.columns = [str(x).strip().lower() for x in df.columns]
+    rate_col = next((x for x in ("rate_inr", "rate", "rs per unit", "inr") if x in df.columns), None)
+    missing = [x for x, ok in (("month", "month" in df.columns), ("currency", "currency" in df.columns), ("rate", rate_col)) if not ok]
+    if missing:
+        raise common.Refused(400, f"{filename} needs the columns month, currency and rate (or rate_inr); missing: {', '.join(missing)}.")
+    rows, bad = [], []
+    for i, r in enumerate(df.to_dict("records"), start=2):
+        src = str(r.get("source", "")).strip()
+        if not src:
+            days, method = str(r.get("days", "")).strip(), str(r.get("method", "")).strip()
+            src = f"{RBI} (average of {days} daily FBIL rates)" if days.isdigit() else f"{RBI} ({method})" if method else RBI
+        payload = {"currency": r.get("currency"), "month": r.get("month"), "rate": r.get(rate_col), "source": src,
+                   "note": str(r.get("note", "")).strip() or str(r.get("source_url", "")).strip()}
+        try:
+            float(payload["rate"])
+            if not re.fullmatch(r"\d{4}-\d{2}", str(payload["month"]).strip()[:7]) or not re.fullmatch(r"[A-Za-z]{3}", str(payload["currency"]).strip()):
+                raise ValueError
+        except (TypeError, ValueError):
+            bad.append(i)
+        rows.append(payload)
+    if bad:
+        raise common.Refused(400, f"Rows {', '.join(map(str, bad[:10]))} of {filename} do not read as a month (YYYY-MM), a currency and a rate. Nothing was entered.")
+    if not rows:
+        raise common.Refused(400, f"{filename} has no rate in it.")
+    done = [add(p_, who=who) for p_ in rows]
+    return {"entered": len(done), "in_force": sum(1 for d in done if d["in_force"]), "replaced": sum(d["replaced"] for d in done),
+            "currencies": sorted({d["currency"] for d in done}), "months": sorted({d["month"] for d in done}), "rows": done}

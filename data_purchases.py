@@ -244,7 +244,7 @@ def set_merged(c, group_id, into_id, at, who):
 # ------------------------------------------------------------------ uploads
 UPLOAD = ("id, kind, filename, uploaded_by, uploaded_at, status, step, started_at, finished_at, alive_at, runner, error, file_date, "
           "file_date_from, covers_from, covers_to, covers_saved, report_date, report_used, saved_at, rows_total, rows_loaded, rows_new, rows_changed, rows_same, "
-          "rows_removed, rows_dropped, rows_older, rows_disagree, rows_outliers, rows_skipped, fabrics_new, groups_new, mills_new, summary, sha256")
+          "rows_removed, rows_dropped, rows_older, rows_disagree, rows_outliers, rows_skipped, rows_stored, rows_other, fabrics_new, groups_new, mills_new, summary, sha256")
 
 
 def add_upload(c, kind, filename, who, data, sha, at):

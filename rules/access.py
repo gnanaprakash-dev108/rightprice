@@ -221,6 +221,7 @@ ROUTES = {
     "POST /api/purchases/order-types": "do:edit_rates",
     "GET /api/fx-rates": "page:prices",
     "POST /api/fx-rates": "do:edit_rates",
+    "POST /api/fx-rates/import": "do:edit_rates",        # a table of rates brought in as it is (the RBI monthly averages)
 }
 
 # what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/pages/<page>.js

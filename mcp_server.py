@@ -1469,5 +1469,17 @@ def add_exchange_rate(currency: str, month: str, rate: float, source: str = "", 
     return dict(fx.add({"currency": currency, "month": month, "rate": rate, "source": source, "note": note}, who=ASSISTANT), recorded_as=ASSISTANT)
 
 
+
+@tool(mirrors="POST /api/fx-rates/import", writes=True)
+def import_exchange_rates(file_base64: str, file_name: str) -> dict:
+    """Bring in a table of exchange rates as it is (.csv or .xlsx, sent as base64 with its name), as Prices > Exchange rates
+    does: one rate per row, with the columns month (YYYY-MM), currency, rate or rate_inr (rupees per unit), and a source
+    column, or days or method for RBI's monthly average ("RBI reference rate (average of 19 daily FBIL rates)"), and a note
+    or source_url. Every row is checked first; nothing is entered unless all read. THIS CHANGES THE RUPEE PRICES OF IMPORT
+    LINES EVERYONE SEES. RULE: bring in only a table the person has given, from its source; never make one up. Recorded as
+    entered by "AI assistant". [RATE RULE]"""
+    from rules import fx
+    return dict(fx.import_file(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT), recorded_as=ASSISTANT)
+
 if __name__ == "__main__":
     mcp.run()           # stdio: for an assistant on the same machine as the data

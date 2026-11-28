@@ -24,8 +24,27 @@
           : h("p", { class: "empty" }, "No rate entered yet. The RBI reference rates (the monthly averages) are to come from GP; until then import lines show their own currency only.")),
       kept.length ? h("details", { class: "card" }, h("summary", {}, `Kept, not in force (${kept.length})`),
         dataTable({ columns: ["Currency", "Month", "Rs per unit", "Source", "Why", "Entered by", "On"], rows: kept.map(r => [r.currency, monthWords(r.month), r.rate, r.source, r.removed_why || "", r.entered_by, day(r.entered_at)]) }, { label: "Rates kept" })) : null,
-      can("do:edit_rates") ? rateForm(ctx, d) : null];
+      can("do:edit_rates") ? rateForm(ctx, d) : null, can("do:edit_rates") ? importForm(ctx) : null];
   });
+
+  // a table of rates brought in as it is: the RBI monthly averages (month, currency, rate_inr, method or days, source_url)
+  function importForm(ctx) {
+    const input = h("input", { type: "file", id: "fx-file", accept: ".csv,.xlsx", "aria-label": "Table of exchange rates" });
+    const msg = h("div", { "aria-live": "polite" });
+    return h("form", { class: "card", onsubmit: async e => {
+      e.preventDefault();
+      if (!input.files.length) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, "Choose the table of rates first.")); return; }
+      const fd = new FormData(); fd.append("file", input.files[0]);
+      try {
+        const r = await fetch("/api/fx-rates/import", { method: "POST", body: fd });
+        const b = await r.json();
+        if (!r.ok) throw new Error(b.detail || r.statusText);
+        toast(`${b.entered} rates entered (${b.currencies.join(", ")}, ${monthWords(b.months[0])} to ${monthWords(b.months[b.months.length - 1])})`); ctx.reload();
+      } catch (err) { msg.replaceChildren(h("div", { class: "notice err", role: "alert" }, err.message)); }
+    } }, h("h3", {}, "Bring in a table of rates"),
+      h("p", { class: "sub" }, "A .csv or .xlsx with one rate per row: month (YYYY-MM), currency, rate or rate_inr (rupees per unit), and its source (a source column, or days or method for RBI's monthly average), and a note or source_url. Every row is checked first: nothing is entered unless all read."),
+      h("div", { class: "fields", style: "grid-template-columns:repeat(auto-fit,minmax(200px,1fr));align-items:end" }, input, h("button", { class: "btn primary", type: "submit" }, "Bring in the rates")), msg);
+  }
 
   function rateForm(ctx, d) {
     const f = (id, label, el) => h("div", { class: "field" }, h("label", { for: id }, label), el);

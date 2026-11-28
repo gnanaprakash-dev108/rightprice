@@ -2176,6 +2176,23 @@ def every_line_extra_checks(c, check):
           and to_bulk["lines_now_counted"] >= 1 and n1_ > n0_ and n2_ == n0_ and by[0] == "Set by a person"
           and any(x["sap_type"] == "ZQX" for x in types["not_in_table"]) and c.post("/api/purchases/order-types", json={"sap_type": "BA", "category": "Samples"}).status_code == 400,
           f"{n0_} {n1_} {n2_} {to_bulk} {back}")
+    # the RBI monthly averages, as GP's table brings them (never in the repository; on GitHub it is not there)
+    rbi = os.environ.get("RIGHTPRICE_CHECK_FX_CSV", "/tmp/claude-0/-home-user-rightprice/779a22c4-8f03-57be-9c67-51739f584b5c/scratchpad/fx/rbi_reference_monthly.csv")
+    if os.path.exists(rbi):
+        tbl = pd.read_csv(rbi, dtype=str)
+        res = c.post("/api/fx-rates/import", files={"file": ("rbi_reference_monthly.csv", io.BytesIO(open(rbi, "rb").read()))}).json()
+        rates2 = c.get("/api/fx-rates").json()
+        held = {(x["currency"], x["month"]): x for x in rates2["rates"] if x["in_force"]}
+        first = tbl.iloc[0]
+        h1 = held.get((first["currency"], first["month"]), {})
+        imp2 = next(o for o in hist(a2)["others"] if o["po"] == "9300000003")
+        check(f"{k} the RBI monthly averages ({os.path.basename(rbi)}, {len(tbl)} rows) are brought in as they are: each month and currency "
+              "with its source \"RBI reference rate (average of N daily FBIL rates)\" and its address; the rate paid entered for Oct 2026 still holds",
+              res.get("entered") == len(tbl) and abs(h1.get("rate", 0) - float(first["rate_inr"])) < 1e-9
+              and h1.get("source") == f"RBI reference rate (average of {first['days']} daily FBIL rates)" and first["source_url"] in h1.get("note", "")
+              and held[("USD", "2026-10")]["source"] == "rate paid" and imp2["rate"] == 88.9, str(res)[:300] + str(h1)[:300])
+    else:
+        print(f"{k} the RBI monthly averages are not on this machine ({rbi}): that check is skipped")
     # the Purchase lines page: filtered and paged on the server, downloaded as filtered
     L = lambda **kw: c.get("/api/purchases/lines", params=kw).json()
     every = L(size=500)
@@ -3069,7 +3086,9 @@ def assistant_files_checks():
                     (call("order_types"), web("GET", "/api/purchases/order-types")),
                     (call("set_order_type", sap_type="BA", category="Bulk"), web("POST", "/api/purchases/order-types", json={"sap_type": "BA", "category": "Bulk"})),
                     (call("exchange_rates"), web("GET", "/api/fx-rates")),
-                    (call("add_exchange_rate", currency="USD", month="2026-10", rate=88), web("POST", "/api/fx-rates", json={"currency": "USD", "month": "2026-10", "rate": 88}))]
+                    (call("add_exchange_rate", currency="USD", month="2026-10", rate=88), web("POST", "/api/fx-rates", json={"currency": "USD", "month": "2026-10", "rate": 88})),
+                    (call("import_exchange_rates", file_base64=base64.b64encode(b"month,currency,rate\n2026-10,USD,88\n").decode(), file_name="r.csv"),
+                     c.post("/api/fx-rates/import", headers=gp, files={"file": ("r.csv", io.BytesIO(b"month,currency,rate\n2026-10,USD,88\n"))}))]
         check(tag + "Users and roles, dated rates, the purchase history (stage 2) and the Fab library need the database: refused on the files in the screen's own words",
               all(same_refusal(m, w) and "DATABASE_URL" in m["error"] for m, w in need_db), str([m.get("error", "")[:80] for m, _ in need_db]))
     for k in ("RIGHTPRICE_MCP_TOKEN", "RIGHTPRICE_ADMINS"):
@@ -3203,7 +3222,7 @@ def assistant_checks():
                   "fab_library_upload_status": "GET /api/fab-library/uploads/{upload_id}", "upload_fab_library": "POST /api/fab-library/upload",
                   # every purchase line, the order types and the exchange rates (GP, 28 Nov 2026)
                   "purchase_lines": "GET /api/purchases/lines", "order_types": "GET /api/purchases/order-types", "set_order_type": "POST /api/purchases/order-types",
-                  "exchange_rates": "GET /api/fx-rates", "add_exchange_rate": "POST /api/fx-rates"}
+                  "exchange_rates": "GET /api/fx-rates", "add_exchange_rate": "POST /api/fx-rates", "import_exchange_rates": "POST /api/fx-rates/import"}
         check(tag + "Each tool mirrors the route it really does the work of (pinned here, so a tool cannot quietly name a weaker address; a new "
                     "tool adds its line)", dict(mirrors) == PINNED,
               str({k: (mirrors.get(k), PINNED.get(k)) for k in set(mirrors) | set(PINNED) if mirrors.get(k) != PINNED.get(k)}))
@@ -4000,12 +4019,19 @@ def assistant_checks():
         types_m, types_w = call("order_types"), web("GET", "/api/purchases/order-types").json()
         set_by = dict((t, b) for t, b in sql("SELECT sap_type, changed_by FROM order_type WHERE sap_type IN ('ZQY', 'ZQZ')"))
         lines_m, lines_w = call("purchase_lines", sourcing="Import", size=20), web("GET", "/api/purchases/lines", params={"sourcing": "Import", "size": 20}).json()
+        tbl = b"month,currency,rate_inr,days,source_url\n2026-09,EUR,103.5,22,https://www.rbi.org.in/scripts/ReferenceRateArchive.aspx\n"
+        imp_m = call("import_exchange_rates", file_base64=b64(tbl), file_name="rates.csv")
+        imp_w = upload("/api/fx-rates/import", "rates.csv", tbl.replace(b"103.5", b"103.6")).json()
+        eur = sql("SELECT rate, source, entered_by, removed_at IS NULL FROM fx_rate WHERE currency = 'EUR' AND month = '2026-09-01' ORDER BY id")
         check(tag + "add_exchange_rate enters a rate as Prices > Exchange rates does (the rate paid holds over the RBI rate), entered by \"AI "
                     "assistant\" where the page records the admin; set_order_type puts a SAP type in an order type as Purchase lines does; the reading "
                     "tools read what the pages read; a refusal is in the page's words",
               fx_m.get("in_force") is True and fx_m.get("source") == "rate paid" and [tuple(r) for r in by_] == [("RBI reference rate", "gp@example.com"), ("rate paid", AI)]
               and same_refusal(*fx_bad) and rates_m == rates_w and ot_m.get("category") == "Sampling" and ot_w.get("category") == "Return"
-              and set_by == {"ZQY": AI, "ZQZ": "gp@example.com"} and types_m == types_w and lines_m == lines_w,
+              and set_by == {"ZQY": AI, "ZQZ": "gp@example.com"} and types_m == types_w and lines_m == lines_w
+              and imp_m.get("entered") == 1 and imp_w.get("entered") == 1
+              and [tuple(r) for r in eur] == [(103.5, "RBI reference rate (average of 22 daily FBIL rates)", AI, False),
+                                              (103.6, "RBI reference rate (average of 22 daily FBIL rates)", "gp@example.com", True)],
               str(fx_m)[:200] + str(set_by) + str(fx_bad[0])[:100])
 
         # every tool that only reads, called for real, watched: the store does not move

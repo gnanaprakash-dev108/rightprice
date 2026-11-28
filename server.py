@@ -664,6 +664,14 @@ def fx_rate_add(payload: dict = Body(...), request: Request = None):
     return fx_rules.add(payload, who=_who(request))
 
 
+@app.post("/api/fx-rates/import")
+async def fx_rates_import(request: Request, file: UploadFile = File(...)):
+    data = await file.read(5 * 1024 * 1024 + 1)
+    if len(data) > 5 * 1024 * 1024:
+        return JSONResponse({"detail": "A table of exchange rates is a small file: this one is over 5 MB."}, status_code=413)
+    return await asyncio.to_thread(fx_rules.import_file, file.filename, data, _who(request))
+
+
 # ------------------------------------------------------------------ the Fab library: the PLM fabric code list (on a database only)
 # Who may look and who may upload: rules/access.py (ROUTES).
 from rules import fab_library  # noqa: E402
