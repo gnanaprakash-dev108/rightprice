@@ -1,6 +1,6 @@
 """Checks the web server against the engine: same numbers, every page's data, bad input refused; and the data layer.
 
-Run: python check_server.py     It must print ALL OK. It does not start the classic screens.
+Run: python check_server.py     It must print ALL OK. The screens are checked in a browser by check_browser.py.
 
 What it runs:
 1. The checks below on the files (as before the data layer), on a SQLite database file, and on PostgreSQL.
@@ -31,7 +31,6 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 STORE = os.environ.get("RIGHTPRICE_CHECK_STORE")       # set for one run, by the run that starts it
 if STORE:
-    os.environ["RIGHTPRICE_NO_CLASSIC"] = "1"
     os.environ.pop("ANTHROPIC_API_KEY", None)
     os.environ.pop("DATABASE_URL", None)
     os.environ.pop("RIGHTPRICE_ADMINS", None)       # permissions off: every check runs as before; access_checks() switches them on
@@ -72,7 +71,7 @@ def main():
         check("Blank choices fall back to defaults",
               abs(c.post("/api/cost", json=dict(masters.EXAMPLE_ROW, **{"Top beam": "", "Print method": None})
                          ).json()["total_per_m"] - 181.40) < 0.01)
-        for path in ["/", "/app.js", "/app.css", "/api/dashboard", "/api/cotton", "/api/pilot", "/api/template"] + \
+        for path in ["/", "/rightcost.js", "/pages/common.js", "/pages/common.css", "/api/dashboard", "/api/cotton", "/api/pilot", "/api/template"] + \
                 ["/api/table/" + s for s in meta["tables"]]:
             check(f"GET {path}", c.get(path).status_code == 200)
         check("Unknown table refused", c.get("/api/table/Nope").status_code == 404)
@@ -81,10 +80,10 @@ def main():
               man.status_code == 200 and man.json()["display"] == "standalone"
               and all(c.get("/" + i["src"]).status_code == 200 for i in man.json()["icons"])
               and c.get("/icons/icon-180.png").status_code == 200)
-        home = c.get("/?embed=1")
+        home = c.get("/")
         check("Page asks the browser for the current script, not a stored copy",
-              "app.js?v=" in home.text and "app.css?v=" in home.text and home.headers["cache-control"] == "no-cache"
-              and c.get("/app.js").headers["cache-control"] == "no-cache")
+              "rightcost.js?v=" in home.text and "pages/common.js?v=" in home.text and home.headers["cache-control"] == "no-cache"
+              and c.get("/rightcost.js").headers["cache-control"] == "no-cache" and c.get("/pages/cost.js").headers["cache-control"] == "no-cache")
         tpl = c.get("/api/template").content
         b = c.post("/api/bulk", files={"file": ("t.xlsx", io.BytesIO(tpl))}).json()
         cols = b["results"]["columns"]
@@ -276,13 +275,22 @@ def main():
         r0 = po[0]
         check("Right cost: a listed costing reopens at the same should-cost", abs(c.post("/api/cost", json=r0["choices"]).json()["total_per_m"] - r0["should"]) < 0.02)
         shell = c.get("/")
-        check("The shell is the home page; the earlier screens are served inside it", "rightcost.js?v=" in shell.text and "rightcost.css?v=" in shell.text
-              and c.get("/rightcost.js").status_code == 200 and "app.js?v=" in c.get("/?embed=1").text)
+        # stage 4: one front end. Every page is a file in web/pages/ that the shell loads; the frame and /classic are gone
+        pages_dir = os.path.join(HERE, "web", "pages")
+        page_files = sorted(f for f in os.listdir(pages_dir) if f.endswith((".js", ".css")))
+        check("The shell is the home page and loads every page file in web/pages/, each with its version",
+              "rightcost.js?v=" in shell.text and "rightcost.css?v=" in shell.text and c.get("/rightcost.js").status_code == 200
+              and len(page_files) >= 15 and all(f'"pages/{f}?v=' in shell.text and c.get("/pages/" + f).status_code == 200 for f in page_files),
+              str([f for f in page_files if f'"pages/{f}?v=' not in shell.text]))
+        bookmark = [c.get(p_, follow_redirects=False) for p_ in ("/classic", "/classic/", "/classic/_stcore/health")]
+        check("The earlier front end and the Streamlit screens are retired; a bookmark of /classic leads to the app",
+              c.get("/app.js").status_code == 404 and all(b_.status_code == 307 and b_.headers["location"] == "/" for b_ in bookmark)
+              and c.get("/classic/").status_code == 200 and "app.js" not in c.get("/?embed=1").text and not os.path.exists(os.path.join(HERE, "app.py")))
         old = c.get("/rightcost", follow_redirects=False)
         check("The old Right cost address leads to its page in the shell, keeping any '#' part the browser carries (stage 2: /rightcost#group/Fab-0001)",
               old.status_code == 307 and old.headers["location"] == "/?from=rightcost" and 'get("from") === "rightcost"' in c.get("/rightcost.js").text)
         check("Right cost: downloads", c.post("/api/costs/download", json={"source": "Purchase orders"}).content[:2] == b"PK")
-        for css in ("web/app.css", "web/rightcost.css"):
+        for css in ["web/rightcost.css"] + [f"web/pages/{f}" for f in page_files if f.endswith(".css")]:
             txt = open(css, encoding="utf8").read()
             check(f"{css}: every brace closed", txt.count("{") == txt.count("}"))
 
@@ -999,7 +1007,7 @@ def stage2_checks(c, check):
         p = subprocess.run(["node", "--check", os.path.join(HERE, "web", "purchases.js")], capture_output=True, text=True)
         check("web/purchases.js parses", p.returncode == 0, p.stderr[-300:])
     shell = c.get("/").text
-    check("Stage 2: the shell loads the purchase-history page script before its own", shell.index("purchases.js") < shell.index("rightcost.js")
+    check("Stage 2: the shell loads the purchase-history page script before its own", shell.index('src="purchases.js') < shell.index('src="rightcost.js')
           and c.get("/purchases.js").status_code == 200 and c.get("/purchases.css").status_code == 200)
     # the rules on their own: counts written many ways, widths, ranges on separate orders, dates
     same = lambda a, b: fab_groups.tidy_count(a) == fab_groups.tidy_count(b)
@@ -2048,12 +2056,10 @@ def dated_checks(c, check):
 # ===================================================================== stage 3: users, roles and permissions
 def front_end_calls(routes):
     """Every address each page's own code calls, read from the front-end files: {permission of the page: {"METHOD /path"}}.
-    web/app.js: each earlier screen (PAGES.<id>), with the functions it uses, and the drop-down lists the screens load
-    first; web/rightcost.js: Right cost (the list, fabric and supplier pages, and the rail's alert count); web/access.js:
-    Users and roles. Left out on purpose: the earlier front end's own header search (setupSearch), which the shell hides."""
-    app_pages = {"dashboard": "page:dashboard", "pilot": "page:pilot", "cost": "page:cost", "compare": "page:cost", "bulk": "page:list",
-                 "pack": "page:pack", "yarn": "page:prices", "cotton": "page:prices", "rates": "page:prices", "ratecard": "page:prices",
-                 "settings": "page:prices", "costsheets": "page:costsheets", "intake": "do:edit_rates"}
+    web/pages/<page>.js: each page of the shell (stage 4), with what it uses of web/pages/common.js and the drop-down lists
+    every page loads first (common.js show); the permission of each page is the one web/access.js PAGE_NEEDS (pages) or
+    TAB_NEEDS (the New cost popup's tabs) names for it, so a page file it does not name fails here. web/rightcost.js:
+    Right cost (the list, fabric and supplier pages, and the rail's alert count); web/access.js: Users and roles."""
     templates = sorted({k.split(" ", 1)[1] for k in routes if " /api/" in k}, key=len, reverse=True)
 
     def address(literal):
@@ -2077,34 +2083,40 @@ def front_end_calls(routes):
             out.add(f"{verb} {address(m.group(1))}")
         return out
 
-    def blocks(src):
-        """The file's top-level definitions (function, const, PAGES.<id>, the start-up function) and their text."""
-        pat = re.compile(r"^(?:async\s+)?function\s+(\w+)|^const\s+(\w+)\s*=|^PAGES\.(\w+)\s*=|^\(async function (\w+)\(", re.M)
-        found = [(m.start(), m.group(1) or m.group(2) or ("PAGES." + m.group(3) if m.group(3) else None) or m.group(4)) for m in pat.finditer(src)]
-        out = {}
-        for i, (pos, name) in enumerate(found):
-            out[name] = out.get(name, "") + src[pos:found[i + 1][0] if i + 1 < len(found) else len(src)]
-        return out
+    read = lambda name: open(os.path.join(HERE, "web", name), encoding="utf8").read()
+    # web/pages/common.js: its functions (two spaces in, inside its wrapper), and what each calls, following the ones it uses
+    common = read("pages/common.js")
+    pat = re.compile(r"^  (?:async\s+)?function\s+(\w+)|^  const\s+(\w+)\s*=", re.M)
+    found = [(m.start(), m.group(1) or m.group(2)) for m in pat.finditer(common)]
+    defs = {name: common[pos:found[i + 1][0] if i + 1 < len(found) else len(common)] for i, (pos, name) in enumerate(found)}
 
-    def reach(name, defs, skip):
-        seen, todo = set(), [name]
+    def reach(text, skip=("show",)):
+        seen, todo = set(), [w for w in set(re.findall(r"\b(\w+)\b", text)) if w in defs]
         while todo:
             n = todo.pop()
             if n in seen or n in skip:
                 continue
             seen.add(n)
             todo += [w for w in set(re.findall(r"\b(\w+)\b", defs[n])) if w in defs and w != n]
-        return set().union(*(calls(defs[n]) for n in seen))
+        return set().union(set(), *(calls(defs[n]) for n in seen))
 
-    read = lambda name: open(os.path.join(HERE, "web", name), encoding="utf8").read()
-    app = blocks(read("app.js"))
-    skip = {"setupSearch", "start", "route", "PAGES"}
-    boot = calls(app["start"])                                 # what every earlier screen loads first
+    shown = defs["show"].split("\n  return {")[0]                # show itself, without the list of what common.js gives out
+    boot = calls(shown) | reach(shown)                         # what every page loads first: the drop-down lists
+    access_js = read("access.js")
+    needs = {}
+    for table in ("PAGE_NEEDS", "TAB_NEEDS"):
+        body = re.search(table + r" = \{(.*?)\};", access_js, re.S).group(1)
+        needs.update(dict(re.findall(r"""(\w+):\s*["']([\w:]+)["']""", body)))
     per = {}
-    for pid, perm in app_pages.items():
-        per.setdefault(perm, set()).update(reach("PAGES." + pid, app, skip) | boot)
+    for f in sorted(os.listdir(os.path.join(HERE, "web", "pages"))):
+        if not f.endswith(".js") or f == "common.js":
+            continue
+        src = read("pages/" + f)
+        for pid in re.findall(r"""RP\.page\(\s*["'](\w+)["']""", src):
+            perm = needs.get(pid, f"(web/access.js names no permission for the page {pid})")
+            per.setdefault(perm, set()).update(calls(src) | reach(src) | boot)
     per.setdefault("page:rightcost", set()).update(calls(read("rightcost.js")))
-    per.setdefault("page:users", set()).update(calls(read("access.js")) - {"GET /api/me"})
+    per.setdefault("page:users", set()).update(calls(access_js) - {"GET /api/me"})
     # stage 2, web/purchases.js: the price popup (opened from Right cost and from the Fab group pages), the Fab group pages,
     # and the purchase files page, each a section of the file
     pj = read("purchases.js")
@@ -2129,11 +2141,8 @@ def access_checks():
     import asyncio
     import base64
     import contextlib
-    import http
     import store
     from fastapi.routing import APIRoute
-    from starlette.websockets import WebSocketDisconnect
-    from websockets.sync.server import serve
     import data_users
     from rules import access
     ok = True
@@ -2149,23 +2158,10 @@ def access_checks():
     for k in ("RIGHTPRICE_ADMINS", "WEBSITE_SITE_NAME", "WEBSITE_AUTH_ENABLED", "RIGHTPRICE_MCP_TOKEN"):
         os.environ.pop(k, None)
 
-    # a stand-in for the earlier (Streamlit) screens: a plain answer to plain requests, an echo on the web socket
-    def echo(ws):
-        for msg in ws:
-            ws.send(msg)
-    stand_in = serve(echo, "127.0.0.1", 0, process_request=lambda conn, req: None if req.headers.get("Upgrade", "").lower() == "websocket"
-                     else conn.respond(http.HTTPStatus.OK, "classic stand-in\n"))
-    threading.Thread(target=stand_in.serve_forever, daemon=True).start()
-    server.CLASSIC = f"127.0.0.1:{stand_in.socket.getsockname()[1]}"
-
-    def socket_answer(email):
-        """What the earlier screens' web socket gives this person: "echo" when it opens through to them, else the close code."""
-        try:
-            with c.websocket_connect("/classic/_stcore/stream", headers=H(email) if email else {}) as ws:
-                ws.send_text("hello")
-                return "echo" if ws.receive_text() == "hello" else "?"
-        except WebSocketDisconnect as e:
-            return e.code
+    def retired(headers):
+        """Where a bookmark of the retired earlier screens (/classic) leads: to the app's home page, for anyone."""
+        r = [c.get(path, headers=headers, follow_redirects=False) for path in ("/classic", "/classic/", "/classic/_stcore/stream")]
+        return all(x.status_code == 307 and x.headers["location"] == "/" for x in r)
 
     fill_in = {"{sheet}": "Settings", "{saved_id}": "x", "{path:path}": "x"}
     bodies = {"POST /api/bulk-download": {"columns": ["a"], "rows": []}}
@@ -2203,6 +2199,8 @@ def access_checks():
         check(tag + "Each page opens every address it reads (access.PAGE_USES), so unticking any one page, for any role, leaves every other page working",
               not broken and all(a in access.ROUTES for uses in access.PAGE_USES.values() for a in uses) and set(access.PAGE_USES) >= pages, "; ".join(broken[:5]))
         called = front_end_calls(access.ROUTES)
+        unnamed = [k for k in called if not (k.startswith("page:") or k.startswith("do:"))]
+        check(tag + "web/access.js names the permission of every page in web/pages/ (PAGE_NEEDS, or TAB_NEEDS for a New cost tab)", not unnamed, str(unnamed))
         is_read = lambda a: access.ROUTES.get(a) == access.MEMBER or all(str(n).startswith("page:") for n in access._needs(access.ROUTES.get(a)))
         differs = {perm: (sorted(set(access.PAGE_USES.get(perm, [])) - {a for a in got if is_read(a)}), sorted({a for a in got if is_read(a)} - set(access.PAGE_USES.get(perm, []))))
                    for perm, got in called.items() if perm.startswith("page:")}
@@ -2210,7 +2208,7 @@ def access_checks():
         # and no address opens for a page that does not read it: its pages are exactly the pages whose lists name it
         loose = {a: (sorted(access._needs(need)), sorted(users)) for a, need in access.ROUTES.items() if need not in (access.PUBLIC, access.SHELL, access.MEMBER)
                  and is_read(a) for users in [{perm for perm, uses in access.PAGE_USES.items() if a in uses}] if users and set(access._needs(need)) != users}
-        check(tag + "access.PAGE_USES is what each page's code calls (read from web/app.js, rightcost.js and access.js), both ways; every "
+        check(tag + "access.PAGE_USES is what each page's code calls (read from web/pages/*.js, rightcost.js and access.js), both ways; every "
                     "address the screens call is in ROUTES; an address read by pages opens for exactly those pages; Bring in prices "
                     "reads nothing beyond the drop-down lists",
               all(not a and not b for a, b in differs.values()) and set(called) >= pages | {"page:users"} and not unknown
@@ -2236,7 +2234,7 @@ def access_checks():
                     "none refused for a role, none failing (Users and roles alone is not shown: it lists people's addresses)",
               r["permissions_on"] is False and "off" in r["why"] and set(r["allowed"]) == set(access.ALL) and not bad
               and off["GET /api/users"] == 403 and "Permissions are off" in c.get("/api/users", headers=H("x@example.com")).json()["detail"]
-              and c.get("/rightcost.js").status_code == 200 and socket_answer(None) == "echo" and r["sign_in"] == "not on Azure", str(bad))
+              and c.get("/rightcost.js").status_code == 200 and retired({}) and r["sign_in"] == "not on Azure", str(bad))
         refused = c.post("/api/users/add", json={"email": "x@example.com", "role": "Admin"}, headers=H("x@example.com"))
         check(tag + "Setting off: nobody can change users (anyone signed in could make themselves an admin)",
               refused.status_code == 409 and "Permissions are off" in refused.json()["detail"])
@@ -2271,10 +2269,10 @@ def access_checks():
         os.environ["RIGHTPRICE_ADMINS"] = " GP@Example.com ; not-an-address"
         nobody = sweep({})
         check(tag + f"Setting on, no sign-in: every one of the {len(nobody)} addresses but /api/me refuses (401), the home page included; "
-                    "never treated as an admin; the shell's files stay open; the web socket is closed",
+                    "never treated as an admin; the shell's files stay open; a bookmark of the retired /classic still leads home",
               all(v == 401 for k, v in nobody.items() if access.ROUTES.get(k) != access.PUBLIC and k != "GET /rightcost")
               and nobody["GET /api/me"] == 200 and c.get("/api/me").json()["let_in"] is False and "Sign in" in c.get("/").text
-              and c.get("/api/meta", headers=H("")).status_code == 401 and c.get("/rightcost.js").status_code == 200 and socket_answer(None) == 1008,
+              and c.get("/api/meta", headers=H("")).status_code == 401 and c.get("/rightcost.js").status_code == 200 and retired({}),
               str({k: v for k, v in nobody.items() if v != 401}))
         me = c.get("/api/me", headers=H("gp@example.com")).json()
         check(tag + "Setting on: an admin named in it is Admin, whatever the letter case; an entry that is not an address is ignored and shown to admins",
@@ -2341,7 +2339,6 @@ def access_checks():
                   and c.post("/api/users/add", json={"email": "a@example.com", "role": "Buyer"}, headers=gp).status_code == 503)
             os.environ.pop("RIGHTPRICE_ADMINS", None)
             check("[files] Setting taken off again: open as before", c.get("/api/meta", headers=H("asha@example.com")).status_code == 200)
-            stand_in.shutdown()
             print("ALL OK" if ok else "SOMETHING FAILED")
             return 0 if ok else 1
 
@@ -2353,7 +2350,7 @@ def access_checks():
                     "the shell is served (it has none), and /api/me says why, with the address to add",
               all(strangers[k] == 403 for k in with_data)
               and strangers["GET /"] == 200 and "access.js?v=" in shell.text and why["let_in"] is False and "not been given access" in why["why"]
-              and "stranger@example.com" in why["why"] and socket_answer("stranger@example.com") == 1008,
+              and "stranger@example.com" in why["why"] and retired(H("stranger@example.com")),
               str({k: v for k, v in strangers.items() if v != 403}))
         add = lambda email, role, by=gp, name="": c.post("/api/users/add", json={"email": email, "name": name, "role": role}, headers=by)
         people = {"Admin": "a2@example.com", "Rates editor": "r@example.com", "Buyer": "b@example.com", "Viewer": "v@example.com"}
@@ -2369,7 +2366,7 @@ def access_checks():
                   ("GET", "/api/costsheet", None, "GET /api/costsheet", 200), ("GET", "/api/template", None, "GET /api/template", 200),
                   ("POST", "/api/cost", masters.EXAMPLE_ROW, "POST /api/cost", 200), ("GET", "/api/pilot", None, "GET /api/pilot", 200),
                   ("GET", "/api/dashboard", None, "GET /api/dashboard", 200), ("POST", "/api/list", {}, "POST /api/list", 200),
-                  ("GET", "/api/users", None, "GET /api/users", 200), ("GET", "/classic", None, "GET /classic", 200),
+                  ("GET", "/api/users", None, "GET /api/users", 200),
                   ("PUT", "/api/table/Nope", {}, "PUT /api/table/{sheet}", 404), ("POST", "/api/cotton", {}, "POST /api/cotton", 400),
                   ("POST", "/api/costsheet/apply", {"ids": []}, "POST /api/costsheet/apply", 400), ("POST", "/api/list/remove", {"ids": []}, "POST /api/list/remove", 400),
                   ("POST", "/api/negotiations/event", {}, "POST /api/negotiations/event", 400), ("POST", "/api/alerts/seen", {"ids": []}, "POST /api/alerts/seen", 200),
@@ -2385,16 +2382,16 @@ def access_checks():
             return wrong
         for role, email in people.items():
             wrong = matrix(email, set(access.ALL) if role == "Admin" else D[role])
-            check(tag + f"{role}: on {len(sample)} addresses (reading, rates, drafts, uploads, steps, alerts, users, the earlier screens) each gives "
+            check(tag + f"{role}: on {len(sample)} addresses (reading, rates, drafts, uploads, steps, alerts, users) each gives "
                         "the route's own answer where the role may, and 403 where it may not",
                   not wrong, "; ".join(wrong))
-        sockets = {role: socket_answer(email) for role, email in people.items()}
-        check(tag + "The earlier screens' web socket opens through to the roles that may edit rates, and is closed (1008) to the others",
-              sockets == {"Admin": "echo", "Rates editor": "echo", "Buyer": 1008, "Viewer": 1008}, str(sockets))
-        classic = c.get("/classic", headers=H("v@example.com"))
+        check(tag + "A bookmark of the retired earlier screens (/classic) leads every role to the app's home page",
+              all(retired(H(email)) for email in people.values()))
+        # no page outside /api/ needs a permission now that /classic is retired: the refusal page is read as written
+        refused_page = server._refusal_page(403, "Your role (Viewer) may not edit rates. Ask an admin if you need to.")
         nosign = c.get("/")
         check(tag + "A refused page offers to sign out only when the refusal is about the person (their role here), and to sign in when no one is signed in",
-              classic.status_code == 403 and "Not open to your role" in classic.text and "/.auth/logout" in classic.text
+              "Not open to your role" in refused_page and "/.auth/logout" in refused_page
               and nosign.status_code == 401 and "/.auth/login/aad" in nosign.text and "/.auth/logout" not in nosign.text)
         refusal = c.put("/api/table/Settings", json={}, headers=H("b@example.com")).json()["detail"]
         check(tag + "A refusal says plainly what the role may not do", refusal == "Your role (Buyer) may not edit rates. Ask an admin if you need to.", refusal)
@@ -2557,7 +2554,6 @@ def access_checks():
         check(tag + "Setting taken off again: everything open as before, the list of people kept",
               c.get("/api/meta").status_code == 200 and c.get("/api/meta", headers=H("stranger@example.com")).status_code == 200
               and len(store.get()._read(data_users.people)) == 5 and c.get("/api/users", headers=gp).status_code == 403)
-    stand_in.shutdown()
     txt = open(os.path.join(HERE, "web", "access.css"), encoding="utf8").read()
     check(tag + "web/access.css: every brace closed", txt.count("{") == txt.count("}"))
     print("ALL OK" if ok else "SOMETHING FAILED")

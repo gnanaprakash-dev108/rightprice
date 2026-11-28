@@ -85,9 +85,6 @@ MIRRORS = {}        # each tool and the screen's address it mirrors: its permiss
 NOT_MIRRORED = {
     "POST /api/save": "the earlier name of POST /api/list/add, which add_fabric_to_list mirrors",
     "DELETE /api/saved/{saved_id}": "removes one list row, as POST /api/list/remove does (remove_fabric_list_rows)",
-    "GET /classic": "the earlier screens (Streamlit) in a browser; what they change, the rate tables, edit_rate_table changes",
-    "* /classic/{path:path}": "the earlier screens' own requests (Streamlit), for a browser only",
-    "WS /classic/{path:path}": "the earlier screens' web socket (Streamlit), for a browser only",
     "POST /api/intake/api": "bringing in prices from a price service takes the service's key, and a key is never given in a chat "
                             "(GP, 28 Nov 2026): a person does it on the screen (Prices > Bring in prices)",
 }

@@ -552,18 +552,36 @@ record_tracker_step (marked "AI assistant"; the tracker's refusals apply, plus: 
   `#item/<source|code>`, `#lib/<name>`, the Prices pages (`#yarn`, `#cotton`, `#intake`, `#rates`,
   `#ratecard`, `#costsheets`, `#settings`); `?new=<tab>` after a route is the popup
   (`cost`, `bulk`, `compare`, `pack`).
-- `/?embed=1` serves the earlier front end (`web/index.html` + `app.js` + `app.css`) without its own
-  panel and header; the shell shows it in an iframe (`&bare=1&in=page` for pages, `&bare=1` in the
-  popup). A page in the frame posts `{rp:"nav"}` so the shell's heading and address follow, and
-  `{rp:"popup"}` to open a costing screen in the popup; the popup posts `{rp:"close"}` on Escape and
-  `{rp:"listChanged"}` after Add to list.
+- **Since stage 4 (27 Nov) there is one front end.** Every other page is its own file in `web/pages/`
+  (`dashboard.js`, `pilot.js`, `yarn.js`, `cotton.js`, `intake.js`, `rates.js`, `ratecard.js`, `settings.js`,
+  `costsheets.js`; the popup's `cost.js`, `bulk.js`, `compare.js`, `pack.js`), with a stylesheet where it has one.
+  A page registers itself with `RP.page("<address>", { title, section, popup, look }, render)` and is loaded by one
+  `<script>` line in `rightcost.html` (before `rightcost.js`); `web/pages/common.js` explains it and holds what the
+  pages share (`RP.kit` helpers and tables, `RP.state`: the fabric open in Create cost, the list's ticks).
+  The shell draws a page under its heading in a box that scrolls by itself (`renderPage`), or as a popup tab;
+  a page asks the shell for things through `RP.shell` (`go`, `toast`, `showAlerts`, `alertsChanged`,
+  `listChanged`, `popup`). The pages keep the look they had in the frame: `web/pages/common.css` is scoped
+  to a page's box (`.pg`), sets back the few shell rules that would reach in, and lays out by the box's own
+  width (container queries), as the frame did by its width. The iframe, `/?embed=1`, `web/index.html`,
+  `app.js`, `app.css`, `app.py` (Streamlit, `/classic`) and `RIGHTPRICE_UI=classic` are gone; a bookmark of `/classic`
+  leads to the app. With users and roles (stage 3) a page offers only what the role may do (`RP.kit.can`), and
+  `web/access.js` `PAGE_NEEDS` / `TAB_NEEDS` must name every page (check_server.py checks it, and reads each page's
+  calls from `web/pages/*.js` for `PAGE_USES`). The rate master's lists are read afresh for each page and each popup.
+  Stage 5's screen parts live in the pages too: the dated yarn rates card on Yarn prices (`RPDated.card`, without its
+  form for a role that may not edit rates), "Add as dated yarn rates…" on Bring in prices, and the "rates of" line
+  under Create cost's figure; the shell loads `web/dated.js` and `dated.css` (a few of its rules are restated in
+  `common.css` so they still win inside a page). Printing Create cost or the pack turns only the printed page light
+  (`.pg.paper`), not the shell.
+- `check_browser.py` opens every page in Chromium (Playwright) and walks the main paths, stage 5's dated rates, the
+  printed type size, and every address for each role (and for a Buyer with each page unticked); it runs in the
+  checks job. A crash fails it and keeps the data folder and the servers' logs.
 - Lessons that cost time: `replaceChildren` turns arrays and nulls into text (use `fill()` in
-  rightcost.js, spread arrays in app.js); moving an iframe in the DOM reloads it; numpy numbers break
+  rightcost.js and `RP.kit.fill` in the pages); moving an iframe in the DOM reloads it; numpy numbers break
   JSON responses (convert); edit scripts must match the file's real characters (· — −), not escapes;
   a lost CSS brace silently swallows later rules (`check_server.py` now checks braces).
 - Test data for local runs is not in the repository: make a mill sheet with `mill_sheet.COLUMNS` and
-  upload it, as the checks do; run the server with `RIGHTPRICE_NO_CLASSIC=1` and a temporary
-  `RIGHTPRICE_DATA` folder so `data/` is never touched.
+  upload it, as the checks do; run the server with a temporary `RIGHTPRICE_DATA` folder so `data/` is
+  never touched.
 
 ## Earlier handover, 25 November 2026 (superseded)
 

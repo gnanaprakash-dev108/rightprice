@@ -93,7 +93,7 @@ PERMISSIONS = [
      "Unticked, Purchase files is not offered. The purchase history the files filled still shows in Right cost and on the "
      "Fab group pages."),
     ("page:users", "Users and roles (this page)", "see who may use RightPrice", ""),
-    ("do:edit_rates", "Edit rates: rate tables, yarn and cotton prices, Bring in prices, and the earlier screens (classic)", "edit rates", ""),
+    ("do:edit_rates", "Edit rates: rate tables, yarn and cotton prices, Bring in prices", "edit rates", ""),
     ("do:apply_drafts", "Apply mill cost sheet drafts to the rate master", "apply mill cost sheet drafts", ""),
     ("do:upload", "Upload and change: mill sheets, Add to list, update or remove list rows, mill cost sheets", "upload or change the fabric list and mill cost sheets", ""),
     ("do:record_steps", "Record and remove negotiation steps in the tracker", "record or remove negotiation steps", ""),
@@ -127,8 +127,10 @@ GRID_NOTE = ("A page's tick decides whether this role can open that page. It is 
 ROUTES = {
     "MOUNT /": PUBLIC,                       # the shell's scripts, styles and icons: no data in them
     "GET /rightcost": PUBLIC,                # a redirect to the shell (to #rightcost, or the # part asked for)
+    "GET /classic": PUBLIC,                  # the earlier Streamlit screens are retired (stage 4): a bookmark leads to /
+    "GET /classic/{path:path}": PUBLIC,
     "GET /api/me": PUBLIC,
-    "GET /": SHELL,                          # the shell (and /?embed=1, the earlier screens): no data, no database
+    "GET /": SHELL,                          # the shell, with every page in it: no data, no database
     "GET /openapi.json": MEMBER,
     "GET /api/store": MEMBER,
     "GET /api/meta": MEMBER,                 # the drop-down lists every screen loads first (the yarn master with its rates)
@@ -168,9 +170,6 @@ ROUTES = {
     "POST /api/dated-rates/remove": "do:edit_rates",
     "POST /api/dated-rates/market": "do:edit_rates",
     "POST /api/intake/add-dated": "do:edit_rates",   # Bring in prices: the reviewed rows as dated yarn rates
-    "GET /classic": "do:edit_rates",                 # the earlier Streamlit screens can change rates
-    "* /classic/{path:path}": "do:edit_rates",
-    "WS /classic/{path:path}": "do:edit_rates",
     "POST /api/costsheet/apply": "do:apply_drafts",
     "POST /api/save": "do:upload",
     "POST /api/list/add": "do:upload",
@@ -202,8 +201,9 @@ ROUTES = {
     "POST /api/groups/unmerge": "do:merge_groups",
 }
 
-# what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/app.js (each
-# earlier screen, with the drop-down lists it loads first), web/rightcost.js (Right cost), web/access.js (this page).
+# what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/pages/<page>.js
+# (each page of the shell, with what it uses of web/pages/common.js and the drop-down lists every page loads first),
+# web/rightcost.js (Right cost), web/access.js (this page).
 # check_server.py compares this with the addresses each page's code calls, both ways, and checks that each page's
 # permission opens every address on its list, so unticking another page cannot break it.
 PAGE_USES = {
