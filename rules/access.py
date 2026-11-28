@@ -28,9 +28,11 @@ known by that value, lower case. On Azure (WEBSITE_SITE_NAME set) the headers ar
 is on (WEBSITE_AUTH_ENABLED, which App Service sets); off Azure anyone can send them, so on a laptop leave
 RIGHTPRICE_ADMINS unset.
 
-The MCP token (RIGHTPRICE_MCP_TOKEN, server.py McpGate) is its own fixed role, "AI assistant" (ASSISTANT_ALLOWED): each
-of its tools names the address it mirrors (mcp_server.py) and goes through assistant_refusal() with that address's
-permission before it runs. It is not changed on the admin page.
+The MCP token (RIGHTPRICE_MCP_TOKEN, server.py McpGate) is its own fixed role, "AI assistant" (ASSISTANT_ALLOWED). GP's
+decision of 27 Nov 2026: it holds the Admin role's permissions, so through it an assistant can do everything an Admin
+can in the app, user admin included. Each of its tools names the address it mirrors (mcp_server.py) and goes through
+assistant_refusal() with that address's permission before it runs; every change it makes is recorded as "AI assistant".
+It is a fixed role in code, not changed on the admin page; switching the token off (the app setting) is how it is cut off.
 
 Each person's own marks (Status and Remarks in Right cost, saved searches, Library lists) stay in their browser in this
 stage; moving them to the server is a separate choice for GP.
@@ -219,12 +221,15 @@ PAGE_USES = {
 }
 
 # the AI assistant (the MCP token): a fixed role. Each tool names the address it mirrors (mcp_server.py) and runs only if
-# this role holds that address's permission (assistant_refusal).
-ASSISTANT_ALLOWED = {"page:cost", "page:rightcost", "page:pack", "do:record_steps"}
-ASSISTANT_NOTE = ("The MCP token: one fixed role, what its tools do today. Each tool goes through the same permission as "
-                  "the screen's address it mirrors. It records negotiation steps as \"AI assistant\" and removes only steps "
-                  "it recorded itself; it cannot change rates, upload, remove rows, mark alerts seen, draft messages or change "
-                  "users. It is switched on by the app setting RIGHTPRICE_MCP_TOKEN, not here.")
+# this role holds that address's permission (assistant_refusal). GP, 27 Nov 2026: "if I ask something through the MCP
+# connector it should execute everything including the admin role": the Admin role's permissions, kept here in code.
+ASSISTANT_ALLOWED = set(DEFAULTS[ADMIN])
+ASSISTANT_NOTE = ("The MCP token: one fixed role with the Admin role's permissions (GP's decision, 27 Nov 2026). Through it an "
+                  "assistant can do what an Admin can: change rates, upload and remove rows, apply drafts, mark alerts seen, "
+                  "record and remove negotiation steps, draft messages, and add people and change roles (switching off an admin, or "
+                  "taking Admin away, stays with a person, so the admins cannot be locked out). Each tool goes through "
+                  "the permission of the screen's address it mirrors, and every change is recorded as \"AI assistant\". It is "
+                  "not changed here: it is switched on and off by the app setting RIGHTPRICE_MCP_TOKEN.")
 MARKS_NOTE = ("Each person's own marks (Status and Remarks in Right cost, saved searches, Library lists) are still kept in "
               "their own browser, as before; they are not shared and not part of these permissions.")
 OFF_WORDS = ("Permissions are off: everyone signed in may use everything. They are switched on by the app setting "
@@ -496,28 +501,38 @@ def _store_for_users():
     return st
 
 
-def _admin(headers):
-    """The admin making a change (their sign-in address), or a refusal: changes are made only with permissions on, by an
-    admin. With permissions off anyone signed in could make themselves an admin, so nothing is changed then."""
+def _admin(headers, assistant=False):
+    """The admin making a change (their sign-in address, or "AI assistant" for the MCP token's tools), or a refusal:
+    changes are made only with permissions on, by an admin. With permissions off anyone signed in could make themselves
+    an admin, so nothing is changed then, by a person or by the assistant."""
     if not enforced():
         raise Refused(409, f"Permissions are off, so RightPrice cannot tell an admin from anyone else: changes here are "
                            f"refused until the app setting {ADMINS_ENV} is added (see docs/AZURE_DEPLOY.md, \"Users and roles\").")
+    if assistant:
+        if "do:manage_users" not in ASSISTANT_ALLOWED:
+            raise Refused(403, f"The AI assistant may not {VERB['do:manage_users']}.")
+        return ASSISTANT
     p = person(headers)
     if not p["let_in"] or "do:manage_users" not in p["allowed"]:
         raise Refused(403, f"Your role ({p['role'] or 'none'}) may not change who may use RightPrice.")
     return p["email"]
 
 
-def users_view(headers=None):
+def users_view(headers=None, assistant=False):
     """Everything the admin page shows: the people, each role's permissions (and which differ from the defaults), what
     unticking each page does, the AI assistant's fixed role, and the record of changes. Only with permissions on, and
-    only to an admin: with them off anyone signed in could read the people's addresses and the record."""
+    only to an admin (or the AI assistant, which holds Admin's permissions): with them off anyone signed in could read
+    the people's addresses and the record."""
     if not enforced():
         raise Refused(403, f"Permissions are off, so this page is not shown: anyone signed in could read it. It opens to "
                            f"the admins once the app setting {ADMINS_ENV} is added (docs/AZURE_DEPLOY.md, \"Users and roles\").")
-    p = person(headers or {})
-    if not p["let_in"] or "page:users" not in p["allowed"]:
-        raise Refused(403, f"Your role ({p['role'] or 'none'}) may not see who may use RightPrice.")
+    if assistant:
+        if "page:users" not in ASSISTANT_ALLOWED:
+            raise Refused(403, f"The AI assistant may not {VERB['page:users']}.")
+    else:
+        p = person(headers or {})
+        if not p["let_in"] or "page:users" not in p["allowed"]:
+            raise Refused(403, f"Your role ({p['role'] or 'none'}) may not see who may use RightPrice.")
     st = _store_for_users()
 
     def get(c):
@@ -554,8 +569,8 @@ def _role(v):
     return v
 
 
-def add_person(payload, headers):
-    who = _admin(headers)
+def add_person(payload, headers=None, assistant=False):
+    who = _admin(headers, assistant)
     st = _store_for_users()
     raw = str(payload.get("email") or "").strip()
     email = valid_email(setting_entry(raw[len("live.com#"):] if raw.lower().startswith("live.com#") else raw))
@@ -571,9 +586,9 @@ def add_person(payload, headers):
     return {"added": email, "role": role}
 
 
-def change_person(payload, headers):
+def change_person(payload, headers=None, assistant=False):
     """Change a person's role, name, or switch them off or on. The last active admin in the list stays an active admin."""
-    who = _admin(headers)
+    who = _admin(headers, assistant)
     st = _store_for_users()
     email = str(payload.get("email") or "").strip().lower()
     at = store._now()
@@ -594,6 +609,10 @@ def change_person(payload, headers):
         stays_admin = new.get("role", old["role"]) == ADMIN and new.get("active", old["active"])
         if old["role"] == ADMIN and old["active"] and not stays_admin and data_users.active_admins(c) == [email]:
             raise Refused(400, f"{email} is the last admin in the list, so they stay an admin. Make someone else Admin first.")
+        if assistant and old["role"] == ADMIN and old["active"] and not stays_admin:
+            # two calls (add someone as Admin, switch the other off) would otherwise lock the admins out
+            raise Refused(403, f"The AI assistant does not switch off an admin or take Admin away from them: a person does that on "
+                               f"Users and roles. {email} stays an admin. Nothing was changed.")
         data_users.update(c, email, at, who, **new)
         if "role" in new:
             data_users.log(c, at, who, "role changed", email, {"from": old["role"], "to": new["role"]})
@@ -604,10 +623,10 @@ def change_person(payload, headers):
     return {"changed": email, "what": sorted(new)}
 
 
-def set_permissions(payload, headers):
+def set_permissions(payload, headers=None, assistant=False):
     """Give a role a permission, or take one away: payload {"changes": [{"role", "permission", "allowed"}]}. Admin always
     has everything, and user admin stays Admin's alone."""
-    who = _admin(headers)
+    who = _admin(headers, assistant)
     st = _store_for_users()
     changes = payload.get("changes")
     if not isinstance(changes, list) or not changes:

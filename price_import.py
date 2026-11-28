@@ -162,20 +162,141 @@ def read_table_file(name, data):
     return pd.read_excel(io.BytesIO(data), sheet_name=None)
 
 
+def _addresses(host, port):
+    """Every address a host name stands for (the one DNS lookup made for a fetch)."""
+    import socket
+    return [i[4][0] for i in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)]
+
+
+def _public_ip(text):
+    """Whether an address is on the public internet: not this machine, a private network, link-local (169.254.x, where
+    the cloud's metadata and identity endpoints answer), multicast or reserved."""
+    import ipaddress
+    ip = ipaddress.ip_address(str(text).split("%", 1)[0])
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    return ip.is_global and not ip.is_multicast and not ip.is_reserved
+
+
+def _target(url):
+    """Where a fetch of this address goes: (scheme, host, port, path with query, the checked IP to connect to); or
+    ValueError with the words of the refusal. RULE: Bring in prices reads public web addresses only, over http or https:
+    never this machine, a private network, a link-local address or this site's own address. The address is read once,
+    and must read the same to Python's parser and to urllib3 (the library that connects): a backslash, a user name or
+    password before the host, spaces or control characters are refused, so no address can mean one host to the check
+    and another to the connection. The host name is looked up once, every address it gives must be public, and the
+    connection is made to the address checked (so the name cannot be pointed elsewhere between the check and the fetch)."""
+    from urllib.parse import urlsplit
+    from urllib3.util import parse_url
+    text = str(url or "").strip()
+    if not text or "\\" in text or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        raise ValueError("That is not a web address RightPrice reads (no backslashes, spaces or control characters).")
+    try:
+        p, q = urlsplit(text), parse_url(text)
+        host, port = (p.hostname or "").lower().rstrip("."), p.port
+    except ValueError:
+        raise ValueError("That is not a web address.")
+    if p.scheme.lower() not in ("http", "https") or not host:
+        raise ValueError("Only web addresses starting http:// or https:// are read.")
+    if "@" in p.netloc or p.username or p.password or q.auth:
+        raise ValueError("An address with a user name or password before the host is not read.")
+    if (q.host or "").lower().strip("[]").rstrip(".") != host.strip("[]") or q.port != port or (q.scheme or "").lower() != p.scheme.lower():
+        raise ValueError("That address reads differently to the parts of RightPrice that check it and that connect to it, so it is not read.")
+    own = (os.environ.get("WEBSITE_HOSTNAME") or "").lower()
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")) or (own and host == own):
+        raise ValueError(f"{host} is not a public address: Bring in prices reads public pages only.")
+    port = port or (443 if p.scheme.lower() == "https" else 80)
+    try:
+        found = _addresses(host.strip("[]"), port)
+    except (OSError, UnicodeError, ValueError):
+        raise ValueError(f"{host} could not be found.")
+    if not found or not all(_public_ip(a) for a in found):
+        raise ValueError(f"{host} is not a public address (this machine, a private network, or the cloud's own link-local network): "
+                         "Bring in prices reads public pages only.")
+    return p.scheme.lower(), host.strip("[]"), port, (p.path or "/") + (f"?{p.query}" if p.query else ""), found[0]
+
+
+def not_public(url):
+    """Why RightPrice will not fetch this address (the words), or None. See _target."""
+    try:
+        _target(url)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+class _Reply:
+    """What a fetch got: its status, headers and body (the parts of a requests response the readers use)."""
+
+    def __init__(self, status, headers, content):
+        self.status_code, self.headers, self.content = status, headers, content
+
+    @property
+    def text(self):
+        import re as _re
+        hit = _re.search(r"charset=([\w.-]+)", self.headers.get("content-type", ""), _re.I)
+        try:
+            return self.content.decode(hit.group(1) if hit else "utf-8", errors="replace")
+        except LookupError:
+            return self.content.decode("utf-8", errors="replace")
+
+    def json(self):
+        import json as _json
+        return _json.loads(self.text)
+
+
+MAX_FETCH = 20 * 1024 * 1024        # a price page or reply larger than this is not read
+
+
+def _get(url, headers=None, timeout=20):
+    """GET a public address, connecting to the address checked by _target (never a second lookup), following where it
+    sends RightPrice on at most five times, each checked the same way. A header given by the person goes to the first
+    host only. No proxy is used: the connection goes straight to the checked address."""
+    import certifi
+    import urllib3
+    from urllib.parse import urljoin
+    first = None
+    for _ in range(6):
+        scheme, host, port, path, ip = _target(url)           # ValueError: refused, with the words
+        first = first or host
+        mine = (headers or {}) if host == first else {}
+        default = (scheme, port) in (("https", 443), ("http", 80))
+        hosted = (f"[{host}]" if ":" in host else host) + ("" if default else f":{port}")
+        if scheme == "https":
+            pool = urllib3.HTTPSConnectionPool(ip, port, server_hostname=host, assert_hostname=host, cert_reqs="CERT_REQUIRED",
+                                               ca_certs=certifi.where(), timeout=timeout, retries=False, maxsize=1)
+        else:
+            pool = urllib3.HTTPConnectionPool(ip, port, timeout=timeout, retries=False, maxsize=1)
+        try:
+            r = pool.urlopen("GET", path, headers=dict({"Host": hosted, "User-Agent": "Mozilla/5.0 (price reader)", "Accept-Encoding": "identity"}, **mine),
+                             redirect=False, preload_content=False, assert_same_host=False)
+            body = r.read(MAX_FETCH + 1, decode_content=True)
+            r.release_conn()
+        finally:
+            pool.close()
+        if len(body) > MAX_FETCH:
+            raise ValueError("the page is larger than 20 MB")
+        hd = {k.lower(): v for k, v in r.headers.items()}
+        if r.status in (301, 302, 303, 307, 308) and hd.get("location"):
+            url = urljoin(url, hd["location"])
+            continue
+        if r.status >= 400:
+            raise ValueError(f"the address answered {r.status}")
+        return _Reply(r.status, hd, body), url
+    raise ValueError("the page sends RightPrice on too many times")
+
+
 def fetch_link(url, timeout=20):
     """Public web page -> (list of tables, plain text). Pages behind a login will not work."""
-    import requests
     from bs4 import BeautifulSoup
     if not re.match(r"^https?://", url):
         url = "https://" + url
-    r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (price reader)"})
-    r.raise_for_status()
+    r, url = _get(url, timeout=timeout)
     ctype = r.headers.get("content-type", "").lower()
     if "pdf" in ctype or url.lower().endswith(".pdf"):
         return "pdf", r.content
     try:
-        tables = pd.read_html(io.StringIO(r.text))
-    except ValueError:
+        tables = pd.read_html(io.StringIO(r.text), flavor="lxml")
+    except (ValueError, ImportError):            # no table on the page (or none lxml can read)
         tables = []
     text = BeautifulSoup(r.text, "lxml").get_text("\n")
     return "html", (tables, text)
@@ -183,10 +304,8 @@ def fetch_link(url, timeout=20):
 
 def fetch_api(url, header_name=None, header_value=None, timeout=20):
     """JSON endpoint -> flat table. The key is used for this call only and is not stored."""
-    import requests
     headers = {header_name: header_value} if header_name and header_value else {}
-    r = requests.get(url, headers=headers, timeout=timeout)
-    r.raise_for_status()
+    r, _ = _get(url, headers=headers, timeout=timeout)
     payload = r.json()
     if isinstance(payload, dict):  # use the first list found inside the reply
         lists = [v for v in payload.values() if isinstance(v, list)]

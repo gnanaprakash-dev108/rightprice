@@ -33,11 +33,12 @@ def costsheet_view():
     a = costsheet.analyse(rows, common.get_masters()) if rows else {"rows": [], "drafts": []}
     for item, r in zip(a["rows"], rows):
         item["id"], item["added"], item["upload"] = r.get("_id"), r.get("_added"), r.get("_upload")
+        item["by"] = r.get("_by") or ""         # who brought it in: the signed-in person, or "AI assistant"
     return a          # numbers read from the rate master are numpy types: the web layer writes them as plain ones
 
 
 @common.one_at_a_time
-def costsheet_upload(filename, data):
+def costsheet_upload(filename, data, who=""):
     try:
         book = pd.read_excel(io.BytesIO(data), sheet_name=None)
     except Exception:
@@ -57,6 +58,7 @@ def costsheet_upload(filename, data):
     keep = [r for r in rows if key(r) not in fresh]      # a mill's sheet sent again takes the place of its earlier rows
     for n, r in enumerate(new):
         r["_id"], r["_added"], r["_upload"] = f"{now:%Y%m%d%H%M%S%f}{n:04d}", now.date().isoformat(), upload
+        r["_by"] = who or ""
     _save_sheets(keep + new)
     a = costsheet.analyse(new, common.get_masters())
     return {"added": len(new), "replaced": len(rows) - len(keep), "not_read": sum(1 for x in a["rows"] if x["problems"])}
@@ -83,6 +85,27 @@ def costsheet_apply(payload: dict, who: str = ""):
     picked = [d for d in drafts if d["id"] in chosen]
     if not picked:
         raise common.Refused(400, "Those drafts are no longer there; reload the page")
+    # the figures the person was shown (expect: {draft id: {now, proposed}}): a draft that moved since (more sheets came
+    # in, or a rate was changed) is not applied on the strength of figures nobody saw
+    expect = payload.get("expect") if isinstance(payload.get("expect"), dict) else {}
+    show = lambda d, v: f"{float(v) * 100:.1f}%" if d["pct"] else f"Rs {float(v):g}"
+    moved = []
+    unseen = [d["label"] for d in picked if d["id"] not in expect]
+    if unseen:      # a page from before this check (an older copy of the screen) sends no figures: it is not trusted to
+        raise common.Refused(409, "The figures shown for " + "; ".join(unseen) + " did not come with the request, so nothing was "
+                                  "applied. Reload the page (it may be an older copy) and apply again.")
+    for d in picked:
+        e = expect[d["id"]]
+        try:
+            same = abs(float(e["now"]) - d["now"]) <= 1e-6 and abs(float(e["proposed"]) - d["proposed"]) <= 1e-6
+        except (KeyError, TypeError, ValueError):
+            same = False
+        if not same:
+            moved.append(f"{d['label']} is now {show(d, d['now'])} to {show(d, d['proposed'])}" + (
+                f", not {show(d, e['now'])} to {show(d, e['proposed'])}" if isinstance(e, dict) and "now" in e and "proposed" in e else ""))
+    if moved:
+        raise common.Refused(409, "A draft has changed since it was shown (more sheets came in, or a rate was changed): " + "; ".join(moved)
+                                  + ". Look at the drafts again; nothing was applied.")
     m2 = {k: v.copy() for k, v in m.items()}
     try:
         log = costsheet.apply(m2, picked, chosen)
