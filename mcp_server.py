@@ -1464,7 +1464,8 @@ def add_exchange_rate(currency: str, month: str, rate: float, source: str = "", 
     of the currency), source ("RBI reference rate", or "rate paid" for the rate actually paid; none: a Placeholder), note
     (where the figure is from). It takes the place of the month's rate of the same source (kept, marked replaced); a rate
     paid holds over the RBI rate. THIS CHANGES THE RUPEE PRICES OF IMPORT LINES EVERYONE SEES. RULE: enter a rate only when
-    the person has given it and its source; never make one up. Recorded as entered by "AI assistant". [RATE RULE]"""
+    the person has given it and its source; never make one up. The person must confirm the rate first. Recorded as entered by
+    "AI assistant". [RATE RULE]"""
     from rules import fx
     return dict(fx.add({"currency": currency, "month": month, "rate": rate, "source": source, "note": note}, who=ASSISTANT), recorded_as=ASSISTANT)
 
@@ -1476,8 +1477,8 @@ def import_exchange_rates(file_base64: str, file_name: str) -> dict:
     does: one rate per row, with the columns month (YYYY-MM), currency, rate or rate_inr (rupees per unit), and a source
     column, or days or method for RBI's monthly average ("RBI reference rate (average of 19 daily FBIL rates)"), and a note
     or source_url. Every row is checked first; nothing is entered unless all read. THIS CHANGES THE RUPEE PRICES OF IMPORT
-    LINES EVERYONE SEES. RULE: bring in only a table the person has given, from its source; never make one up. Recorded as
-    entered by "AI assistant". [RATE RULE]"""
+    LINES EVERYONE SEES. RULE: bring in only a table the person has given, from its source; never make one up. The person
+    must confirm the table first. Recorded as entered by "AI assistant". [RATE RULE]"""
     from rules import fx
     return dict(fx.import_file(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT), recorded_as=ASSISTANT)
 
