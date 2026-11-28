@@ -1446,9 +1446,9 @@ def pilot_rows():
     if _rows_memo["key"] == key:
         return _rows_memo["val"]
     if _rows_memo["val"] is None:           # the first time: worked out here, once (a request at the same time waits for it)
-        with _first_lock:
+        with _work_lock:
             if _rows_memo["val"] is None:
-                _work_rows(key, by_code, src, fp, held)
+                _work_rows(*_rows_key())        # on what is held once it has the lock (a pass may have worked meanwhile)
         return _rows_memo["val"]
     # since then: worked out again in the background, and the last complete answer served meanwhile, so no page waits for
     # it (after a save to the rate master, every page waited half a minute: the stage 4 builder, 28 Nov)
@@ -1456,7 +1456,9 @@ def pilot_rows():
     return _rows_memo["val"]
 
 
-_first_lock = threading.Lock()
+# one working-out of the rows at a time, each on what is held when it takes this lock, so an answer worked out on older
+# lines never replaces a newer one (a pass started by an upload before the first page asked raced that page's own)
+_work_lock = threading.Lock()
 RETRY_ROWS = (2, 120)           # seconds before a failed pass is tried again: the first wait, doubled each time up to the second
 
 
@@ -1486,9 +1488,11 @@ def _passes():
         with _rows_lock:
             asked = _rows_memo["asked"]
         try:
-            key, by_code, src, fp, held = _rows_key()
-            if _rows_memo["key"] != key:
-                _work_rows(key, by_code, src, fp, held)
+            with _work_lock:
+                key, by_code, src, fp, held = _rows_key()
+                if _rows_memo["key"] != key:
+                    _work_rows(key, by_code, src, fp, held)
+            now = _rows_key()[0]            # what is held may have moved while it worked, with no one asking
             wait, _rows_memo["failing"] = RETRY_ROWS[0], False
         except Exception:
             _rows_memo["failing"] = True
@@ -1498,7 +1502,7 @@ def _passes():
             wait = min(wait * 2, RETRY_ROWS[1])
             continue
         with _rows_lock:
-            if _rows_memo["asked"] == asked:
+            if _rows_memo["asked"] == asked and _rows_memo["key"] == now:
                 _rows_memo["running"] = False
                 return
 

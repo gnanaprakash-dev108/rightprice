@@ -1327,6 +1327,26 @@ console.log(JSON.stringify({ first, kept, big: [files.uploadError, note.classNam
         rightcost._verdicts = verdicts
     check(f"{k} a working-out of Right cost's verdicts that fails is tried again ({time.time() - t_v:.0f} s)",
           got_v is not None and set(got_v) == {r["code"] for r in few} and len(v_failed) == 1, f"{got_v is not None} {len(v_failed)}")
+    # rows found up to date only as Right cost's answer is finished (they were not at its start): the verdicts are asked
+    # for all the same, and the page never stays "not ready, not updating" with nothing working them out (the stage 4 run
+    # of fed6d2f)
+    up_to_date, asked_ = purchases.rows_up_to_date, []
+
+    def not_at_first(key_):
+        asked_.append(key_)
+        return False if len(asked_) == 1 else up_to_date(key_)
+    rightcost._briefs["done"], rightcost._costs_memo["key"] = (None, None), None
+    purchases.rows_up_to_date = not_at_first
+    try:
+        late_ = c.get("/api/costs").json()
+    finally:
+        purchases.rows_up_to_date = up_to_date
+    t_l = time.time()
+    while time.time() - t_l < 300 and not (late_.get("ready") and not late_.get("updating")):
+        time.sleep(0.5)
+        late_ = c.get("/api/costs").json()
+    check(f"{k} rows found up to date only as Right cost's answer is finished: its verdicts are worked out all the same ({time.time() - t_l:.0f} s)",
+          late_.get("ready") is True and late_.get("updating") is False and len(asked_) >= 2, f"{late_.get('ready')} {late_.get('updating')} {len(asked_)}")
     look = lambda: {(x["po"], x["item"]): x["price"] for code in (a1, a2, inc) for x in c.get("/api/purchases/history", params={"code": code}).json()["lines"]}
     after3, counts3 = look(), c.get("/api/purchases/status").json()["counts"]
     check(f"{k} a newer file (it has an order dated after the first was saved): a changed price is taken; lines it shows deleted, or in dollars, are "
@@ -3288,7 +3308,14 @@ def assistant_checks():
         check(tag + "remove_mill_cost_sheet_rows removes a row, or a whole upload, as the screen does",
               rmm["removed"] == 1 and cut(left_ai) == cut(left_web) and len(left_ai["rows"]) == 1 and gone["removed"] == 1 and web("GET", "/api/costsheet").json()["rows"] == [])
 
-        # quote alerts seen
+        # quote alerts seen. An alert "above its usual range" follows the usual ranges, which follow Right cost's purchase-order
+        # rows; the rate edits above have them worked out again in the background, so the alerts are read once those are up
+        # to date (read while they moved, the count changed between two readings: the CI run of b4b695e)
+        for _ in range(1200):
+            rc_ = web("GET", "/api/costs").json()
+            if rc_.get("ready") and not rc_.get("updating"):
+                break
+            time.sleep(0.5)
         al = web("GET", "/api/alerts").json()
         aid = sorted(al["ids"])[0]
         seen = lambda: {r[0]: r[1] for r in sql("SELECT quote_id, seen_by FROM alert_seen")}
