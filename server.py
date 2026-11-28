@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 
 import anyio.to_thread
 from fastapi import Body, FastAPI, File, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -335,9 +336,20 @@ def pack(options: dict = Body(default={})):
     return pack_rules.pack(options)
 
 
+_costs_body = [(None, None)]           # (the last answer, its JSON), replaced whole
+
+
 @app.get("/api/costs")
 def costs():
-    return rightcost.costs()
+    # the answer is kept while nothing it rests on changes (rightcost.costs): its JSON is kept with it, so a page asking
+    # every half second while the verdicts are worked out does not turn 3 MB into JSON each time (on a slow machine that
+    # took the background work's time: the CI run of 4e1f6f0)
+    val = rightcost.costs()
+    kept, body = _costs_body[0]
+    if kept is not val:
+        body = JSONResponse(jsonable_encoder(val)).body
+        _costs_body[0] = (val, body)
+    return Response(body, media_type="application/json")
 
 
 @app.post("/api/costs/download")

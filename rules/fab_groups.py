@@ -17,6 +17,7 @@ purchases priced well above the group. "Priced well above its group" is GP's dec
 usual range by the brief's own rule (costing.usual_range): the middle half of the group's past prices, kept between 5%
 and 10% either side of the group's median. A range needs purchases on at least MIN_FOR_RANGE separate orders.
 ZLOI order lines are left out of every figure and shown apart as outliers (GP, 27 Nov 2026)."""
+import contextlib
 import hashlib
 import json
 import re
@@ -238,17 +239,50 @@ def signatures(specs, codes):
     return out
 
 
-def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
+REGROUP_CHUNK = 1000     # fabrics written per transaction
+REGROUP_TRIES = 3        # tries at working it out with the store free before it is done in one transaction
+
+
+def regroup(tx, specs, first_seen, new_codes, at, upload_id, ready=None):
     """Every fabric's Fab group worked out again from its specification (the PLM list's, else the one kept): new codes
     are placed, and a code whose specification was corrected or completed, or whose fields are tidied another way now,
     moves; each move is recorded. Widths within half an inch (directly or through others) are one group (width_spans).
     A group whose signature is no longer anyone's keeps its code under the new signature of most of its codes, and a
     group whose name changes says so (fab_group_change). New groups get the next codes in order of first appearance
-    (first_seen: code -> sort key). `ready`: signatures() worked out beforehand.
+    (first_seen: code -> sort key). `ready`: signatures() worked out beforehand. tx(write=None): a transaction of the
+    caller's (the upload job's).
+    It is worked out with the store free and written in short transactions, the groups first and then the fabrics
+    REGROUP_CHUNK at a time, each checking that what it was worked out on is still so (in one transaction over every
+    fabric it held the store, and every page, for seconds; on a slow machine for longer than a page waits: the CI run of
+    4e1f6f0). What another writer changed meanwhile (an upload read in another server process) is worked out again from
+    what is held then; after REGROUP_TRIES such tries, in one transaction. Alone, the outcome is the one transaction's:
+    the same groups, codes, fabrics and records, in the same order.
     Returns {groups_new, moves, respecified (fabric ids whose specification changed: costed again), renamed}."""
+    ready = ready or {}
+    out = {"groups_new": 0, "moves": [], "respecified": [], "renamed": []}
+    for _ in range(REGROUP_TRIES):
+        with tx() as c:
+            held = _regroup_reads(c, specs)
+        if _regroup_from(tx, held, specs, first_seen, new_codes, at, upload_id, ready, out):
+            return out
+    with tx(dp.KIND) as c:              # another writer kept changing it: once more, in one transaction
+        _regroup_from(lambda write=None: contextlib.nullcontext(c), _regroup_reads(c, specs), specs, first_seen, new_codes, at, upload_id,
+                      ready, out)
+    return out
+
+
+def _regroup_reads(c, specs):
+    """What regroup() works out from: (every fabric (fabric_index), the specifications kept of those the PLM list has not,
+    every group, the highest group number)."""
     index = dp.fabric_index(c)
     stored = dp.specs_of(c, [f["id"] for code, f in index.items() if code not in specs and f["spec_sha"]])
-    ready = ready or {}
+    return index, stored, dp.groups(c), dp.last_group_number(c)
+
+
+def _regroup_from(tx, held, specs, first_seen, new_codes, at, upload_id, ready, out):
+    """regroup() worked out from what was held (_regroup_reads) and written; False (the rest not written) where what it was
+    worked out on changed before it was written."""
+    index, stored, groups, n = held
     now = {}
     for code, f in index.items():
         if code in specs and code in ready:
@@ -271,16 +305,19 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
             v["sig"] = _sig(v["fields"])
     # what changed in the specification of a code held before (its old fields, for the record)
     changed_ids = [f["id"] for code, f in index.items() if f["spec_sha"] and now[code]["sha"] != f["spec_sha"]]
-    before = dp.specs_of(c, changed_ids) if changed_ids else {}
-    groups = dp.groups(c)
+    before = {}
+    if changed_ids:
+        with tx() as c:
+            before = dp.specs_of(c, changed_ids)
     by_sig = {g["signature"]: i for i, g in groups.items()}
     used = {v["sig"] for v in now.values() if v["sig"]}
     target, fields_of, resign = {}, {}, {}
-    holders = {}
+    holders, first_of = {}, {}
     for code, v in now.items():
         if v["sig"]:
             fields_of.setdefault(v["sig"], v["fields"])
             holders.setdefault(v["sig"], []).append(index[code]["fab_group_id"])
+            first_of[v["sig"]] = min(first_of.get(v["sig"], ("9999",)), first_seen.get(code, ("9999",)))
     for sig in sorted(holders):
         if sig in by_sig:
             target[sig] = by_sig[sig]
@@ -294,26 +331,31 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
             g = sorted(counts, key=lambda x: (-counts[x], x))[0]
             resign[g] = sig
             target[sig] = g
-    renamed = []
+    renamed, resigned = [], []
     for g, sig in resign.items():
         renamed.append((g, groups[g]["name"], name_of(fields_of[sig]), "its codes' PLM specification changed: " + (_changed(
             {k: groups[g][k] for k in FIELDS} | {"width_to": groups[g].get("width_to")}, fields_of[sig]) or "how its fields are tidied")))
-        dp.resign_group(c, g, name_of(fields_of[sig]), fields_of[sig], sig)
+        resigned.append((g, name_of(fields_of[sig]), fields_of[sig], sig))
     for sig, g in target.items():        # a group kept under its signature whose name changes (codes of other widths joined)
         if g not in resign and groups[g]["name"] != name_of(fields_of[sig]):
             renamed.append((g, groups[g]["name"], name_of(fields_of[sig]), _changed({k: groups[g][k] for k in FIELDS} | {"width_to": groups[g].get("width_to")},
                                                                                      fields_of[sig]) or "its name is written another way now"))
-            dp.resign_group(c, g, name_of(fields_of[sig]), fields_of[sig], sig)
-    dp.add_group_changes(c, renamed, at, upload_id)
-    fresh = sorted((sig for sig in holders if sig not in target),
-                   key=lambda s: (min(first_seen.get(code, ("9999",)) for code, v in now.items() if v["sig"] == s), s))
-    n = dp.last_group_number(c)
+            resigned.append((g, name_of(fields_of[sig]), fields_of[sig], sig))
+    fresh = sorted((sig for sig in holders if sig not in target), key=lambda s: (first_of[s], s))
     rows = []
     for sig in fresh:
         n += 1
         rows.append((f"Fab-{n:04d}", name_of(fields_of[sig]), fields_of[sig], sig))
-    target.update(dp.add_groups(c, rows, at, upload_id))
-    groups = dp.groups(c) if rows or renamed else groups
+    # the groups: written once nothing they were worked out from has changed
+    with tx(dp.KIND) as c:
+        if dp.fabric_index(c) != index or dp.groups(c) != groups or dp.last_group_number(c) != held[3]:
+            return False
+        for g, name, fields, sig in resigned:
+            dp.resign_group(c, g, name, fields, sig)
+        dp.add_group_changes(c, renamed, at, upload_id)
+        target.update(dp.add_groups(c, rows, at, upload_id))
+    out["groups_new"] += len(rows)
+    out["renamed"] += renamed
     changes, moves, respecified = [], [], []
     for code, v in now.items():
         f = index[code]
@@ -349,9 +391,19 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
                                                                                                     " (not in its Fab group's fields)") + "; costed again"))
         if change:
             changes.append(dict(change, id=f["id"]))
-    dp.set_fabrics(c, changes, at)
-    dp.add_regroups(c, moves, at, upload_id)
-    return {"groups_new": len(rows), "moves": moves, "respecified": respecified, "renamed": renamed}
+    # the fabrics, a chunk at a time (each fabric's move, if any, with it), each where it is still as it was read
+    code_of = {f["id"]: code for code, f in index.items()}
+    for i in range(0, len(changes), REGROUP_CHUNK):
+        part = changes[i:i + REGROUP_CHUNK]
+        ids = {x["id"] for x in part}
+        with tx(dp.KIND) as c:
+            if dp.fabric_index(c, ids=ids) != {code_of[x]: index[code_of[x]] for x in ids}:
+                return False
+            dp.set_fabrics(c, part, at)
+            dp.add_regroups(c, [m for m in moves if m[0] in ids], at, upload_id)
+        out["moves"] += [m for m in moves if m[0] in ids]
+        out["respecified"] += [x for x in respecified if x in ids]
+    return True
 
 
 # ------------------------------------------------------------------ reading the groups

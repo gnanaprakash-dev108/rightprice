@@ -1287,20 +1287,54 @@ console.log(JSON.stringify({ first, kept, big: [files.uploadError, note.classNam
     rows2.append(row(9900000018, 10, a1, "2026-11-22", arv, 300, 105))       # an order dated after the first file was saved: so it is newer
     newer = _stage2_file(rows2, saved="2026-11-25T09:00:00")
     k_before = purchases.pilot_rows()[0]
-    u3 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected.xlsx", io.BytesIO(newer))}).json()["id"])
-    # Right cost's rows are worked out again in the background: rows a page got are up to date only if they rest on what is
-    # held now, whatever was asked for meanwhile, by whom (the CI run of d438c21 took old rows for new ones)
-    t_rows = time.time()
-    while time.time() - t_rows < 300:
-        k_now = purchases.pilot_rows()[0]
-        if purchases.rows_up_to_date(k_now):
-            break
-        time.sleep(0.5)
+    # the first pass after this upload fails (as when the store is busy): it is logged and tried again, so the rows never
+    # stay stale with nothing bringing them up to date (the CI run of 4e1f6f0)
+    work_rows, failed = purchases._work_rows, []
+
+    def fails_once(*a):
+        if not failed:
+            failed.append(time.time())
+            raise store.Busy("made to fail once by the checks")
+        return work_rows(*a)
+    purchases._work_rows = fails_once
+    try:
+        u3 = wait(c.post("/api/purchases/upload", files={"file": ("purchase orders corrected.xlsx", io.BytesIO(newer))}).json()["id"])
+        # Right cost's rows are worked out again in the background: rows a page got are up to date only if they rest on what
+        # is held now, whatever was asked for meanwhile, by whom (the CI run of d438c21 took old rows for new ones)
+        t_rows = time.time()
+        while time.time() - t_rows < 300:
+            k_now = purchases.pilot_rows()[0]
+            if purchases.rows_up_to_date(k_now):
+                break
+            time.sleep(0.5)
+    finally:
+        purchases._work_rows = work_rows
     served_old = c.get("/api/costs").json()
     check(f"{k} after an upload, Right cost's purchase-order rows are worked out again in the background ({time.time() - t_rows:.0f} s): the rows "
-          "from before it are never taken as up to date once new ones exist, and the page says when it is serving rows being brought up to date",
-          k_now != k_before and not purchases.rows_up_to_date(k_before) and purchases.rows_up_to_date(k_now) and "updating" in served_old,
-          f"{k_now != k_before} {purchases.rows_up_to_date(k_before)}")
+          "from before it are never taken as up to date once new ones exist, and the page says when it is serving rows being brought up to date; "
+          "a pass that fails is tried again",
+          k_now != k_before and not purchases.rows_up_to_date(k_before) and purchases.rows_up_to_date(k_now) and "updating" in served_old
+          and len(failed) == 1, f"{k_now != k_before} {purchases.rows_up_to_date(k_before)} {len(failed)}")
+    # so are the verdicts: a working-out of them that fails is logged and tried again
+    from rules import rightcost
+    verdicts, v_failed = rightcost._verdicts, []
+
+    def v_fails_once(rows_):
+        if not v_failed:
+            v_failed.append(time.time())
+            raise store.Busy("made to fail once by the checks")
+        return verdicts(rows_)
+    rightcost._verdicts = v_fails_once
+    try:
+        probe, few = ("the checks: verdicts tried again", time.time()), [r for r in served_old["rows"] if r["source"] == "Purchase orders"][:3]
+        t_v = time.time()
+        while rightcost._pilot_briefs(few, probe) is None and time.time() - t_v < 600:
+            time.sleep(0.5)
+        got_v = rightcost._pilot_briefs(few, probe, start=False)
+    finally:
+        rightcost._verdicts = verdicts
+    check(f"{k} a working-out of Right cost's verdicts that fails is tried again ({time.time() - t_v:.0f} s)",
+          got_v is not None and set(got_v) == {r["code"] for r in few} and len(v_failed) == 1, f"{got_v is not None} {len(v_failed)}")
     look = lambda: {(x["po"], x["item"]): x["price"] for code in (a1, a2, inc) for x in c.get("/api/purchases/history", params={"code": code}).json()["lines"]}
     after3, counts3 = look(), c.get("/api/purchases/status").json()["counts"]
     check(f"{k} a newer file (it has an order dated after the first was saved): a changed price is taken; lines it shows deleted, or in dollars, are "

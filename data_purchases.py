@@ -66,7 +66,8 @@ def add_aliases(c, rows, at):
 FABRIC = "id, code, description, fab_group_id, not_grouped, signature, spec, spec_sha, choices, problems, choices_lists, choices_metres, choices_spec"
 
 
-def _fabric(r):
+def fabric_of(r):
+    """A fabric as fabrics(..., read=False) gave it, with its specification, choices and problems read."""
     r = dict(r)
     for k, empty in (("spec", None), ("choices", None), ("problems", [])):
         if k in r:
@@ -74,21 +75,29 @@ def _fabric(r):
     return r
 
 
-def fabrics(c, codes=None, ids=None, group_ids=None):
-    """{code: fabric} for these codes (or ids, or Fab group ids), or every fabric."""
-    out = {}
+def fabrics(c, codes=None, ids=None, group_ids=None, read=True):
+    """{code: fabric} for these codes (or ids, or Fab group ids), or every fabric. read=False: the specification, choices
+    and problems as stored (JSON text), for fabric_of() to read once the transaction is over (a background job reading
+    many fabrics then holds the store only for the reading of the rows)."""
+    out, one = {}, (fabric_of if read else dict)
     if codes is None and ids is None and group_ids is None:
-        return {r["code"]: _fabric(r) for r in _dicts(c, f"SELECT {FABRIC} FROM fabric ORDER BY id")}
+        return {r["code"]: one(r) for r in _dicts(c, f"SELECT {FABRIC} FROM fabric ORDER BY id")}
     col, vals = ("code", codes) if codes is not None else (("id", ids) if ids is not None else ("fab_group_id", group_ids))
     for part in _chunks(sorted(set(vals))):
         for r in _dicts(c, f"SELECT {FABRIC} FROM fabric WHERE {col} IN {store._in(len(part))} ORDER BY id", part):
-            out[r["code"]] = _fabric(r)
+            out[r["code"]] = one(r)
     return out
 
 
-def fabric_index(c):
-    """Every fabric, without its specification: {code: {id, fab_group_id, signature, spec_sha, not_grouped}}."""
-    return {r["code"]: r for r in _dicts(c, "SELECT id, code, fab_group_id, signature, spec_sha, not_grouped FROM fabric")}
+def fabric_index(c, ids=None):
+    """Every fabric (or these, by id), without its specification: {code: {id, fab_group_id, signature, spec_sha, not_grouped}}."""
+    sql = "SELECT id, code, fab_group_id, signature, spec_sha, not_grouped FROM fabric"
+    if ids is None:
+        return {r["code"]: r for r in _dicts(c, sql)}
+    out = {}
+    for part in _chunks(sorted(set(ids))):
+        out.update({r["code"]: r for r in _dicts(c, sql + f" WHERE id IN {store._in(len(part))}", part)})
+    return out
 
 
 def specs_of(c, ids):
@@ -491,12 +500,16 @@ def counted_prices(c, fabric_ids):
     return out
 
 
-def group_prices(c, group_id, but_fabric):
-    """The prices counted for the other fabric codes of this Fab group."""
-    if group_id is None:
-        return []
-    return [float(p) for (p,) in c.all(f"SELECT l.price FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id WHERE f.fab_group_id = %s "
-                                       f"AND l.fabric_id <> %s AND l.removed_upload_id IS NULL AND {_NOT_OUTLIER}", (group_id, but_fabric))]
+def group_prices(c, group_ids):
+    """{Fab group id: [(fabric id, price)]}: the prices counted for every fabric code of these groups, read in a few
+    statements (a price check over a whole file never runs a statement per code: on a slow machine those kept every page
+    waiting, the CI run of 4e1f6f0)."""
+    out = {}
+    for part in _chunks(sorted(set(group_ids) - {None})):
+        for g, f, p in c.all(f"SELECT f.fab_group_id, l.fabric_id, l.price FROM purchase_line l JOIN fabric f ON f.id = l.fabric_id "
+                             f"WHERE f.fab_group_id IN {store._in(len(part))} AND l.removed_upload_id IS NULL AND {_NOT_OUTLIER}", part):
+            out.setdefault(g, []).append((f, float(p)))
+    return out
 
 
 def hold_prices(c, rows):
