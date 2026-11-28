@@ -258,6 +258,16 @@ def set_upload(c, upload_id, **fields):
     c.run(f"UPDATE upload SET {', '.join(sets)} WHERE id = %s", vals + [upload_id])
 
 
+def upload_dates(c, ids):
+    """{id: {id, filename, saved_at, report_date, covers_to}} for these uploads: when each was saved, for the words of
+    a file the saved date decided against."""
+    out = {}
+    for part in _chunks(sorted(set(ids))):
+        for r in _dicts(c, f"SELECT id, filename, saved_at, report_date, covers_to FROM upload WHERE id IN {store._in(len(part))}", part):
+            out[r["id"]] = r
+    return out
+
+
 def waiting_uploads(c):
     """Uploads not finished: (id, status, alive_at, runner), oldest first."""
     return c.all("SELECT id, status, alive_at, runner FROM upload WHERE status IN ('queued', 'working') ORDER BY id")

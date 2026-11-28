@@ -10,16 +10,27 @@ ZLOI order lines (GP, 27 Nov 2026) are kept, and left out of every calculation e
 ranges, "above the range", the quantity band of a should-cost, Right cost's purchase-order rows (and so the supplier
 pages, alerts, drafts and the dashboard's fit by fabric type). They are shown apart, as "Outliers (ZLOI)".
 
-The newest file wins (GP's review, 27 Nov 2026), and which file is newer is read from what it covers (the second
-review, 27 Nov 2026), never from when the workbook was saved: a file can have been taken no earlier than its latest
-document date (or the report date it carries in a column of its own) and no later than when it was saved (else, when it
-carries no saved date, any time since). One file is newer than another only when it can have been taken no earlier
-than the other was at the latest. Every order line keeps the evidence of the newest file that covered it: its figures,
-or that it was shown deleted, blocked, no longer bulk, not in rupees, not per metre, with no price or quantity, or left
-out of an order the file has. That holds before any file gave the line's figures (a mark), so an older file never brings
-back or changes a line a newer one removed or changed. A newer file changes or removes a line. Where a file and the
-history disagree on a line and which is newer cannot be told, the history's figures stand and the disagreement is listed
-on the file's page, for a person to keep or to take the file's figures (an admin action)."""
+The newest file wins (GP's review, 27 Nov 2026). Which file is newer is read first from what it covers (the second
+review, 27 Nov 2026): a file can have been taken no earlier than its latest document date (or the report date it carries
+in a column of its own) and no later than when it was saved (else, when it carries no saved date, any time since). One
+file is newer than another for certain when it can have been taken no earlier than the other was at the latest; that
+decides. Only where what the two cover cannot tell (a correction of the same orders, the same file saved again), the
+file saved later wins (GP's decision, 28 Nov 2026, "saved later wins"), exactly as a file certainly newer does: its
+figures, its removals, the lines it leaves out of an order, its marks. A saved date counts only where it can be used:
+there, and not before the file's latest document date (one before it says "not used"); a file carrying a report date
+counts as taken at the end of that date (its report date stands in for its saved date). Both are a file's covers_to,
+which each order line's state (state_to), each mark, each order the file has (order_seen, through its upload) and a
+settled disagreement carry, so the comparison is made the same way whenever, and in whichever process, a file is read:
+an older or earlier-saved file read after a newer one, or at the same moment in another server process, never brings
+back or changes what the newer one decided.
+
+Every order line keeps the evidence of the newest file that covered it: its figures, or that it was shown deleted,
+blocked, no longer bulk, not in rupees, not per metre, with no price or quantity, or left out of an order the file has.
+That holds before any file gave the line's figures (a mark). A newer file changes or removes a line. What is left with
+no way to tell (both saved at the same moment, or either file without a saved date that can be used): where a file and
+the history disagree on a line, the history's figures stand and the disagreement is listed on the file's page, for an
+admin to keep them or to take the file's (settle; POST /api/purchases/disagreements, the assistant's
+settle_purchase_disagreements)."""
 import contextlib
 import datetime as dt
 import hashlib
@@ -156,7 +167,9 @@ def _stamp(v):
 def dating(latest, report, saved):
     """What a file covers, as the history puts files in order: {file_date, file_date_from (in words), covers_from,
     covers_to, report_date, saved_at}. covers_from: the earliest it can have been taken (its report date, else its latest
-    document date); covers_to: the latest (its report date, else when it was saved; None: not known)."""
+    document date); covers_to: the latest (its report date, else when it was saved; None: not known, as when it carries
+    no saved date or one before its latest document date). Where what two files cover cannot tell which is newer, the
+    later covers_to wins (newer(): for SAP's export, the file saved later)."""
     out = {"report_date": report, "saved_at": saved, "file_date": report or latest}
     if report:
         lo = report if "T" in report else report + "T00:00:00"
@@ -174,13 +187,30 @@ def dating(latest, report, saved):
 
 
 def order_of(a, b):
-    """+1 when file a is certainly newer than file b, -1 when certainly older, 0 when it cannot be told. Each is
-    (covers_from, covers_to): a is newer only when it can have been taken no earlier than b was at the latest."""
+    """From what they cover alone: +1 when file a is certainly newer than file b, -1 when certainly older, 0 when it
+    cannot be told. Each is (covers_from, covers_to): a is newer only when it can have been taken no earlier than b was
+    at the latest."""
     if b[1] is not None and a[0] > b[1]:
         return 1
     if a[1] is not None and b[0] > a[1]:
         return -1
     return 0
+
+
+def newer(a, b):
+    """Which of two files is newer, and how that was told: (+1 or -1, "covers") when what they cover says so for certain
+    (order_of); else, GP's decision of 28 Nov 2026, the file saved later: (+1 or -1, "saved"), by each file's covers_to,
+    which is when it was saved where that can be used (there, and not before its latest document date), or the end of a
+    report date it carries (that is when it was taken); (0, None) when neither tells (saved at the same moment, or either
+    without a saved date that can be used). Each is (covers_from, covers_to). A file's covers_to lies within what it
+    covers, so the two ways never pull apart: a file certainly newer was saved later too, and files never go round in
+    a circle, whatever order they are read in."""
+    o = order_of(a, b)
+    if o:
+        return o, "covers"
+    if a[1] is not None and b[1] is not None and a[1] != b[1]:
+        return (1 if a[1] > b[1] else -1), "saved"
+    return 0, None
 
 
 # ------------------------------------------------------------------ reading a purchase-order file
@@ -452,6 +482,17 @@ def _same(old, line):
 FIGURES = ("doc_date", "doc_type", "fabric_id", "mill_id", "supplier", "qty_m", "price")
 
 
+def _newest(files):
+    """The newest of these files by newer(), each ((how it compares), upload id, covers_from, covers_to, file name);
+    among files that cannot be told apart, the latest covers_from, then the latest upload."""
+    best = None
+    for x in files:
+        o = 1 if best is None else newer(x[2:4], best[2:4])[0]
+        if o > 0 or (o == 0 and (x[2], x[1]) > (best[2], best[1])):
+            best = x
+    return best
+
+
 def recost(st, fabric_ids):
     """The costing choices of these fabrics worked out again (their metres set the quantity band; their specification
     the rest), a few hundred to a transaction."""
@@ -539,11 +580,16 @@ def _load(st, uid):
         fabric_id = dp.ids_of(c, list(first))
     _status(uid, step="Writing the order lines", fabrics_new=len(new_codes), groups_new=rg["groups_new"])
 
-    # order lines: each keeps the evidence of the newest file that covered it
+    # order lines: each keeps the evidence of the newest file that covered it (newer from what the files cover; where that
+    # cannot tell, the file saved later: GP, 28 Nov 2026)
     me = (uid, dating_["covers_from"], dating_["covers_to"])
-    vs = lambda old: order_of(me[1:], (old["state_from"], old["state_to"]))
+    vs = lambda old: newer(me[1:], (old["state_from"], old["state_to"]))
     # (disagree: lines this file keeps that the history holds otherwise; listed: every disagreement, removals included)
     n = {"new": 0, "changed": 0, "same": 0, "older": 0, "disagree": 0, "listed": 0, "removed": 0, "dropped": 0}
+    # decided by the saved date alone, for the upload's page: {other upload: lines} where this file's word replaced that
+    # one's (this file saved later), and where that one's word stood against this file's (that one saved later)
+    won, lost = {}, {}
+    count = lambda d, u: d.__setitem__(u, d.get(u, 0) + 1)
     touched = {f for f, _, _, _ in rg["moves"]} | set(rg["respecified"])
     with _job_tx(st, KIND) as c:                # first, what this file has of each order: a file read at the same time sees it
         dp.add_orders_seen(c, uid, rd.orders)
@@ -560,23 +606,25 @@ def _load(st, uid):
                 old = have.get((l.po, l.item))
                 if old is None:
                     # never held: unless a file has the rest of its order without it (newer, or not to be told apart)
-                    lacking = [(order_of(me[1:], (lo, hi)), u, lo, hi, fn) for u, items, lo, hi, fn in seen.get(l.po, []) if l.item not in items]
-                    newer_ = sorted((x for x in lacking if x[0] < 0), key=lambda x: (x[2], x[1]))
-                    unsure = sorted((x for x in lacking if x[0] == 0), key=lambda x: (x[2], x[1]))
+                    lacking = [(newer(me[1:], (lo, hi)), u, lo, hi, fn) for u, items, lo, hi, fn in seen.get(l.po, []) if l.item not in items]
+                    newer_ = [_newest(x for x in lacking if x[0][0] < 0)] if any(x[0][0] < 0 for x in lacking) else []
+                    unsure = sorted((x for x in lacking if x[0][0] == 0), key=lambda x: (x[2], x[1]))
                     if not newer_ and not unsure:
                         add.append(line)
                         touched.add(line["fabric_id"])
                         continue
-                    o, u, lo, hi, fn = (newer_ or unsure)[-1]
+                    (o, by), u, lo, hi, fn = (newer_ or unsure)[-1]
                     why = f"Not in {fn} (upload {u}), which has the rest of order {l.po}"
                     add.append(line)            # its figures kept, the line not counted: the other file's evidence stands
                     held_out.append(((l.po, l.item), why, (u, lo, hi)))
                     if newer_:
                         n["older"] += 1
+                        if by == "saved":
+                            count(lost, u)
                     else:
                         disagree.append((l.po, l.item, {"upload_id": u, "removed": why, "figures": None}, {"figures": _figures(line)}))
                     continue
-                o = vs(old)
+                o, by = vs(old)
                 if o > 0:
                     if _same(old, line):
                         touch.append((me, old["id"]))
@@ -584,8 +632,12 @@ def _load(st, uid):
                     else:
                         change.append(dict(line, id=old["id"]))
                         touched |= {line["fabric_id"], old["fabric_id"]} - {None}
+                        if by == "saved":
+                            count(won, old["state_upload_id"])
                 elif o < 0:
                     n["older"] += 1
+                    if by == "saved" and not _same(old, line):
+                        count(lost, old["state_upload_id"])
                 elif _same(old, line):
                     n["same"] += 1
                 else:
@@ -617,15 +669,19 @@ def _load(st, uid):
                 if old is None:
                     marks.append((po, item, f"{name}: {why}", me))
                     continue
-                o = vs(old)
+                o, by = vs(old)
                 if o > 0:
                     if old["removed_upload_id"] is None:
                         gone.append((f"{name}: {why}", old["id"]))
                         touched.add(old["fabric_id"])
+                        if by == "saved":
+                            count(won, old["state_upload_id"])
                     else:
                         touch.append((me, old["id"]))
                 elif o == 0 and old["removed_upload_id"] is None:
                     disagree.append((po, item, _kept_view(old), {"removed": f"{name}: {why}"}))
+                elif o < 0 and by == "saved" and old["removed_upload_id"] is None:
+                    count(lost, old["state_upload_id"])
             dp.add_marks(c, marks)
             dp.remove_lines(c, gone, me)
             dp.touch_lines(c, touch)
@@ -640,15 +696,19 @@ def _load(st, uid):
             for (po, item), old in dp.lines_of_orders(c, pos[i:i + CHUNK]).items():
                 if item in rd.orders[po]:
                     continue
-                o, why = vs(old), f"Not in {name}, which has the rest of order {po}"
+                (o, by), why = vs(old), f"Not in {name}, which has the rest of order {po}"
                 if o > 0:
                     if old["removed_upload_id"] is None:
                         gone.append((why, old["id"]))
                         touched.add(old["fabric_id"])
+                        if by == "saved":
+                            count(won, old["state_upload_id"])
                     else:
                         touch.append((me, old["id"]))
                 elif o == 0 and old["removed_upload_id"] is None:
                     disagree.append((po, item, _kept_view(old), {"removed": why}))
+                elif o < 0 and by == "saved" and old["removed_upload_id"] is None:
+                    count(lost, old["state_upload_id"])
             dp.remove_lines(c, gone, me)
             dp.touch_lines(c, touch)
             dp.add_disagreements(c, uid, disagree)
@@ -676,8 +736,11 @@ def _load(st, uid):
                    "last": max((l.date for l in rd.kept), default=None), "fabrics": len(first), "mills": len({l.supplier for l in rd.kept}),
                    "not_grouped": sorted(not_grouped.items(), key=lambda x: -x[1]), "grouped": grouped, "costed": costed,
                    "regrouped": sum(1 for m_ in rg["moves"] if m_[1] != m_[2]), "respecified": len(rg["respecified"]), "renamed": len(rg["renamed"]),
-                   "disagreements": n["listed"],
-                   "listed": min(len(rd.skipped), MAX_LISTED)}
+                   "disagreements": n["listed"], "listed": min(len(rd.skipped), MAX_LISTED)}
+        # which uploads the saved date decided against, with when each was saved, for the upload's page
+        others = dp.upload_dates(c, set(won) | set(lost))
+        said = lambda d: [dict(others.get(u, {"id": u}), lines=k) for u, k in sorted(d.items())]
+        summary.update(saved_later_than=said(won), saved_earlier_than=said(lost))
         dp.set_upload(c, uid, status="done", step="", finished_at=_now(), alive_at=_now(), summary=summary)
 
 
@@ -804,9 +867,11 @@ def upload_detail(uid):
 
 
 def settle(payload, who=""):
-    """A person settles what an upload and the history disagree on (which is newer could not be told): "file" takes this
-    file's figures, or its word that a line is no longer bought, for every line the history still holds as it did then;
-    "kept" keeps the history's. Recorded with who and when. An admin action (do:upload_purchases, rules/access.py)."""
+    """A person settles what an upload and the history disagree on (which is newer could not be told, from what the two
+    cover nor from when they were saved): "file" takes this file's figures, or its word that a line is no longer bought,
+    for every line the history still holds as it did then (the line then carries this file's state, its saved date
+    included); "kept" keeps the history's. Recorded with who and when. An admin action (do:upload_purchases,
+    rules/access.py)."""
     st = need_db()
     payload = payload or {}
     try:

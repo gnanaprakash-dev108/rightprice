@@ -1314,8 +1314,10 @@ def _purch():
 def purchase_upload_status(upload_id: int) -> dict:
     """Where one purchase-file upload stands, as Purchase files shows it: waiting, being read, read or failed; what it
     covers (its latest document date) and when it was saved; the order lines kept, new, changed, already in, not used, the
-    lines it shows removed and the rows left out with why (the first 300), and what it and the purchase history disagree
-    on (the history's figures kept until a person settles them). Changes nothing."""
+    lines it shows removed and the rows left out with why (the first 300); which uploads covering the same orders it won
+    over because it was saved later, or lost to because they were (summary.saved_later_than, saved_earlier_than, with
+    their saved times); and what it and the purchase history disagree on where even the saved dates cannot tell (the
+    history's figures kept until a person settles them). Changes nothing."""
     up = _purch()[0].upload_detail(upload_id)
     up.pop("skipped", None)
     return up
@@ -1325,9 +1327,9 @@ def purchase_upload_status(upload_id: int) -> dict:
 def upload_purchase_file(file_base64: str, file_name: str) -> dict:
     """Upload a purchase-order file as SAP exports it (.xlsx, sent as base64 with its name), as Purchase files does: it is
     read in the background (purchase_upload_status says where it stands). THIS ADDS TO AND CHANGES THE PURCHASE HISTORY
-    EVERYONE SEES (each order line once; a file newer than what is held changes or removes lines; Fab groups, price over
-    time, Right cost's purchase-order rows follow); the person must confirm the file first. Recorded as uploaded by
-    "AI assistant"."""
+    EVERYONE SEES (each order line once; a file newer than what is held, or covering the same orders and saved later,
+    changes or removes lines; Fab groups, price over time, Right cost's purchase-order rows follow); the person must
+    confirm the file first. Recorded as uploaded by "AI assistant"."""
     out = _purch()[0].upload(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT)
     return dict(out, recorded_as=ASSISTANT, next="purchase_upload_status with this upload_id says where it stands")
 
@@ -1344,8 +1346,9 @@ def load_shipped_purchase_file() -> dict:
 
 @tool(mirrors="POST /api/purchases/disagreements", writes=True)
 def settle_purchase_disagreements(upload_id: int, take: str) -> dict:
-    """Settle what an upload and the purchase history disagree on (which is newer could not be told, so the history's figures
-    were kept): take "file" to use this file's figures for every line the history still holds as it did then, or "kept" to
+    """Settle what an upload and the purchase history disagree on (which is newer could not be told from what they cover,
+    nor from when they were saved: the same moment, or one without a saved date that can be used; so the history's
+    figures were kept): take "file" to use this file's figures for every line the history still holds as it did then, or "kept" to
     keep the history's. THIS CHANGES THE PURCHASE HISTORY EVERYONE SEES (and the price paid, metres and verdicts that follow
     from it); the person must confirm which upload and which way first. Recorded as settled by "AI assistant"."""
     return dict(_purch()[0].settle({"upload_id": upload_id, "take": take}, who=ASSISTANT), recorded_as=ASSISTANT)
