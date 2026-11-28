@@ -11,7 +11,7 @@ never a second version, and every change it makes goes through the same checks a
 GP's decision, 27 Nov 2026: "if I ask something through the MCP connector it should execute everything including the
 admin role". The token is an admin key: its fixed role, "AI assistant" (rules/access.py ASSISTANT_ALLOWED), holds the
 Admin role's permissions. So there is a tool for every change an Admin can make in the app: rate tables, cotton prices,
-Bring in prices, dated yarn rates (stage 5), uploads to the fabric list and removing its rows, mill cost sheets and their
+Bring in prices, dated yarn rates (stage 5), purchase files and Fab group merges (stage 2), uploads to the fabric list and removing its rows, mill cost sheets and their
 drafts, quote alerts seen, tracker steps, drafts to mills, and users and roles. Every change is recorded as "AI assistant" where the screens record
 the signed-in person (rate versions, list rows added or removed, cost sheet rows, alerts seen, tracker steps, the users'
 change record). Every tool that changes shared data is marked as writing and destructive, so a client asks the person
@@ -639,13 +639,14 @@ def pilot_results(sheet: str = "") -> dict:
     """The pilot results (Home > Pilot results): the funnel of purchase-order fabrics costed, the overall fit, the rate
     card steps and inputs, the fit by route and weave and by supplier, and the calibration drafts (proposals only: no
     rate was changed by them). sheet: one of the names returned, to get only that one."""
-    p = _s().dashboard.pilot()
+    p = dict(_s().dashboard.pilot())
+    as_run = p.pop("as_run", None)          # stage 2: what the page is (the pilot as run, ZLOI included)
     names = list(p)
     if sheet:
         if sheet not in p:
             return {"error": f"No sheet '{sheet}'. The sheets are: {', '.join(names)}."}
         p = {sheet: p[sheet]}
-    return {"sheets": names, "tables": {k: _rows_as_dicts(v) for k, v in p.items()},
+    return {"sheets": names, "tables": {k: _rows_as_dicts(v) for k, v in p.items()}, "as_run": as_run,
             "note": "Sheets starting 'Draft:' are calibration proposals, not applied. The held-back test splits by fabric code, so it is optimistic."}
 
 
@@ -1302,6 +1303,70 @@ def change_role_permissions(changes: list[dict]) -> dict:
     alone. Recorded in the change record as made by "AI assistant"."""
     from rules import access
     return dict(access.set_permissions({"changes": changes}, assistant=True), recorded_as=ASSISTANT)
+
+
+# ------------------------------------------------------------------ stage 2: the purchase history and Fab groups (a database only)
+def _purch():
+    from rules import fab_groups, purchases
+    return purchases, fab_groups
+
+
+@tool(mirrors="GET /api/purchases/uploads/{upload_id}")
+def purchase_upload_status(upload_id: int) -> dict:
+    """Where one purchase-file upload stands, as Purchase files shows it: waiting, being read, read or failed; what it
+    covers (its latest document date) and when it was saved; the order lines kept, new, changed, already in, not used, the
+    lines it shows removed and the rows left out with why (the first 300), and what it and the purchase history disagree
+    on (the history's figures kept until a person settles them). Changes nothing."""
+    up = _purch()[0].upload_detail(upload_id)
+    up.pop("skipped", None)
+    return up
+
+
+@tool(mirrors="POST /api/purchases/upload", writes=True)
+def upload_purchase_file(file_base64: str, file_name: str) -> dict:
+    """Upload a purchase-order file as SAP exports it (.xlsx, sent as base64 with its name), as Purchase files does: it is
+    read in the background (purchase_upload_status says where it stands). THIS ADDS TO AND CHANGES THE PURCHASE HISTORY
+    EVERYONE SEES (each order line once; a file newer than what is held changes or removes lines; Fab groups, price over
+    time, Right cost's purchase-order rows follow); the person must confirm the file first. Recorded as uploaded by
+    "AI assistant"."""
+    out = _purch()[0].upload(file_name, _file_bytes(file_base64, file_name), who=ASSISTANT)
+    return dict(out, recorded_as=ASSISTANT, next="purchase_upload_status with this upload_id says where it stands")
+
+
+@tool(mirrors="POST /api/purchases/load-shipped", writes=True)
+def load_shipped_purchase_file() -> dict:
+    """Load the purchase file that came with the code (1 Aug to 23 Nov 2026, the one the pilot was run on) into the purchase
+    history, as Purchase files does; read in the background like any upload. THIS ADDS TO THE PURCHASE HISTORY EVERYONE
+    SEES (a line a newer file already changed or removed is not undone); the person must confirm first. Recorded as
+    uploaded by "AI assistant"."""
+    return dict(_purch()[0].upload_shipped(who=ASSISTANT), recorded_as=ASSISTANT,
+                next="purchase_upload_status with this upload_id says where it stands")
+
+
+@tool(mirrors="POST /api/purchases/disagreements", writes=True)
+def settle_purchase_disagreements(upload_id: int, take: str) -> dict:
+    """Settle what an upload and the purchase history disagree on (which is newer could not be told, so the history's figures
+    were kept): take "file" to use this file's figures for every line the history still holds as it did then, or "kept" to
+    keep the history's. THIS CHANGES THE PURCHASE HISTORY EVERYONE SEES (and the price paid, metres and verdicts that follow
+    from it); the person must confirm which upload and which way first. Recorded as settled by "AI assistant"."""
+    return dict(_purch()[0].settle({"upload_id": upload_id, "take": take}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+@tool(mirrors="POST /api/groups/merge", writes=True)
+def merge_fab_groups(code: str, into: str, confirm: bool = False) -> dict:
+    """Merge one Fab group into another, as Fab groups does: its fabric codes count in the other from then on; its code is
+    kept and never handed out again. When the two differ in more than width or finish nothing is merged and the answer
+    lists the differences: call again with confirm true only after the person has seen them and said yes. THIS CHANGES
+    THE FAB GROUPS EVERYONE SEES (their ranges and "priced above the group"); the person must confirm first. Recorded as
+    merged by "AI assistant"."""
+    return dict(_purch()[1].merge({"code": code, "into": into, "confirm": confirm is True}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
+@tool(mirrors="POST /api/groups/unmerge", writes=True)
+def unmerge_fab_group(code: str) -> dict:
+    """Undo a merge of Fab groups (code: the group that was merged into another): it counts on its own again. THIS CHANGES
+    THE FAB GROUPS EVERYONE SEES; the person must confirm first. Recorded on the group's page as undone by "AI assistant"."""
+    return dict(_purch()[1].unmerge({"code": code}, who=ASSISTANT), recorded_as=ASSISTANT)
 
 
 if __name__ == "__main__":

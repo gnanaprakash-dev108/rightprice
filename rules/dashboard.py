@@ -184,4 +184,17 @@ def pilot():
             d = pd.read_excel(common.DRAFT, sheet_name=["Order size", "Weaving", "Printing", "Held-back test"])
             out.update({"Draft: " + k: common.records(v) for k, v in d.items()})
         return out
-    return common.cached(common.PILOT, load)
+    return dict(common.cached(common.PILOT, load), as_run=_as_run())
+
+
+def _as_run():
+    """What the Pilot results page is (the second review of stage 2): the pilot as it was run, ZLOI orders included,
+    beside what every other page counts since GP's decision of 27 Nov 2026."""
+    from rules import purchases
+    _, rows = purchases.pilot_rows()
+    priced = sum(1 for r in rows if r["PO price Rs/m"] is not None)
+    again = sum(1 for r in rows if r["Worked out again"])
+    return (f"This page is the pilot as it was run (pilot/Pilot_Results.xlsx, never changed): {len(rows):,} fabrics, ZLOI orders included. "
+            f"Since GP's decision of 27 Nov 2026, ZLOI orders are left out of every other figure: the Dashboard, Right cost and the supplier "
+            f"pages count the {priced:,} fabrics with a price paid on other orders ({again:,} worked out again from their order lines), and "
+            f"{len(rows) - priced:,} bought only on ZLOI orders show no price. So a mill's or a fabric type's figures here differ from theirs.")

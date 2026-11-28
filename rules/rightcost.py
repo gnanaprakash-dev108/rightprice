@@ -115,7 +115,8 @@ def costs():
                 "excess": r["Excess Rs"], "order_size": r["Order size"], "qty_band": r["Rate card quantity"],
                 "placeholders": r["Placeholder rates used"], "held_back": bool(r["Held back"]), "band": band,
                 "range": [lo, hi], "buckets": {b: r.get(f"{b} Rs/m") for b in dashboard.BUCKETS},
-                "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS)),
+                # the choices the price popup costs too (stage 2): the purchase history's, from the code's PLM specification
+                "choices": r["Costing choices"] if "Costing choices" in r else _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS)),
                 "outliers": r["Outliers (ZLOI)"], "worked_out_again": r["Worked out again"]})
     version = store.get().version("rates")
     verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"],

@@ -99,7 +99,8 @@ PERMISSIONS = [
     ("do:record_steps", "Record and remove negotiation steps in the tracker", "record or remove negotiation steps", ""),
     ("do:mark_seen", "Mark quote alerts seen for everyone, or bring them back", "mark quote alerts seen", ""),
     ("do:draft", "Draft messages to mills (e-mail and WhatsApp; nothing is sent)", "draft messages to mills", ""),
-    ("do:upload_purchases", "Upload purchase-order files, and load the one that came with the code (an admin action)", "upload purchase files", ""),
+    ("do:upload_purchases", "Upload purchase-order files, load the one that came with the code, and settle what a file and the purchase "
+     "history disagree on (an admin action)", "upload purchase files", ""),
     ("do:merge_groups", "Merge two Fab groups, or undo a merge (an admin action)", "merge Fab groups", ""),
     ("do:manage_users", "Add people, change their role, switch them off, change what each role may do", "change who may use RightPrice", ""),
 ]
@@ -195,6 +196,7 @@ ROUTES = {
     "GET /api/purchases/skipped/{upload_id}": "page:purchase_files",
     "POST /api/purchases/upload": "do:upload_purchases",
     "POST /api/purchases/load-shipped": "do:upload_purchases",
+    "POST /api/purchases/disagreements": "do:upload_purchases",          # settle what a file and the history disagree on
     "POST /api/groups/merge": "do:merge_groups",
     "POST /api/groups/unmerge": "do:merge_groups",
 }

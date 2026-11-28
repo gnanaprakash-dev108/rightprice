@@ -10,17 +10,21 @@ ZLOI order lines (GP, 27 Nov 2026) are kept, and left out of every calculation e
 ranges, "above the range", the quantity band of a should-cost, Right cost's purchase-order rows (and so the supplier
 pages, alerts, drafts and the dashboard's fit by fabric type). They are shown apart, as "Outliers (ZLOI)".
 
-The newest file wins (GP's review, 27 Nov 2026). Each file has a date: the date the workbook itself says it was last
-saved (SAP writes it when it exports; Excel when the file is saved again), or, when the workbook does not say, its latest
-document date. A line takes its figures from the newest file that has it (two files of one date: the later upload); an
-older file never changes a line, never brings back one a newer file removed, and never removes one. A newer file removes
-a line when it shows it deleted or blocked in SAP, no longer bulk, not in rupees, not per metre, or with no price or
-quantity, or when it has the rest of the line's order but not that line. Two uploads read at once (even in two server
-processes) come out the same as one after the other."""
+The newest file wins (GP's review, 27 Nov 2026), and which file is newer is read from what it covers (the second
+review, 27 Nov 2026), never from when the workbook was saved: a file can have been taken no earlier than its latest
+document date (or the report date it carries in a column of its own) and no later than when it was saved (else, when it
+carries no saved date, any time since). One file is newer than another only when it can have been taken no earlier
+than the other was at the latest. Every order line keeps the evidence of the newest file that covered it: its figures,
+or that it was shown deleted, blocked, no longer bulk, not in rupees, not per metre, with no price or quantity, or left
+out of an order the file has. That holds before any file gave the line's figures (a mark), so an older file never brings
+back or changes a line a newer one removed or changed. A newer file changes or removes a line. Where a file and the
+history disagree on a line and which is newer cannot be told, the history's figures stand and the disagreement is listed
+on the file's page, for a person to keep or to take the file's figures (an admin action)."""
 import contextlib
 import datetime as dt
 import hashlib
 import io
+import json
 import os
 import re
 import socket
@@ -119,23 +123,64 @@ def _date(v):
     return None, f"Document date {t} could not be read"
 
 
-def _file_date(data, kept):
-    """The file's date and where it was read: the date the workbook says it was last saved (else made), or its latest
-    document date."""
+REPORT_COLUMNS = {"report date", "export date", "exported on", "extraction date", "extracted on", "run date", "data as of",
+                  "as of", "as on", "as on date"}      # a column carrying the date the report was taken (SAP's own export has none)
+
+
+def _saved_at(data):
+    """When the workbook says it was last saved (else made), UTC: an upper bound of when its content was taken, never
+    how files are put in order on its own (a file saved again later is no newer)."""
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             xml = z.read("docProps/core.xml").decode("utf8", "replace")
-        for tag, words in (("modified", "the date the workbook was saved"), ("created", "the date the workbook was made")):
+        for tag in ("modified", "created"):
             m = re.search(rf"<dcterms:{tag}[^>]*>\s*([^<\s]+)\s*</dcterms:{tag}>", xml)
             if m:
                 d = dt.datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
                 if d.tzinfo:
                     d = d.astimezone(dt.timezone.utc).replace(tzinfo=None)
-                return d.isoformat(timespec="seconds"), words
+                return d.isoformat(timespec="seconds")
     except (KeyError, ValueError, zipfile.BadZipFile, OSError):
         pass
-    last = max((l.date for l in kept), default=None)
-    return (last + "T00:00:00", "its latest document date") if last else (_now(), "the time it was uploaded")
+    return None
+
+
+def _stamp(v):
+    """A report date cell as ISO text (with its time when it has one), or None."""
+    if isinstance(v, dt.datetime):
+        return v.isoformat(timespec="seconds") if v.time() != dt.time(0) else v.date().isoformat()     # a date alone: that whole day
+    d, _ = _date(v)
+    return d
+
+
+def dating(latest, report, saved):
+    """What a file covers, as the history puts files in order: {file_date, file_date_from (in words), covers_from,
+    covers_to, report_date, saved_at}. covers_from: the earliest it can have been taken (its report date, else its latest
+    document date); covers_to: the latest (its report date, else when it was saved; None: not known)."""
+    out = {"report_date": report, "saved_at": saved, "file_date": report or latest}
+    if report:
+        lo = report if "T" in report else report + "T00:00:00"
+        hi = report if "T" in report else report + "T23:59:59"
+        words = f"taken on {report[:10]}, the report date it carries"
+    elif latest:
+        lo = latest + "T00:00:00"
+        hi = saved if saved and saved >= lo else None
+        words = f"orders up to {latest}" + (f"; saved {saved[:16].replace('T', ' ')} UTC" if saved else "; no saved date") + (
+            " (before its latest order: not used)" if saved and saved < lo else "")
+    else:
+        lo, hi = "0001-01-01T00:00:00", saved
+        words = "no document date read" + (f"; saved {saved[:16].replace('T', ' ')} UTC" if saved else "")
+    return dict(out, covers_from=lo, covers_to=hi, file_date_from=words)
+
+
+def order_of(a, b):
+    """+1 when file a is certainly newer than file b, -1 when certainly older, 0 when it cannot be told. Each is
+    (covers_from, covers_to): a is newer only when it can have been taken no earlier than b was at the latest."""
+    if b[1] is not None and a[0] > b[1]:
+        return 1
+    if a[1] is not None and b[0] > a[1]:
+        return -1
+    return 0
 
 
 # ------------------------------------------------------------------ reading a purchase-order file
@@ -145,7 +190,8 @@ class Read:
 
     def __init__(self):
         self.kept, self.skipped, self.removing, self.orders, self.total, self.texts = [], [], [], {}, 0, {}
-        self.file_date = self.file_date_from = None
+        self.latest = self.report = None         # its latest document date, any row; a report date it carries
+        self.dating = {}
 
 
 def read_po_file(data, filename=""):
@@ -172,6 +218,7 @@ def read_po_file(data, filename=""):
                                       "Quantity, Order Unit, Net Price, Name of Supplier, Currency, Purchasing Doc. Type and Deletion Indicator.")
         bulk, first, names = set(pilot.BULK_TYPES), {}, {}
         text_col = col.get("Short Text")
+        report_col = next((i for h, i in col.items() if h.lower() in REPORT_COLUMNS), None)
         for n, values in enumerate(rows):
             if values is None or all(_blank(v) for v in values):
                 continue
@@ -199,6 +246,12 @@ def read_po_file(data, filename=""):
             price, qty = _number(get("Net Price")), _number(get("Order Quantity"))
             supplier = text("Name of Supplier")
             day, day_why = _date(get("Document Date"))
+            if day and (out.latest is None or day > out.latest):
+                out.latest = day                        # what the file covers: every row with a date, kept or not
+            if report_col is not None and report_col < len(values):
+                rep = _stamp(values[report_col])
+                if rep and (out.report is None or rep > out.report):
+                    out.report = rep
             why = None
             if flag:
                 why = ("Deleted or blocked in SAP", f"Deletion indicator {flag} in SAP ({'deleted' if flag == 'L' else 'blocked' if flag == 'S' else 'marked'})")
@@ -232,7 +285,7 @@ def read_po_file(data, filename=""):
                     out.texts[material] = (k, st)
     finally:
         wb.close()
-    out.file_date, out.file_date_from = _file_date(data, out.kept)
+    out.dating = dating(out.latest, out.report, _saved_at(data))
     return out
 
 
@@ -381,17 +434,53 @@ def run(uid):
         _running.discard(uid)
 
 
+def _figures(line):
+    return {k: line[k] for k in FIGURES}
+
+
+def _kept_view(old):
+    """What the history holds of a line, for a disagreement: its figures, or why it is not counted; and which file said so."""
+    return {"upload_id": old["state_upload_id"], "removed": old["removed_why"],
+            "figures": None if old["fabric_id"] is None else {k: old[k] for k in FIGURES}}
+
+
+def _same(old, line):
+    return old["removed_upload_id"] is None and old["fabric_id"] is not None and all(
+        old[k] == line[k] if not isinstance(line[k], float) else abs(float(old[k]) - line[k]) < 1e-9 for k in FIGURES)
+
+
+FIGURES = ("doc_date", "doc_type", "fabric_id", "mill_id", "supplier", "qty_m", "price")
+
+
+def recost(st, fabric_ids):
+    """The costing choices of these fabrics worked out again (their metres set the quantity band; their specification
+    the rest), a few hundred to a transaction."""
+    m = common.get_masters()
+    ctx, patterns = pilot.inputs_context(m), masters.lists(m)["Pattern"]
+    ids = sorted(set(fabric_ids))
+    for i in range(0, len(ids), 500):
+        with _job_tx(st, KIND) as c:
+            part = ids[i:i + 500]
+            fabs, met = dp.fabrics(c, ids=part), dp.metres(c, part)
+            rows = []
+            for code, f in fabs.items():
+                sel, problems = costing_choices(code, f["spec"], float(met.get(f["id"]) or 0), m, ctx, patterns)
+                rows.append({"id": f["id"], "choices": sel, "problems": problems})
+            dp.set_choices(c, rows, _now())
+
+
 def _load(st, uid):
-    with _job_tx(st) as c:
+    with _job_tx(st, KIND) as c:            # a fresh start (also after a restart): this upload's own evidence is written again
         data, up = dp.upload_file(c, uid), dp.upload(c, uid)
+        dp.forget_evidence(c, uid)
     rd = read_po_file(data or b"", up["filename"])
     data = None
-    fdate, name = rd.file_date, up["filename"]
+    name, dating_ = up["filename"], rd.dating
     kinds = {}
     for s in rd.skipped:
         kinds[s[4]] = kinds.get(s[4], 0) + 1
-    _status(uid, step="Matching the mills", rows_total=rd.total, rows_skipped=len(rd.skipped), file_date=fdate, file_date_from=rd.file_date_from,
-            rows_outliers=sum(1 for l in rd.kept if l.type in OUTLIER_TYPES),
+    _status(uid, step="Matching the mills", rows_total=rd.total, rows_skipped=len(rd.skipped),
+            rows_outliers=sum(1 for l in rd.kept if l.type in OUTLIER_TYPES), **dating_,
             skipped=[{"row": s[0], "po": s[1], "item": s[2], "material": s[3], "kind": s[4], "why": s[5]} for s in rd.skipped if s[0] is not None])
     at = _now()
 
@@ -428,7 +517,8 @@ def _load(st, uid):
     _status(uid, step="Matching the fabrics and their Fab groups", mills_new=mills_new)
     mill_of = known
 
-    # fabrics: one per material code; then every fabric's Fab group worked out again (new codes placed, corrected ones moved)
+    # fabrics: one per material code; then every fabric's Fab group worked out again (new codes placed, corrected ones
+    # moved, a group whose codes' specification was corrected renamed), each change recorded
     first = {}
     for l in rd.kept:
         k = (l.date, l.po, l.item)
@@ -445,89 +535,130 @@ def _load(st, uid):
         old_text = dict(c.all(f"SELECT code, description FROM fabric WHERE id IN {store._in(len(held))}", list(held.values()))) if held else {}
         dp.set_fabrics(c, [{"id": held[code], "description": rd.texts[code][1]} for code in held
                            if code in rd.texts and rd.texts[code][1] != old_text.get(code)], at)
-        groups_new, moves = fab_groups.regroup(c, specs, first, set(new_codes), at, uid, ready)
+        rg = fab_groups.regroup(c, specs, first, set(new_codes), at, uid, ready)
         fabric_id = dp.ids_of(c, list(first))
-    _status(uid, step="Writing the order lines", fabrics_new=len(new_codes), groups_new=groups_new)
+    _status(uid, step="Writing the order lines", fabrics_new=len(new_codes), groups_new=rg["groups_new"])
 
-    # order lines, a chunk at a time: the newest file's figures win
-    me = (fdate, uid)
-    newer = lambda line: me > (line["state_file_date"], line["state_upload_id"])
-    n = {"new": 0, "changed": 0, "same": 0, "older": 0, "removed": 0, "dropped": 0}
-    touched = {f for f, _, _, _ in moves}
-    figures = ("doc_date", "doc_type", "fabric_id", "mill_id", "supplier", "qty_m", "price")
+    # order lines: each keeps the evidence of the newest file that covered it
+    me = (uid, dating_["covers_from"], dating_["covers_to"])
+    vs = lambda old: order_of(me[1:], (old["state_from"], old["state_to"]))
+    # (disagree: lines this file keeps that the history holds otherwise; listed: every disagreement, removals included)
+    n = {"new": 0, "changed": 0, "same": 0, "older": 0, "disagree": 0, "listed": 0, "removed": 0, "dropped": 0}
+    touched = {f for f, _, _, _ in rg["moves"]} | set(rg["respecified"])
+    with _job_tx(st, KIND) as c:                # first, what this file has of each order: a file read at the same time sees it
+        dp.add_orders_seen(c, uid, rd.orders)
     for i in range(0, len(rd.kept), CHUNK):
         part = rd.kept[i:i + CHUNK]
         with _job_tx(st, KIND) as c:
             have = dp.lines_by_key(c, [(l.po, l.item) for l in part])
-            add, change, touch = [], [], []
+            seen = dp.orders_seen(c, {l.po for l in part if (l.po, l.item) not in have}, but=uid)
+            add, change, touch, against, held_out, disagree = [], [], [], [], [], []
             for l in part:
                 line = {"po_number": l.po, "item": l.item, "doc_date": l.date, "doc_type": l.type, "fabric_id": fabric_id[l.code],
                         "mill_id": mill_of[l.supplier], "supplier": l.supplier, "qty_m": float(l.qty), "price": float(l.price),
-                        "upload_id": uid, "state_file_date": fdate, "state_upload_id": uid}
+                        "upload_id": uid, "state_upload_id": uid, "state_from": me[1], "state_to": me[2]}
                 old = have.get((l.po, l.item))
                 if old is None:
-                    add.append(line)
-                    touched.add(line["fabric_id"])
-                elif not newer(old):
+                    # never held: unless a file has the rest of its order without it (newer, or not to be told apart)
+                    lacking = [(order_of(me[1:], (lo, hi)), u, lo, hi, fn) for u, items, lo, hi, fn in seen.get(l.po, []) if l.item not in items]
+                    newer_ = sorted((x for x in lacking if x[0] < 0), key=lambda x: (x[2], x[1]))
+                    unsure = sorted((x for x in lacking if x[0] == 0), key=lambda x: (x[2], x[1]))
+                    if not newer_ and not unsure:
+                        add.append(line)
+                        touched.add(line["fabric_id"])
+                        continue
+                    o, u, lo, hi, fn = (newer_ or unsure)[-1]
+                    why = f"Not in {fn} (upload {u}), which has the rest of order {l.po}"
+                    add.append(line)            # its figures kept, the line not counted: the other file's evidence stands
+                    held_out.append(((l.po, l.item), why, (u, lo, hi)))
+                    if newer_:
+                        n["older"] += 1
+                    else:
+                        disagree.append((l.po, l.item, {"upload_id": u, "removed": why, "figures": None}, {"figures": _figures(line)}))
+                    continue
+                o = vs(old)
+                if o > 0:
+                    if _same(old, line):
+                        touch.append((me, old["id"]))
+                        n["same"] += 1
+                    else:
+                        change.append(dict(line, id=old["id"]))
+                        touched |= {line["fabric_id"], old["fabric_id"]} - {None}
+                elif o < 0:
                     n["older"] += 1
-                elif old["removed_upload_id"] is None and all(old[k] == line[k] if not isinstance(line[k], float) else abs(float(old[k]) - line[k]) < 1e-9
-                                                               for k in figures):
-                    touch.append((fdate, uid, old["id"]))
+                elif _same(old, line):
                     n["same"] += 1
                 else:
-                    change.append(dict(line, id=old["id"]))
-                    touched |= {line["fabric_id"], old["fabric_id"]}
+                    disagree.append((l.po, l.item, _kept_view(old), {"figures": _figures(line)}))
             dp.add_lines(c, add)
             dp.change_lines(c, change)
             dp.touch_lines(c, touch)
-            n["new"], n["changed"] = n["new"] + len(add), n["changed"] + len(change)
+            if held_out:
+                ids = dp.lines_by_key(c, [k for k, _, _ in held_out])
+                for k, why, state in held_out:
+                    dp.remove_lines(c, [(why, ids[k]["id"])], state)
+            dp.add_disagreements(c, uid, disagree)
+            n["new"] += len(add) - len(held_out)
+            n["changed"] += len(change)
+            n["disagree"] += len(disagree)
+            n["listed"] += len(disagree)
         _status(uid, step=f"Writing the order lines ({min(i + CHUNK, len(rd.kept)):,} of {len(rd.kept):,})", rows_new=n["new"],
-                rows_changed=n["changed"], rows_same=n["same"], rows_older=n["older"], rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"],
-                alive_at=_now())
-    # lines this newer file shows as no longer bought (deleted, blocked, not bulk, not rupees ...)
+                rows_changed=n["changed"], rows_same=n["same"], rows_older=n["older"], rows_disagree=n["disagree"],
+                rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"], alive_at=_now())
+    # lines this file shows as no longer bought (deleted, blocked, not bulk, not rupees ...): removed where it is newer,
+    # and marked where no file has given them yet, so an older file does not bring them back
     for i in range(0, len(rd.removing), CHUNK):
         part = rd.removing[i:i + CHUNK]
         with _job_tx(st, KIND) as c:
             have = dp.lines_by_key(c, [(po, item) for po, item, _ in part])
-            gone, touch = [], []
+            gone, touch, marks, disagree = [], [], [], []
             for po, item, why in part:
                 old = have.get((po, item))
-                if old is None or not newer(old):
+                if old is None:
+                    marks.append((po, item, f"{name}: {why}", me))
                     continue
-                if old["removed_upload_id"] is None:
-                    gone.append((f"{name}: {why}", old["id"]))
-                    touched.add(old["fabric_id"])
-                else:
-                    touch.append((fdate, uid, old["id"]))
-            dp.remove_lines(c, gone, uid, fdate)
+                o = vs(old)
+                if o > 0:
+                    if old["removed_upload_id"] is None:
+                        gone.append((f"{name}: {why}", old["id"]))
+                        touched.add(old["fabric_id"])
+                    else:
+                        touch.append((me, old["id"]))
+                elif o == 0 and old["removed_upload_id"] is None:
+                    disagree.append((po, item, _kept_view(old), {"removed": f"{name}: {why}"}))
+            dp.add_marks(c, marks)
+            dp.remove_lines(c, gone, me)
             dp.touch_lines(c, touch)
+            dp.add_disagreements(c, uid, disagree)
             n["removed"] += len(gone)
-    # lines held for an order this newer file has, that it does not have
+            n["listed"] += len(disagree)
+    # lines held for an order this file has, that it does not have
     pos = sorted(rd.orders)
     for i in range(0, len(pos), CHUNK):
         with _job_tx(st, KIND) as c:
-            gone = []
+            gone, touch, disagree = [], [], []
             for (po, item), old in dp.lines_of_orders(c, pos[i:i + CHUNK]).items():
-                if item not in rd.orders[po] and old["removed_upload_id"] is None and newer(old):
-                    gone.append((f"Not in {name}, which has the rest of order {po}", old["id"]))
-                    touched.add(old["fabric_id"])
-            dp.remove_lines(c, gone, uid, fdate)
+                if item in rd.orders[po]:
+                    continue
+                o, why = vs(old), f"Not in {name}, which has the rest of order {po}"
+                if o > 0:
+                    if old["removed_upload_id"] is None:
+                        gone.append((why, old["id"]))
+                        touched.add(old["fabric_id"])
+                    else:
+                        touch.append((me, old["id"]))
+                elif o == 0 and old["removed_upload_id"] is None:
+                    disagree.append((po, item, _kept_view(old), {"removed": why}))
+            dp.remove_lines(c, gone, me)
+            dp.touch_lines(c, touch)
+            dp.add_disagreements(c, uid, disagree)
             n["dropped"] += len(gone)
-    _status(uid, step="Working out the costing choices", rows_removed=n["removed"], rows_dropped=n["dropped"])
+            n["listed"] += len(disagree)
+    _status(uid, step="Working out the costing choices", rows_removed=n["removed"], rows_dropped=n["dropped"], rows_disagree=n["disagree"],
+            rows_loaded=n["new"] + n["changed"] + n["same"] + n["older"] + n["disagree"])
 
     # the costing choices of every fabric whose lines or specification changed (the quantity band follows its metres)
-    m = common.get_masters()
-    ctx, patterns = pilot.inputs_context(m), masters.lists(m)["Pattern"]
-    touched = sorted(touched)
-    for i in range(0, len(touched), 500):
-        with _job_tx(st, KIND) as c:
-            ids = touched[i:i + 500]
-            fabs, met = dp.fabrics(c, ids=ids), dp.metres(c, ids)
-            rows = []
-            for code, f in fabs.items():
-                sel, problems = costing_choices(code, f["spec"], float(met.get(f["id"]) or 0), m, ctx, patterns)
-                rows.append({"id": f["id"], "choices": sel, "problems": problems})
-            dp.set_choices(c, rows, _now())
+    recost(st, touched - {None})
 
     # done
     with _job_tx(st, KIND) as c:
@@ -544,7 +675,9 @@ def _load(st, uid):
         summary = {"skipped_by_kind": sorted(kinds.items(), key=lambda x: -x[1]), "first": min((l.date for l in rd.kept), default=None),
                    "last": max((l.date for l in rd.kept), default=None), "fabrics": len(first), "mills": len({l.supplier for l in rd.kept}),
                    "not_grouped": sorted(not_grouped.items(), key=lambda x: -x[1]), "grouped": grouped, "costed": costed,
-                   "regrouped": len(moves), "listed": min(len(rd.skipped), MAX_LISTED)}
+                   "regrouped": sum(1 for m_ in rg["moves"] if m_[1] != m_[2]), "respecified": len(rg["respecified"]), "renamed": len(rg["renamed"]),
+                   "disagreements": n["listed"],
+                   "listed": min(len(rd.skipped), MAX_LISTED)}
         dp.set_upload(c, uid, status="done", step="", finished_at=_now(), alive_at=_now(), summary=summary)
 
 
@@ -613,7 +746,7 @@ def upload(filename, data, who=""):
         raise common.Refused(413, f"The file is larger than {MAX_BYTES // 1048576} MB, the most read at once. Export a shorter period, or split it by months.")
     if not str(filename or "").lower().endswith((".xlsx", ".xlsm")):
         raise common.Refused(400, "Upload the purchase-order export as an Excel workbook (.xlsx), as SAP gives it.")
-    with st.tx(write=STATUS) as c:
+    with st.tx(write=KIND) as c:            # a new upload on the Purchase files page: the history's version moves
         uid = dp.add_upload(c, "purchase_orders", os.path.basename(str(filename)), who, data, hashlib.sha256(data).hexdigest(), _now())
     _kick()
     return {"id": uid, "status": "queued"}
@@ -628,7 +761,7 @@ def upload_shipped(who=""):
     with open(pilot.PO_FILE, "rb") as f:
         data = f.read()
     st = store.get()
-    with st.tx(write=STATUS) as c:
+    with st.tx(write=KIND) as c:
         uid = dp.add_upload(c, "purchase_orders", SHIPPED_NAME, who, data, hashlib.sha256(data).hexdigest(), _now())
     _kick()
     return {"id": uid, "status": "queued"}
@@ -653,7 +786,68 @@ def upload_detail(uid):
     up["skipped_count"] = up["rows_skipped"] if up["rows_skipped"] is not None else len(up["skipped"])
     up["skipped_listed"] = len(up["skipped"])
     up["skipped"] = up["skipped"][:300]
+    with st.tx() as c:
+        rows = dp.disagreements(c, int(uid))
+        fab_ids = {x["figures"]["fabric_id"] for r in rows for x in (r["kept"], r["file"]) if x.get("figures")}
+        mill_ids = {x["figures"]["mill_id"] for r in rows for x in (r["kept"], r["file"]) if x.get("figures")}
+        codes = {f["id"]: code for code, f in dp.fabrics(c, ids=sorted(fab_ids)).items()} if fab_ids else {}
+        names = {i: m_["name"] for i, m_ in dp.mills(c).items() if i in mill_ids}
+        files_ = {u["id"]: u["filename"] for u in dp.uploads(c, limit=1000)}
+    words = lambda x: (dict({"code": codes.get(x["figures"]["fabric_id"]), "date": x["figures"]["doc_date"], "type": x["figures"]["doc_type"],
+                             "mill": names.get(x["figures"]["mill_id"]), "metres": x["figures"]["qty_m"], "price": x["figures"]["price"]}
+                            if x.get("figures") else {}, removed=x.get("removed"), upload=x.get("upload_id"), file=files_.get(x.get("upload_id"))))
+    up["disagreements"] = [{"id": r["id"], "po": r["po_number"], "item": r["item"], "kept": words(r["kept"]), "file": words(r["file"]),
+                            "settled_at": r["settled_at"], "settled_by": r["settled_by"], "settled_as": r["settled_as"]} for r in rows[:300]]
+    up["disagree_count"] = len(rows)
+    up["disagree_open"] = sum(1 for r in rows if r["settled_at"] is None)
     return up
+
+
+def settle(payload, who=""):
+    """A person settles what an upload and the history disagree on (which is newer could not be told): "file" takes this
+    file's figures, or its word that a line is no longer bought, for every line the history still holds as it did then;
+    "kept" keeps the history's. Recorded with who and when. An admin action (do:upload_purchases, rules/access.py)."""
+    st = need_db()
+    payload = payload or {}
+    try:
+        uid = int(payload.get("upload_id"))
+    except (TypeError, ValueError):
+        raise common.Refused(400, "Say which upload's disagreements to settle (upload_id).")
+    take = payload.get("take")
+    if take not in ("file", "kept"):
+        raise common.Refused(400, 'Say what to do with them: "file" takes this file\'s figures, "kept" keeps the history\'s.')
+    touched, changed_since = set(), 0
+    with st.tx(write=KIND) as c:
+        up = dp.upload(c, uid)
+        if up is None:
+            raise common.Refused(404, "No such upload.")
+        if up["status"] != "done":
+            raise common.Refused(409, "The file is still being read: settle its disagreements once it is read.")
+        rows = [r for r in dp.disagreements(c, uid) if r["settled_at"] is None]
+        if not rows:
+            raise common.Refused(400, f"Upload {uid} has nothing left to settle.")
+        if take == "file":
+            state = (uid, up["covers_from"], up["covers_to"])
+            have = dp.lines_by_key(c, [(r["po_number"], r["item"]) for r in rows])
+            change, gone = [], []
+            for r in rows:
+                old = have.get((r["po_number"], r["item"]))
+                if old is None or old["state_upload_id"] != r["kept"]["upload_id"]:
+                    changed_since += 1          # a newer file (or a person) has decided the line since: it is left as it is
+                    continue
+                f = r["file"]
+                if f.get("figures"):
+                    change.append(dict(f["figures"], id=old["id"], upload_id=uid, state_upload_id=state[0], state_from=state[1], state_to=state[2]))
+                    touched |= {f["figures"]["fabric_id"], old["fabric_id"]}
+                elif old["removed_upload_id"] is None:
+                    gone.append((f["removed"], old["id"]))
+                    touched.add(old["fabric_id"])
+            dp.change_lines(c, change)
+            dp.remove_lines(c, gone, state)
+        dp.settle_disagreements(c, [r["id"] for r in rows], _now(), who or "", take)
+    recost(st, touched - {None})
+    return {"upload_id": uid, "settled": len(rows), "took": "this file's figures" if take == "file" else "the history's figures",
+            "left_as_they_are": changed_since}
 
 
 def skipped_download(uid):
@@ -688,7 +882,7 @@ def history(code):
         groups = dp.groups(c)
         gid = fab_groups.final(groups, fab["fab_group_id"]) if fab["fab_group_id"] is not None else None
         got = fab_groups.gather(c, gid, groups) if gid is not None else None
-        moves = [m for m in dp.regroups(c, [fab["fab_group_id"]] if fab["fab_group_id"] else []) if m["code"] == code]
+        moves = dp.regroups_of(c, fab["id"])
     grp = fab_groups.history(got) if got is not None else None
     should, why, on = fab_groups.shoulds({code: fab}, own)[code]          # on its order month's yarn rates, as in Right cost
     s = fab_groups.short_spec(fab["spec"]) if fab["spec"] else {}
@@ -697,7 +891,8 @@ def history(code):
            "spec": {k: s.get(k, "") for k in ("blend_name", "dyemethod_name", "weavetype_name", "warpcount", "weftcount", "epi", "ppi",
                                               "finishedwidth", "finishedwidth_uom", "finish_name", "pattern_name")} if s else None,
            "not_grouped": None if gid is not None else (fab["not_grouped"] or "Not grouped"), "group": None,
-           "moved": [{"from": groups[m["from_group_id"]]["code"] if m["from_group_id"] else None, "why": m["why"], "at": m["at"]} for m in moves]}
+           "moved": [{"from": groups[m["from_group_id"]]["code"] if m["from_group_id"] else None,
+                      "to": groups[m["to_group_id"]]["code"] if m["to_group_id"] else None, "why": m["why"], "at": m["at"]} for m in moves]}
     if grp is not None:
         g0 = groups[fab["fab_group_id"]]
         out["group"] = {k: grp[k] for k in ("code", "name", "purchases", "metres", "orders", "range", "mills", "should", "min_for_range",
@@ -797,17 +992,53 @@ def _outlier(code, po, item, day, sup, qty, price):
     return {"code": code, "date": day, "po": po, "item": item, "mill": VENDOR_NO.sub("", sup).strip().title(), "metres": round(qty, 2), "price": round(price, 2)}
 
 
+def _held_fabrics(codes):
+    """{code: (choices, problems, spec, metres)} of the codes the purchase history holds (its choices are what the price
+    popup costs), kept until the history changes."""
+    st = store.get()
+    if st.kind == "files":
+        return {}
+    key = st.version(KIND)
+    if _held_memo["key"] != key:
+        with st.tx() as c:
+            fabs = dp.fabrics(c, codes=sorted(codes))
+            met = dp.metres(c, [f["id"] for f in fabs.values()])
+        val = {code: (f["choices"], f["problems"], f["spec"], float(met.get(f["id"]) or 0)) for code, f in fabs.items()}
+        _held_memo.update(key=key, val=val, digest=hashlib.sha256(json.dumps(val, sort_keys=True, default=str).encode()).hexdigest())
+    return _held_memo["val"]
+
+
+_held_memo = {"key": None, "val": None}
+
+
+def _costed_on(sel):
+    """The choices a costing rests on (not the code, its description, the supplier or the price)."""
+    return None if sel is None else {k: v for k, v in sel.items() if k not in ("Fabric code", "Description", "Supplier", "Quoted price (Rs/m)", "Order quantity (m)",
+                                                                         "Rate card quantity", "Order size")}
+# the columns of a purchase-order row that follow its costing choices (when its specification changed since the pilot)
+FROM_CHOICES = {"Route": "Route", "Weave": "Weave", "Finish": "Finish", "Warp yarn": "Warp yarn", "Weft yarn": "Weft yarn", "EPI": "EPI",
+                "PPI": "PPI", "Finished width (in)": "Finished width (in)", "PLM pattern": "Pattern", "Print method": "Print method",
+                "Weft (yarn dyed)": "Weft (yarn dyed)"}
+
+
 def pilot_rows():
     """(key, rows): the pilot's purchase-order fabrics with their price paid, metres, quantity band, should-cost and gap
-    worked out again from the lines bought, ZLOI left out. Each row keeps the pilot's columns, plus "Outliers (ZLOI)"
-    and "Worked out again" (why, or None when the pilot's own figures stand). Kept until the lines or the rates change."""
+    worked out again from the lines bought, ZLOI left out, and costed on the choices the price popup costs: the purchase
+    history's (worked out from each code's PLM specification by pilot.py's own functions), else the same worked out from
+    the PLM list here. Each row keeps the pilot's columns, plus "Costing choices", "Outliers (ZLOI)" and "Worked out
+    again" (why, or None when the pilot's own figures stand: the same lines and the same choices). Kept until the lines,
+    the rates, the history or the PLM list change."""
     digest, by_code, _ = bought_lines()
     st = store.get()
-    key = (digest, st.version("rates"), common._mtime(common.PILOT))
+    codes = {str(r["Fabric code"]) for r in pilot_records()}
+    held = _held_fabrics(codes)
+    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS))
     if _rows_memo["key"] == key:
         return _rows_memo["val"]
     m = common.get_masters()
-    patterns = masters.lists(m)["Pattern"]
+    patterns, contents = masters.lists(m)["Pattern"], list(yarn_seed.CONTENTS)
+    ctx, specs = pilot.inputs_context(m), plm_specs()
+    group_of = m["Weaves"].set_index("Weave")["Weave group"]
     out = []
     for r in pilot_records():
         code = str(r["Fabric code"])
@@ -817,21 +1048,41 @@ def pilot_rows():
         metres = sum(x[5] for x in regular)
         value = sum(x[5] * x[6] for x in regular)
         price = round(value / metres, 2) if metres else None
+        h = held.get(code)
+        if h is not None and abs(h[3] - metres) < 1e-6:
+            sel, problems = h[0], h[1]
+        else:
+            sel, problems = costing_choices(code, h[2] if h is not None else specs.get(code), metres, m, ctx, patterns)
+        quoted = lambda s: None if s is None else dict(s, **({"Quoted price (Rs/m)": price} if price is not None else {}))
+        pilots = rightcost._pilot_choices(dict(r, **{"PO price Rs/m": None}), patterns, contents)
         same = (not zl and len(regular) == r["PO lines"] and abs(metres - float(r["PO metres"] or 0)) < 1e-6
-                and price is not None and r["PO price Rs/m"] is not None and abs(price - round(float(r["PO price Rs/m"]), 2)) < 0.005)
+                and price is not None and r["PO price Rs/m"] is not None and abs(price - round(float(r["PO price Rs/m"]), 2)) < 0.005
+                and _costed_on(sel) == _costed_on(pilots))
         if same:
-            out.append(dict(r, **{"Outliers (ZLOI)": [], "Worked out again": None}))
+            out.append(dict(r, **{"Costing choices": quoted(sel), "Outliers (ZLOI)": [], "Worked out again": None}))
             continue
         nr = dict(r)
         band, slab = quantity_terms(r["Route"], metres, m)
         top = {}
         for x in regular:
             top[x[4]] = top.get(x[4], 0) + x[5]
+        why = [("ZLOI lines left out" if zl else "purchases since the pilot")] if (zl or len(regular) != r["PO lines"] or abs(metres - float(r["PO metres"] or 0)) >= 1e-6
+                                                                                  or price is None or abs(price - round(float(r["PO price Rs/m"] or 0), 2)) >= 0.005) else []
+        if _costed_on(sel) != _costed_on(pilots):
+            why.append("its PLM specification changed since the pilot" if sel else "not costed now: " + "; ".join(problems or ["no costing choices"]))
         nr.update({"PO metres": metres or None, "PO price Rs/m": price, "PO lines": len(regular), "Rate card quantity": band, "Order size": slab,
-                   "Supplier": max(top, key=lambda s: (top[s], s)) if top else r["Supplier"], "Outliers (ZLOI)": zl,
-                   "Worked out again": ("ZLOI lines left out" if zl else "purchases since the pilot") + ("; no other purchase, so no price paid" if not regular else "")})
+                   "Supplier": max(top, key=lambda s: (top[s], s)) if top else r["Supplier"], "Outliers (ZLOI)": zl, "Costing choices": quoted(sel),
+                   "Worked out again": "; ".join(why) + ("; no other purchase, so no price paid" if not regular else "")})
+        if sel is None:                         # nothing to cost: the row says why, with no should-cost
+            nr.update({"Should-cost Rs/m": None, "Should-cost Rs/kg": None, "PO minus should-cost Rs/m": None, "PO above should-cost %": None, "Excess Rs": None})
+            out.append(nr)
+            continue
+        if _costed_on(sel) != _costed_on(pilots):       # the row's construction follows its choices
+            nr.update({col: sel.get(k) for col, k in FROM_CHOICES.items()})
+            nr["Weave group"] = group_of.get(sel.get("Weave"), r["Weave group"])
+            nr.update({"Rate card quantity": sel.get("Rate card quantity"), "Order size": sel.get("Order size")})
         try:
-            res = masters.cost(rightcost._pilot_choices(nr, patterns, list(yarn_seed.CONTENTS)), m)
+            res = masters.cost(quoted(sel), m)
         except Exception as e:                  # a choice no longer on today's lists
             nr["Worked out again"] += f"; not costed on today's rates: {e}"
             out.append(nr)

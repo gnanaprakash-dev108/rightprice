@@ -1,13 +1,16 @@
 """Fab groups: the same construction in any colour, across mills (the mill is a breakdown inside a group).
 
 A fabric code's group is decided by nine fields of its PLM specification, tidied and then matched exactly: content,
-route, weave, warp count, weft count, EPI, PPI, finished width and finish. The finished width is put on the nearest whole
-inch (GP, 27 Nov 2026: widths within half an inch are one group), so every code of a group is within half an inch of the
-group's width, whatever order the files come in. A code whose specification is missing or incomplete is "not grouped":
+route, weave, warp count, weft count, EPI, PPI, finished width and finish. Widths are matched with a tolerance (GP, 27
+Nov 2026: widths within half an inch are one group): codes alike in the other eight fields whose widths are within half
+an inch of each other, directly or through other codes, are one group (57 in and 145 cm; 57.4 and 57.5 in); the group's
+name gives the widths it runs from and to. It depends only on the widths held, never on the order the files came in.
+A code whose specification is missing or incomplete is "not grouped":
 nothing is guessed. Codes run Fab-0001 onward in order of first appearance; a code is never changed and never handed out
 again, even after an admin merges its group into another (the merged group keeps its code and its page says where it
 went). When a code's specification is corrected or completed, or the way the fields are tidied changes, the code moves
-at the next upload and both group pages say so.
+at the next upload and both group pages say so; a group whose codes all changed together keeps its code under its new
+name, and its page says it was renamed and why. Every code whose specification changed is costed again.
 
 The group page: purchases, metres, mills, median price, usual range, should-cost, price over time by mill, and the
 purchases priced well above the group. "Priced well above its group" is GP's decision of 27 Nov 2026: above the group's
@@ -38,6 +41,7 @@ FIELD_WORDS = {"content": "content", "route": "dye method", "weave": "weave", "w
                "epi": "EPI", "ppi": "PPI", "width_in": "finished width", "finish": "finish"}
 # fields that may differ between two groups an admin merges without a second warning
 MERGE_FREELY = ("width_in", "finish")
+WIDTH_TOLERANCE = 0.5               # inches: widths this close (directly or through other codes) are one group
 
 
 # ------------------------------------------------------------------ the nine fields, tidied
@@ -138,10 +142,22 @@ def tidy_weave(text):
     return None if not t or t.lower() in ("not applicable", "na", "n/a", "-") else t
 
 
-def width_grid(width):
-    """The finished width a group is matched on: the nearest whole inch (a half goes up). 57 in and 145 cm (57.1 in)
-    are one; 57 in and 58 in are two; every code of a group is within half an inch of the group's width."""
-    return float(int(width + 0.5))
+def width_spans(widths):
+    """{width: (from, to)}: the widths (in inches) of codes alike in the other eight fields, joined where two are within
+    half an inch of each other (directly or through others). Depends only on the widths given, never on their order."""
+    out, run = {}, []
+    for w in sorted(set(widths)) + [None]:
+        if run and (w is None or w - run[-1] > WIDTH_TOLERANCE + 1e-9):
+            for x in run:
+                out[x] = (run[0], run[-1])
+            run = []
+        if w is not None:
+            run.append(w)
+    return out
+
+
+def _sig(f):
+    return "|".join(str(f[k]).lower() if isinstance(f[k], str) else f"{f[k]:g}" for k in FIELDS)
 
 
 def signature_of(spec):
@@ -155,18 +171,41 @@ def signature_of(spec):
     f = {"content": tidy_content(s.get("blend_name")), "route": tidy_route(s.get("dyemethod_name")),
          "weave": tidy_weave(s.get("weavetype_name")), "warp": tidy_count(s.get("warpcount")), "weft": tidy_count(s.get("weftcount")),
          "epi": round(epi, 1) if epi > 20 else None, "ppi": round(ppi, 1) if ppi > 20 else None,      # pilot.py: 20 or less is missing
-         "width_in": width_grid(width) if 30 <= width <= 130 else None, "finish": tidy_finish(s.get("finish_name"))}
+         "width_in": round(width, 2) if 30 <= width <= 130 else None, "finish": tidy_finish(s.get("finish_name"))}
     missing = [FIELD_WORDS[k] for k in FIELDS if f[k] is None]
     if missing:
         return None, None, "PLM specification incomplete: " + ", ".join(missing) + " missing"
-    sig = "|".join(str(f[k]).lower() if isinstance(f[k], str) else f"{f[k]:g}" for k in FIELDS)
-    return f, sig, None
+    return f, _sig(f), None             # the signature of a group of this one width; regroup() joins the widths within half an inch
+
+
+def _rest(sig):
+    """A signature without its width: codes alike in the other eight fields."""
+    parts = sig.split("|")
+    return "|".join(parts[:FIELDS.index("width_in")] + parts[FIELDS.index("width_in") + 1:])
 
 
 def name_of(f):
-    """The readable Fab group name: '100% Cotton · Yarn Dyed · Twill-2/1 · 40s x 40s · 136 x 90 · 57 in · Normal Soft'."""
+    """The readable Fab group name: '100% Cotton · Yarn Dyed · Twill-2/1 · 40s x 40s · 136 x 90 · 57 in · Normal Soft'
+    (a group of several widths: '57 to 57.48 in')."""
+    to = f.get("width_to")
+    width = f"{f['width_in']:g} to {to:g} in" if to is not None and to != f["width_in"] else f"{f['width_in']:g} in"
     return (f"{f['content']} · {f['route']} · {f['weave']} · {f['warp']} x {f['weft']} · {f['epi']:g} x {f['ppi']:g} · "
-            f"{f['width_in']:g} in · {f['finish']}")
+            f"{width} · {f['finish']}")
+
+
+def _changed(a, b):
+    """What changed between two sets of fields, in words: 'EPI 132 to 142; finished width 57.09 to 57.48 in'."""
+    if not a or not b:
+        return ""
+    out = []
+    for k in FIELDS:
+        if str(a.get(k)).lower() != str(b.get(k)).lower():
+            unit = " in" if k == "width_in" else ""
+            show = lambda v: f"{v:g}" if isinstance(v, float) else str(v)
+            out.append(f"{FIELD_WORDS[k]} {show(a.get(k))}{unit} to {show(b.get(k))}{unit}")
+    if not out and (a.get("width_to") or a.get("width_in")) != (b.get("width_to") or b.get("width_in")):
+        out.append(f"codes of other widths joined: it runs from {b['width_in']:g} to {(b.get('width_to') or b['width_in']):g} in")
+    return "; ".join(out)
 
 
 def signatures(specs, codes):
@@ -184,20 +223,37 @@ def signatures(specs, codes):
 def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
     """Every fabric's Fab group worked out again from its specification (the PLM list's, else the one kept): new codes
     are placed, and a code whose specification was corrected or completed, or whose fields are tidied another way now,
-    moves; each move is recorded. A group whose signature is no longer anyone's keeps its code under the new signature of
-    most of its codes. New groups get the next codes in order of first appearance (first_seen: code -> sort key).
-    `ready`: signatures() worked out beforehand. Returns (new groups, moves)."""
+    moves; each move is recorded. Widths within half an inch (directly or through others) are one group (width_spans).
+    A group whose signature is no longer anyone's keeps its code under the new signature of most of its codes, and a
+    group whose name changes says so (fab_group_change). New groups get the next codes in order of first appearance
+    (first_seen: code -> sort key). `ready`: signatures() worked out beforehand.
+    Returns {groups_new, moves, respecified (fabric ids whose specification changed: costed again), renamed}."""
     index = dp.fabric_index(c)
     stored = dp.specs_of(c, [f["id"] for code, f in index.items() if code not in specs and f["spec_sha"]])
     ready = ready or {}
     now = {}
     for code, f in index.items():
         if code in specs and code in ready:
-            now[code] = ready[code]
+            now[code] = dict(ready[code])
             continue
         spec = specs.get(code) if code in specs else stored.get(f["id"])
         fields, sig, why = signature_of(spec)
         now[code] = {"spec": spec, "sha": spec_sha(spec), "fields": fields, "sig": sig, "why": why}
+    # the width tolerance: each code's signature is its group's (the widths it is joined with, from the lowest)
+    widths = {}
+    for v in now.values():
+        if v["sig"]:
+            widths.setdefault(_rest(v["sig"]), []).append(v["fields"]["width_in"])
+    spans = {rest: width_spans(ws) for rest, ws in widths.items()}
+    for v in now.values():
+        if v["sig"]:
+            lo, hi = spans[_rest(v["sig"])][v["fields"]["width_in"]]
+            v["own_width"] = v["fields"]["width_in"]
+            v["fields"] = dict(v["fields"], width_in=lo, width_to=hi)
+            v["sig"] = _sig(v["fields"])
+    # what changed in the specification of a code held before (its old fields, for the record)
+    changed_ids = [f["id"] for code, f in index.items() if f["spec_sha"] and now[code]["sha"] != f["spec_sha"]]
+    before = dp.specs_of(c, changed_ids) if changed_ids else {}
     groups = dp.groups(c)
     by_sig = {g["signature"]: i for i, g in groups.items()}
     used = {v["sig"] for v in now.values() if v["sig"]}
@@ -220,8 +276,17 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
             g = sorted(counts, key=lambda x: (-counts[x], x))[0]
             resign[g] = sig
             target[sig] = g
+    renamed = []
     for g, sig in resign.items():
+        renamed.append((g, groups[g]["name"], name_of(fields_of[sig]), "its codes' PLM specification changed: " + (_changed(
+            {k: groups[g][k] for k in FIELDS} | {"width_to": groups[g].get("width_to")}, fields_of[sig]) or "how its fields are tidied")))
         dp.resign_group(c, g, name_of(fields_of[sig]), fields_of[sig], sig)
+    for sig, g in target.items():        # a group kept under its signature whose name changes (codes of other widths joined)
+        if g not in resign and groups[g]["name"] != name_of(fields_of[sig]):
+            renamed.append((g, groups[g]["name"], name_of(fields_of[sig]), _changed({k: groups[g][k] for k in FIELDS} | {"width_to": groups[g].get("width_to")},
+                                                                                     fields_of[sig]) or "its name is written another way now"))
+            dp.resign_group(c, g, name_of(fields_of[sig]), fields_of[sig], sig)
+    dp.add_group_changes(c, renamed, at, upload_id)
     fresh = sorted((sig for sig in holders if sig not in target),
                    key=lambda s: (min(first_seen.get(code, ("9999",)) for code, v in now.items() if v["sig"] == s), s))
     n = dp.last_group_number(c)
@@ -230,8 +295,8 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
         n += 1
         rows.append((f"Fab-{n:04d}", name_of(fields_of[sig]), fields_of[sig], sig))
     target.update(dp.add_groups(c, rows, at, upload_id))
-    groups = dp.groups(c) if rows or resign else groups
-    changes, moves = [], []
+    groups = dp.groups(c) if rows or renamed else groups
+    changes, moves, respecified = [], [], []
     for code, v in now.items():
         f = index[code]
         to = target.get(v["sig"]) if v["sig"] else None
@@ -250,11 +315,19 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
             change["not_grouped"] = v["why"]
         if v["sha"] != f["spec_sha"]:
             change.update(spec=v["spec"], spec_sha=v["sha"])
+            if f["spec_sha"]:
+                respecified.append(f["id"])
+                if to == f["fab_group_id"]:          # it stays in its group: the change is recorded beside it all the same
+                    old = signature_of(before.get(f["id"]))[0]
+                    new = {k: (v.get("own_width") if k == "width_in" else v["fields"][k]) for k in FIELDS} if v["fields"] else None
+                    what = _changed(old, new) if old and new else ""
+                    moves.append((f["id"], f["fab_group_id"], to, "its PLM specification changed" + (f": {what}" if what else
+                                                                                                    " (not in its Fab group's fields)") + "; costed again"))
         if change:
             changes.append(dict(change, id=f["id"]))
     dp.set_fabrics(c, changes, at)
     dp.add_regroups(c, moves, at, upload_id)
-    return len(rows), moves
+    return {"groups_new": len(rows), "moves": moves, "respecified": respecified, "renamed": renamed}
 
 
 # ------------------------------------------------------------------ reading the groups
@@ -380,7 +453,7 @@ def gather(c, gid, groups):
     fabs = dp.fabrics(c, group_ids=member_ids)
     ids = [f["id"] for f in fabs.values()]
     return {"gid": gid, "groups": groups, "member_ids": member_ids, "fabs": fabs, "lines": dp.lines(c, ids),
-            "outliers": dp.lines(c, ids, outliers=True), "moves": dp.regroups(c, member_ids)}
+            "outliers": dp.lines(c, ids, outliers=True), "moves": dp.regroups(c, member_ids), "renames": dp.group_changes(c, member_ids)}
 
 
 def history(got):
@@ -437,7 +510,7 @@ def history(got):
     dated_ = sorted({on for v, _, on in sh.values() if v is not None and on != "on today's rates"})
     name = lambda i: None if i is None else groups[i]["code"]
     members = set(member_ids)
-    return {"code": g["code"], "name": g["name"], "fields": {k: g[k] for k in FIELDS}, "created": g["created_at"],
+    return {"code": g["code"], "name": g["name"], "fields": {k: g[k] for k in FIELDS} | {"width_to": g.get("width_to")}, "created": g["created_at"],
             "merged_in": [{"code": groups[i]["code"], "name": groups[i]["name"], "merged_at": groups[i]["merged_at"], "merged_by": groups[i]["merged_by"]}
                           for i in member_ids if i != gid],
             "purchases": len(lines), "metres": round(total_m, 2), "orders": len({r["po_number"] for r in lines}),
@@ -449,6 +522,14 @@ def history(got):
                          if m["to_group_id"] in members and m["from_group_id"] not in members],
             "moved_out": [{"code": m["code"], "to": name(m["to_group_id"]), "why": m["why"], "at": m["at"]} for m in got["moves"]
                           if m["from_group_id"] in members and m["to_group_id"] not in members],
+            # a code whose specification changed and stayed; the group renamed when its codes' specification changed
+            "respecified": [{"code": m["code"], "why": m["why"], "at": m["at"]} for m in got["moves"]
+                            if m["from_group_id"] in members and m["to_group_id"] == m["from_group_id"]],
+            "renamed": [{"code": name(r["group_id"]), "from": r["old_name"], "to": r["new_name"], "why": r["why"], "at": r["at"]}
+                        for r in got.get("renames", []) if r["kind"] == "renamed"],
+            "merges": [{"code": name(r["group_id"]), "kind": r["kind"], "why": r["why"], "at": r["at"], "by": r["by_whom"]}
+                       for r in got.get("renames", []) if r["kind"] != "renamed"],
+            "mills_bought": sum(1 for x in mills_ if x["lines"]),          # mills with purchases beside ZLOI (a mill of ZLOI lines only is listed, not counted)
             "should": {"median": round(statistics.median(costed), 2) if costed else None, "low": costed[0] if costed else None,
                        "high": costed[-1] if costed else None, "costed": len(costed), "fabrics": len(fabs), "why_not": whys[:3],
                        "dated": dated_}}          # which codes' order months have a dated yarn rate (stage 5), as Right cost costs them
@@ -543,6 +624,7 @@ def merge(payload, who=""):
                               + "; ".join(f"{d['field']} {d['a']} against {d['b']}" for d in diff)
                               + ". Merge them only if they are really one cloth."}
         dp.set_merged(c, ga, gb, store._now(), who or "")
+        dp.add_group_changes(c, [(ga, groups[ga]["name"], groups[ga]["name"], f"merged into {groups[gb]['code']}")], store._now(), kind="merged", who=who)
     return {"merged": groups[ga]["code"], "into": groups[gb]["code"], "differences": diff, "page": page(groups[gb]["code"])}
 
 
@@ -557,5 +639,7 @@ def unmerge(payload, who=""):
             raise common.Refused(404, f"There is no Fab group {a}.")
         if groups[hit]["merged_into"] is None:
             raise common.Refused(409, f"{groups[hit]['code']} is not merged into another group.")
+        into = groups[groups[hit]["merged_into"]]["code"]
         dp.set_merged(c, hit, None, None, None)
-    return {"unmerged": groups[hit]["code"]}
+        dp.add_group_changes(c, [(hit, groups[hit]["name"], groups[hit]["name"], f"its merge into {into} undone")], store._now(), kind="unmerged", who=who)
+    return {"unmerged": groups[hit]["code"], "was_in": into, "by": who or ""}

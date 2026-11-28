@@ -135,7 +135,7 @@
       pts.length ? priceChart({ points: pts, series, marks, band: g && g.range.enough ? { lower: g.range.lower, upper: g.range.upper, label: `${g.code} usual range` } : null, label: `Price over time for ${x.code}` }) : null,
       g ? h("p", { class: "muted" }, others ? `Grey dots: the ${others} other ${others === 1 ? "purchase" : "purchases"} of ${g.codes - 1} other ${g.codes - 1 === 1 ? "code" : "codes"} in Fab group ${g.code}, ${g.name}. Most codes are ordered once, so the group shows the history.`
         : `No other code of Fab group ${g.code} has been bought yet.`) : h("p", { class: "muted" }, `Not in a Fab group: ${x.not_grouped}. Nothing is guessed, so there is no group history to show.`),
-      (x.moved || []).map(m => h("p", { class: "note" }, `Moved ${m.from ? "from " + m.from + " " : ""}on ${day(m.at)}: ${m.why}.`)),
+      (x.moved || []).map(m => h("p", { class: "note" }, m.from && m.from === m.to ? `On ${day(m.at)}: ${m.why}.` : `Moved ${m.from ? "from " + m.from + " " : ""}on ${day(m.at)}: ${m.why}.`)),
       h("h3", {}, "Purchases of this code"),
       x.lines.length ? table(["Date", "Order", "Mill", "Metres", "Price Rs/m", "Against should-cost"], x.lines.map(l => [day(l.date), `${l.po}/${l.item}`, l.mill, n0(l.metres), n2(l.price), x.should ? pc((l.price / x.should - 1) * 100) : ""]), [3, 4, 5])
         : h("p", { class: "muted" }, x.outliers.length ? "None but ZLOI orders, which are listed apart below: no price paid is shown." : "None."),
@@ -176,7 +176,8 @@
       d.asked ? h("p", { class: "note" }, `${d.asked.code} (${d.asked.name}) was merged into this group` + (d.asked.merged_at ? ` on ${day(d.asked.merged_at)}` : "") + (d.asked.merged_by ? ` by ${d.asked.merged_by}` : "") + `. Its code stays ${d.asked.code} and is never given to another group.`) : null,
       h("div", { class: "stiles" },
         tile("Purchases", `${n0(d.purchases)}`, `${n0(d.orders)} ${d.orders === 1 ? "order" : "orders"}, ${n0(d.metres)} m` + (d.outliers.length ? `; ${d.outliers.length} ZLOI ${d.outliers.length === 1 ? "line" : "lines"} left out` : "")),
-        tile("Mills", `${d.mills.length}`, d.mills.slice(0, 3).map(m => m.name).join(", ") + (d.mills.length > 3 ? ` and ${d.mills.length - 3} more` : "")),
+        (() => { const bought = d.mills.filter(m => m.lines), only = d.mills.length - bought.length;
+          return tile("Mills", `${bought.length}`, bought.slice(0, 3).map(m => m.name).join(", ") + (bought.length > 3 ? ` and ${bought.length - 3} more` : "") + (only ? ` · ${only} more with ZLOI lines only, not counted` : "")); })(),
         tile("Median price paid", r.median ? `Rs ${n2(r.median)}` : "None", r.median ? `paid Rs ${n2(r.low)} to ${n2(r.high)}` : ""),
         tile("Usual range", rangeWords(r), rangeSub(r, d.min_for_range), r.enough ? "" : "amber"),
         tile("Should-cost", sh.median ? `Rs ${n2(sh.median)}` : "Not costed", sh.median ? (sh.low !== sh.high ? `Rs ${n2(sh.low)} to ${n2(sh.high)} across its codes (order size, pattern); ` : "") + (sh.dated && sh.dated.length ? `on the order months' yarn rates (some dated)` : `on today's rates`) + (vsShould !== null ? `; the median paid is ${pc(vsShould)} against it` : "") : (sh.why_not[0] || "")),
@@ -201,13 +202,16 @@
             wide(h("span", { class: "muted" }, (f.in_group !== d.code ? `(from ${f.in_group}) ` : "") + (f.description || "")))]), [2, 3, 4, 6]),
         d.fabrics.length > 25 && !p.all ? h("p", { class: "noprint" }, h("button", { type: "button", class: "btn line", onclick: () => { p.all = true; render(); } }, `Show all ${n0(d.fabrics.length)} codes (the 25 bought most often are shown)`)) : null),
       h("section", { class: "sec" }, h("h2", {}, "What makes this group"),
-        h("dl", { class: "kv gfields" }, [["Content", d.fields.content], ["Dye method", d.fields.route], ["Weave", d.fields.weave], ["Warp", d.fields.warp], ["Weft", d.fields.weft], ["EPI x PPI", `${d.fields.epi} x ${d.fields.ppi}`], ["Finished width", `${d.fields.width_in} in`], ["Finish", d.fields.finish]].map(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))])),
-        h("p", { class: "muted" }, "The nine fields of each code's PLM specification, tidied (spellings of a count or a fibre made one) and then matched exactly. A code whose specification is missing or incomplete is not put in any group."),
+        h("dl", { class: "kv gfields" }, [["Content", d.fields.content], ["Dye method", d.fields.route], ["Weave", d.fields.weave], ["Warp", d.fields.warp], ["Weft", d.fields.weft], ["EPI x PPI", `${d.fields.epi} x ${d.fields.ppi}`], ["Finished width", d.fields.width_to && d.fields.width_to !== d.fields.width_in ? `${d.fields.width_in} to ${d.fields.width_to} in` : `${d.fields.width_in} in`], ["Finish", d.fields.finish]].map(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))])),
+        h("p", { class: "muted" }, "The nine fields of each code's PLM specification, tidied (spellings of a count or a fibre made one) and then matched exactly, but for the finished width: codes whose widths are within half an inch of each other (directly or through other codes) are one group. A code whose specification is missing or incomplete is not put in any group."),
+        (d.renamed || []).length ? [h("h3", {}, "Renamed"), h("ul", { class: "mon" }, d.renamed.map(x => h("li", {}, `On ${day(x.at)}: ${x.why}. It was ${x.from}; it is ${x.to}. Its code stays ${d.code}.`)))] : null,
+        (d.respecified || []).length ? [h("h3", {}, "Specifications corrected"), h("ul", { class: "mon" }, d.respecified.map(m => h("li", {}, `${m.code} on ${day(m.at)}: ${m.why}.`)))] : null,
+        (d.merges || []).length ? [h("h3", {}, "Merges"), h("ul", { class: "mon" }, d.merges.map(m => h("li", {}, `${m.code} ${m.why} on ${day(m.at)}${m.by ? " by " + m.by : ""}.`)))] : null,
         d.merged_in.length ? h("p", {}, "Also counted here, merged in by an admin: " + d.merged_in.map(x => `${x.code} (${x.name})`).join("; ") + ".") : null,
         d.moved_in.length || d.moved_out.length ? [h("h3", {}, "Codes moved since"), h("ul", { class: "mon" },
           d.moved_in.map(m => h("li", {}, `${m.code} came in${m.from ? " from " + m.from : ""} on ${day(m.at)}: ${m.why}.`)),
           d.moved_out.map(m => h("li", {}, `${m.code} went ${m.to ? "to " + m.to : "out of every group"} on ${day(m.at)}: ${m.why}.`)))] : null),
-      h("p", { class: "muted", style: "margin-top:18px" }, `"Priced well above the group" uses the negotiation brief's own rule: the usual range is the middle half of the group's past prices, kept between 5% and 10% either side of its median, and it needs purchases on at least ${d.min_for_range} separate orders. ${ZLOI_WORDS} Should-cost is on today's rates.`));
+      h("p", { class: "muted", style: "margin-top:18px" }, `"Priced well above the group" uses the negotiation brief's own rule: the usual range is the middle half of the group's past prices, kept between 5% and 10% either side of its median, and it needs purchases on at least ${d.min_for_range} separate orders. ${ZLOI_WORDS} Should-cost is as Right cost has it: each code for the metres bought, on the yarn rates of its order month (today's where none is dated) and today's other rates.`));
   }
 
   // ---------------------------------------------------------------- #groups: every Fab group, and the admin merge
@@ -313,13 +317,14 @@
       catch (e) { toast(e.message, false); }
     };
     const row = u => {
-      const counts = u.status === "done" || u.rows_loaded !== null ? [u.rows_total !== null ? `${n0(u.rows_total)} rows` : null, u.rows_loaded !== null ? `${n0(u.rows_loaded)} order lines kept (${n0(u.rows_new || 0)} new, ${n0(u.rows_changed || 0)} changed, ${n0(u.rows_same || 0)} already in)` : null,
-        u.rows_older ? `${n0(u.rows_older)} not used (a newer file has them)` : null, u.rows_removed ? `${n0(u.rows_removed)} removed (this newer file shows them deleted, blocked or no longer bulk)` : null,
+      const counts = u.status === "done" || u.rows_loaded !== null ? [u.rows_total !== null ? `${n0(u.rows_total)} rows` : null, u.rows_loaded !== null ? `${n0(u.rows_loaded)} order lines kept (` + [`${n0(u.rows_new || 0)} new`, `${n0(u.rows_changed || 0)} changed`, `${n0(u.rows_same || 0)} already in`,
+          u.rows_older ? `${n0(u.rows_older)} not used: a newer file has them` : null, u.rows_disagree ? `${n0(u.rows_disagree)} not used: the history disagrees and which is newer cannot be told` : null].filter(Boolean).join(", ") + ")" : null,
+        (u.summary || {}).disagreements ? `${n0(u.summary.disagreements)} ${u.summary.disagreements === 1 ? "disagreement" : "disagreements"} with the history listed (open the upload)` : null, u.rows_removed ? `${n0(u.rows_removed)} removed (this newer file shows them deleted, blocked or no longer bulk)` : null,
         u.rows_dropped ? `${n0(u.rows_dropped)} removed (not in this newer file, which has the rest of their orders)` : null, u.rows_outliers ? `${n0(u.rows_outliers)} ZLOI lines, kept apart` : null,
         u.rows_skipped !== null ? `${n0(u.rows_skipped)} left out` : null].filter(Boolean).join(" · ") : "";
       return h("tr", { class: files.open === u.id ? "picked" : null },
         h("td", {}, h("button", { type: "button", class: "code", onclick: async () => { files.open = files.open === u.id ? null : u.id; files.detail = null; if (files.open) { try { files.detail = await api("/api/purchases/uploads/" + u.id); } catch (e) { toast(e.message, false); } } render(); } }, `#${u.id}`)),
-        h("td", { class: "w" }, u.filename, h("div", { class: "muted" }, `${day(u.uploaded_at)}${u.uploaded_by ? " by " + u.uploaded_by : ""}` + (u.file_date ? ` · file dated ${day(u.file_date)} (${u.file_date_from})` : ""))),
+        h("td", { class: "w" }, u.filename, h("div", { class: "muted" }, `${day(u.uploaded_at)}${u.uploaded_by ? " by " + u.uploaded_by : ""}` + (u.file_date_from ? ` · ${u.file_date_from}` : ""))),
         h("td", { class: "w" }, h("span", { class: "upst " + u.status }, STATUS_WORDS[u.status] || u.status), u.step ? h("div", { class: "muted" }, u.step) : null, u.error ? h("div", { class: "err" }, u.error) : null),
         h("td", { class: "w" }, counts, u.status === "done" ? h("div", { class: "muted" }, `${n0(u.fabrics_new || 0)} new fabric codes, ${n0(u.groups_new || 0)} new Fab groups, ${n0(u.mills_new || 0)} new mills`) : null));
     };
@@ -337,11 +342,26 @@
         d.uploads.length ? h("div", { class: "gridscroll sup pgt" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Upload", "File", "Where it stands", "What was read"].map(t => h("th", {}, t)))), h("tbody", {}, d.uploads.map(row))))
           : h("p", { class: "muted" }, "No file uploaded yet."),
         det ? skippedView(det) : null),
-      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins: a file's date is the date the workbook says it was saved (SAP sets it when it exports), or else its latest document date. A line takes its figures from the newest file that has it; an older file never changes it or brings it back; a newer file removes it when it shows it deleted, blocked, no longer bulk, not in rupees or not per metre, or when it has the rest of its order but not it. A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification (data/plm_specs_for_po.csv) and Fab group; a code whose specification is missing or incomplete is not grouped."));
+      h("p", { class: "muted", style: "margin-top:14px" }, "Kept from each file, as the pilot keeps it: bulk orders (BO, ZLOI, BF), priced, in rupees, per metre, not deleted or blocked in SAP; ZLOI lines are kept apart and left out of every figure. The newest file wins, and which is newer is read from what a file covers, not from when it was saved: a file was taken no earlier than its latest document date (or the report date it carries in a column of its own) and no later than it was saved. One file is newer than another only when it was taken after the other for certain. Every order line keeps the word of the newest file that covered it: its figures, or that it was deleted, blocked, no longer bulk, not in rupees or not per metre, or left out of an order the file has; an older file never changes it or brings it back. Where a file and the history disagree and which is newer cannot be told, the history stands and the upload lists the disagreement, to keep or to take the file's figures (an admin action). A date written as text is read as year-month-day (2026-04-03 is 3 April); one that could be read two ways is left out with why. Fabric codes are matched to their PLM specification (data/plm_specs_for_po.csv) and Fab group; a code whose specification is missing or incomplete is not grouped."));
+  }
+  // what a file and the history disagree on (which is newer could not be told): listed, to keep or to take the file's
+  const side = x => x.code ? `${x.code} · ${day(x.date)} · ${x.type} · ${x.mill} · ${n0(x.metres)} m at Rs ${n2(x.price)}` + (x.removed ? ` (not counted: ${x.removed})` : "") : `not counted: ${x.removed || "no figures"}`;
+  function disagreeView(u) {
+    if (!u.disagree_count) return null;
+    const settle = async take => {
+      if (!confirm(take === "file" ? `Take this file's figures for the ${u.disagree_open} lines still open? Each line the history still holds as it did then takes this file's word.` : `Keep the history's figures for the ${u.disagree_open} lines still open?`)) return;
+      try { const r = await api("/api/purchases/disagreements", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ upload_id: u.id, take }) }); toast(`Settled ${r.settled}: ${r.took} kept` + (r.left_as_they_are ? `; ${r.left_as_they_are} left as they are (decided since)` : "")); files.detail = null; enterFiles(); }
+      catch (e) { toast(e.message, false); }
+    };
+    return [h("h3", {}, `This file and the history disagree on ${n0(u.disagree_count)} ${u.disagree_count === 1 ? "line" : "lines"}`),
+      h("p", { class: "muted" }, "Which of the two is newer could not be told from what they cover (their latest document dates, a report date, when they were saved), so nothing was guessed: the history's figures were kept." + (u.disagree_open ? " An admin can keep them, or take this file's." : " Settled.")),
+      u.disagree_open && may("do:upload_purchases") ? h("div", { class: "acts" }, h("button", { type: "button", class: "btn line", onclick: () => settle("kept") }, "Keep the history's figures"), h("button", { type: "button", class: "btn fill", onclick: () => settle("file") }, "Take this file's figures")) : null,
+      table(["Order", "Item", "Kept (from)", "This file says", "Settled"], u.disagreements.map(x => [x.po, x.item, wide(side(x.kept) + (x.kept.file ? ` [${x.kept.file}]` : "")), wide(side(x.file)), x.settled_at ? `${day(x.settled_at)}${x.settled_by ? " by " + x.settled_by : ""}: ${x.settled_as === "file" ? "this file's taken" : "the history's kept"}` : "open"]), []),
+      u.disagree_count > u.disagreements.length ? h("p", { class: "muted" }, `The first ${u.disagreements.length} are shown; settling covers all ${n0(u.disagree_count)}.`) : null];
   }
   function skippedView(u) {
     const s = u.summary || {};
-    return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`),
+    return h("div", { class: "updetail" }, h("h3", {}, `Upload #${u.id}: ${u.filename}`), disagreeView(u),
       u.status === "done" ? h("p", {}, `Order lines dated ${day(s.first)} to ${day(s.last)}, from ${n0(s.mills)} ${s.mills === 1 ? "spelling of a mill" : "mill spellings"}, for ${n0(s.fabrics)} fabric codes: ${n0(s.grouped)} in Fab groups, ${n0(s.costed)} costed.` +
         (s.not_grouped && s.not_grouped.length ? ` Not grouped: ${s.not_grouped.map(([k, n]) => `${k}: ${n0(n)}`).join("; ")}.` : "")) : null,
       u.skipped_count ? [h("p", {}, `Left out: ${n0(u.skipped_count)} rows. ` + (s.skipped_by_kind || []).map(([k, n]) => `${k}: ${n0(n)}`).join("; ") + ".",

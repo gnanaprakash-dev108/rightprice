@@ -143,6 +143,27 @@ def add_regroups(c, rows, at, upload_id):
           [(f, a, b, why, at, upload_id) for f, a, b, why in rows])
 
 
+def add_group_changes(c, rows, at, upload_id=None, kind="renamed", who=""):
+    """rows: (group id, old name, new name, why): a group renamed (its codes' specification corrected, or codes of other
+    widths joined), merged into another, or its merge undone."""
+    _many(c, "INSERT INTO fab_group_change (group_id, kind, old_name, new_name, why, at, by_whom, upload_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+          [(g, kind, a, b, why, at, who or "", upload_id) for g, a, b, why in rows])
+
+
+def group_changes(c, group_ids):
+    """What happened to these groups, newest first."""
+    out = []
+    for part in _chunks(sorted(set(group_ids))):
+        out += _dicts(c, f"SELECT id, group_id, kind, old_name, new_name, why, at, by_whom FROM fab_group_change WHERE group_id IN {store._in(len(part))}", part)
+    return sorted(out, key=lambda r: (r["at"], r["id"]), reverse=True)
+
+
+def regroups_of(c, fabric_id):
+    """One fabric's moves and specification changes, newest first."""
+    return _dicts(c, "SELECT r.id, f.code, r.from_group_id, r.to_group_id, r.why, r.at FROM fabric_regroup r JOIN fabric f ON f.id = r.fabric_id "
+                     "WHERE r.fabric_id = %s ORDER BY r.at DESC, r.id DESC", (fabric_id,))
+
+
 def regroups(c, group_ids):
     """The moves into or out of these groups, newest first, with the fabric code."""
     out = []
@@ -153,7 +174,7 @@ def regroups(c, group_ids):
 
 
 # ------------------------------------------------------------------ Fab groups
-GROUP = ("id, code, name, content, route, weave, warp, weft, epi, ppi, width_in, finish, signature, merged_into, merged_at, "
+GROUP = ("id, code, name, content, route, weave, warp, weft, epi, ppi, width_in, width_to, finish, signature, merged_into, merged_at, "
          "merged_by, created_at, upload_id")
 
 
@@ -176,19 +197,19 @@ def last_group_number(c):
 
 def add_groups(c, rows, at, upload_id):
     """rows: (code, name, fields, signature). Returns {signature: id}."""
-    _many(c, "INSERT INTO fab_group (code, name, content, route, weave, warp, weft, epi, ppi, width_in, finish, signature, created_at, upload_id) "
-             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-          [(code, name, f["content"], f["route"], f["weave"], f["warp"], f["weft"], f["epi"], f["ppi"], f["width_in"], f["finish"], sig, at, upload_id)
-           for code, name, f, sig in rows])
+    _many(c, "INSERT INTO fab_group (code, name, content, route, weave, warp, weft, epi, ppi, width_in, width_to, finish, signature, created_at, upload_id) "
+             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+          [(code, name, f["content"], f["route"], f["weave"], f["warp"], f["weft"], f["epi"], f["ppi"], f["width_in"], f.get("width_to"), f["finish"],
+            sig, at, upload_id) for code, name, f, sig in rows])
     return group_ids_by_signature(c, [r[3] for r in rows])
 
 
 def resign_group(c, group_id, name, fields, signature):
     """A group keeps its code under a new signature (its codes' fields are tidied another way now)."""
     c.run("UPDATE fab_group SET name = %s, content = %s, route = %s, weave = %s, warp = %s, weft = %s, epi = %s, ppi = %s, width_in = %s, "
-          "finish = %s, signature = %s WHERE id = %s",
+          "width_to = %s, finish = %s, signature = %s WHERE id = %s",
           (name, fields["content"], fields["route"], fields["weave"], fields["warp"], fields["weft"], fields["epi"], fields["ppi"],
-           fields["width_in"], fields["finish"], signature, group_id))
+           fields["width_in"], fields.get("width_to"), fields["finish"], signature, group_id))
 
 
 def set_merged(c, group_id, into_id, at, who):
@@ -197,8 +218,8 @@ def set_merged(c, group_id, into_id, at, who):
 
 # ------------------------------------------------------------------ uploads
 UPLOAD = ("id, kind, filename, uploaded_by, uploaded_at, status, step, started_at, finished_at, alive_at, runner, error, file_date, "
-          "file_date_from, rows_total, rows_loaded, rows_new, rows_changed, rows_same, rows_removed, rows_dropped, rows_older, rows_outliers, "
-          "rows_skipped, fabrics_new, groups_new, mills_new, summary, sha256")
+          "file_date_from, covers_from, covers_to, report_date, saved_at, rows_total, rows_loaded, rows_new, rows_changed, rows_same, "
+          "rows_removed, rows_dropped, rows_older, rows_disagree, rows_outliers, rows_skipped, fabrics_new, groups_new, mills_new, summary, sha256")
 
 
 def add_upload(c, kind, filename, who, data, sha, at):
@@ -249,7 +270,7 @@ def shipped_loaded(c, sha):
 
 # ------------------------------------------------------------------ purchase lines
 LINE = ("id, po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, upload_id, removed_upload_id, removed_why, "
-        "state_file_date, state_upload_id")
+        "state_upload_id, state_from, state_to")
 
 
 def lines_by_key(c, keys):
@@ -272,30 +293,80 @@ def lines_of_orders(c, pos):
 
 
 def add_lines(c, rows):
-    """rows: dicts with the line's columns (state_file_date and state_upload_id included)."""
+    """rows: dicts with the line's columns (its state: state_upload_id, state_from, state_to, included)."""
     _many(c, "INSERT INTO purchase_line (po_number, item, doc_date, doc_type, fabric_id, mill_id, supplier, qty_m, price, upload_id, "
-             "state_file_date, state_upload_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+             "state_upload_id, state_from, state_to) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
           [(r["po_number"], r["item"], r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"],
-            r["upload_id"], r["state_file_date"], r["state_upload_id"]) for r in rows])
+            r["upload_id"], r["state_upload_id"], r["state_from"], r["state_to"]) for r in rows])
+
+
+def add_marks(c, rows):
+    """rows: (po, item, why, (upload id, from, to)): a line a file shows deleted, or leaves out of an order it has, before
+    any file gave its figures: kept as a mark (no figures), so an older file does not bring it back."""
+    _many(c, "INSERT INTO purchase_line (po_number, item, upload_id, removed_upload_id, removed_why, state_upload_id, state_from, state_to) "
+             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", [(po, item, s[0], s[0], why, s[0], s[1], s[2]) for po, item, why, s in rows])
 
 
 def change_lines(c, rows):
     """rows: dicts with id and the line's columns: a newer file's figures, the line counted again."""
     _many(c, "UPDATE purchase_line SET doc_date = %s, doc_type = %s, fabric_id = %s, mill_id = %s, supplier = %s, qty_m = %s, price = %s, "
-             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_file_date = %s, state_upload_id = %s WHERE id = %s",
+             "upload_id = %s, removed_upload_id = NULL, removed_why = NULL, state_upload_id = %s, state_from = %s, state_to = %s WHERE id = %s",
           [(r["doc_date"], r["doc_type"], r["fabric_id"], r["mill_id"], r["supplier"], r["qty_m"], r["price"], r["upload_id"],
-            r["state_file_date"], r["state_upload_id"], r["id"]) for r in rows])
+            r["state_upload_id"], r["state_from"], r["state_to"], r["id"]) for r in rows])
 
 
 def touch_lines(c, rows):
-    """rows: (state_file_date, state_upload_id, id): a newer file has the same figures."""
-    _many(c, "UPDATE purchase_line SET state_file_date = %s, state_upload_id = %s WHERE id = %s", rows)
+    """rows: ((upload id, from, to), id): a newer file says the same (the same figures, or removed too): it is the evidence now."""
+    _many(c, "UPDATE purchase_line SET state_upload_id = %s, state_from = %s, state_to = %s WHERE id = %s", [(s[0], s[1], s[2], i) for s, i in rows])
 
 
-def remove_lines(c, rows, upload_id, file_date):
-    """rows: (why, id): a newer file says the line is no longer a priced bulk order in rupees per metre."""
-    _many(c, "UPDATE purchase_line SET removed_upload_id = %s, removed_why = %s, state_file_date = %s, state_upload_id = %s WHERE id = %s",
-          [(upload_id, why, file_date, upload_id, i) for why, i in rows])
+def remove_lines(c, rows, state):
+    """rows: (why, id): a newer file says the line is no longer a priced bulk order in rupees per metre, or leaves it out of
+    an order it has. state: (upload id, from, to) of that file."""
+    _many(c, "UPDATE purchase_line SET removed_upload_id = %s, removed_why = %s, state_upload_id = %s, state_from = %s, state_to = %s WHERE id = %s",
+          [(state[0], why, state[0], state[1], state[2], i) for why, i in rows])
+
+
+def add_orders_seen(c, upload_id, orders):
+    """orders: {po: set of items}: what the file has of each order (kept or not)."""
+    _many(c, "INSERT INTO order_seen (po_number, upload_id, items) VALUES (%s, %s, %s)",
+          [(po, upload_id, json.dumps(sorted(items))) for po, items in orders.items()])
+
+
+def orders_seen(c, pos, but=None):
+    """{po: [(upload id, set of items, covers_from, covers_to, file name)]}: the files (but this one) that have these
+    orders, the uploads still being read included (their evidence counts from the moment they are read)."""
+    out = {}
+    for part in _chunks(sorted(set(pos))):
+        for po, uid, items, lo, hi, name in c.all("SELECT o.po_number, o.upload_id, o.items, u.covers_from, u.covers_to, u.filename FROM order_seen o "
+                                                  f"JOIN upload u ON u.id = o.upload_id WHERE o.po_number IN {store._in(len(part))}", part):
+            if uid != but and lo is not None:
+                out.setdefault(po, []).append((uid, set(json.loads(items)), lo, hi, name))
+    return out
+
+
+def forget_evidence(c, upload_id):
+    """What an upload said order by order, and its disagreements not settled: written again when it is read again."""
+    c.run("DELETE FROM order_seen WHERE upload_id = %s", (upload_id,))
+    c.run("DELETE FROM line_disagreement WHERE upload_id = %s AND settled_at IS NULL", (upload_id,))
+
+
+def add_disagreements(c, upload_id, rows):
+    """rows: (po, item, kept, file): this file and the history disagree, and which is newer cannot be told."""
+    _many(c, "INSERT INTO line_disagreement (upload_id, po_number, item, kept, file) VALUES (%s, %s, %s, %s, %s)",
+          [(upload_id, po, item, json.dumps(k, default=str), json.dumps(f, default=str)) for po, item, k, f in rows])
+
+
+def disagreements(c, upload_id, limit=None):
+    rows = _dicts(c, "SELECT id, po_number, item, kept, file, settled_at, settled_by, settled_as FROM line_disagreement WHERE upload_id = %s ORDER BY id"
+                     + (f" LIMIT {int(limit)}" if limit else ""), (upload_id,))
+    for r in rows:
+        r["kept"], r["file"] = json.loads(r["kept"]), json.loads(r["file"])
+    return rows
+
+
+def settle_disagreements(c, ids, at, who, take):
+    _many(c, "UPDATE line_disagreement SET settled_at = %s, settled_by = %s, settled_as = %s WHERE id = %s", [(at, who, take, i) for i in ids])
 
 
 def lines(c, fabric_ids, outliers=False):
@@ -361,7 +432,9 @@ def counts(c):
     one = lambda sql: c.one(sql)[0]
     return {"lines": one(f"SELECT count(*) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_NOT_OUTLIER}"),
             "outliers": one(f"SELECT count(*) FROM purchase_line l WHERE l.removed_upload_id IS NULL AND {_OUTLIER}"),
-            "lines_removed": one("SELECT count(*) FROM purchase_line WHERE removed_upload_id IS NOT NULL"),
+            "lines_removed": one("SELECT count(*) FROM purchase_line WHERE removed_upload_id IS NOT NULL AND fabric_id IS NOT NULL"),
+            "marks": one("SELECT count(*) FROM purchase_line WHERE fabric_id IS NULL"),
+            "disagreements": one("SELECT count(*) FROM line_disagreement WHERE settled_at IS NULL"),
             "fabrics": one("SELECT count(*) FROM fabric"), "fabrics_grouped": one("SELECT count(*) FROM fabric WHERE fab_group_id IS NOT NULL"),
             "groups": one("SELECT count(*) FROM fab_group g WHERE g.merged_into IS NULL AND EXISTS (SELECT 1 FROM fabric f WHERE f.fab_group_id = g.id)"),
             "groups_merged": one("SELECT count(*) FROM fab_group WHERE merged_into IS NOT NULL"),

@@ -58,6 +58,9 @@ KINDS = ("rates", "list", "negotiations", "seen", "sheets")
 KINDS += ("users",)         # stage 3: the people let in and what each role may do (db/003_users_and_roles.sql, data_users.py)
 KINDS += ("dated",)         # stage 5: dated yarn rates (db/005_dated_rates.sql); kept in a database only, never in a file
 KINDS += ("purchases",)     # stage 2: the purchase history and Fab groups (db/002_purchases_and_fab_groups.sql), on a database only
+# writes that move no version of their own (no page needs redoing for them) but wait for the writers of a kind: stage 2's
+# progress of a purchase file being read takes the purchase history's lock, never the one of adding tables and copying in
+LOCKS_WITH = {"purchase_status": "purchases"}
 MOVED_NOTE = "moved_to_database.json"      # left beside the files once they are copied into a database (they stay as they were)
 FILES = {"rates": "Rate_Master.xlsx", "list": "costing_log.csv", "negotiations": "negotiations.json",
          "seen": "alerts_seen.json", "sheets": "cost_sheets.json"}
@@ -458,7 +461,8 @@ class SqlStore:
                 if self.kind == "sqlite":
                     cur.execute("BEGIN IMMEDIATE" if write else "BEGIN")
                 elif write:
-                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (self.LOCK_KEY + 1 + KINDS.index(write) if write in KINDS else self.LOCK_KEY,))
+                    lock = LOCKS_WITH.get(write, write)
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (self.LOCK_KEY + 1 + KINDS.index(lock) if lock in KINDS else self.LOCK_KEY,))
                 else:
                     cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
                 yield _Cursor(cur, self.kind)

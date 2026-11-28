@@ -40,6 +40,28 @@ S5-8. **The calibration draft, tested fairly.** On cloth it was not fitted on, a
 S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rate of the rate master with no data behind
       it: the brief and the verdicts treat it as unsure. 1. As now. 2. Refuse a typed rate with no source.
 
+## Built 28 Nov 2026 (the second review of stage 2): which purchase file is newer, and what happens when that cannot be told
+
+- **Which file is newer is read from what it covers**, never from when the workbook was saved (a file saved again later
+  is no newer): a file was taken no earlier than its latest document date (every row with a date, kept or not), or the
+  report date it carries in a column of its own (Report Date, Export Date, Extracted On, Run Date, As of), and no later
+  than it was saved. One file is newer than another only when it was taken after the other for certain: a later SAP
+  export, with orders dated after the earlier one was saved, is. SAP's own export carries no report date.
+- **Every order line keeps the word of the newest file that covered it**: its figures, or that it was deleted, blocked,
+  no longer bulk, not in rupees or per metre, or left out of an order the file has, even before any file gave its
+  figures. So an older file read after a newer one (or at the same time, in two server processes) brings nothing back.
+- **When which is newer cannot be told** (a correction covering the same orders, a file with no saved date, the first
+  file saved again) **and the file disagrees with the history, the history stands and the disagreement is listed** on
+  the upload (Purchase files), line by line, for an admin to keep the history's figures or take the file's. Nothing is
+  guessed. **To confirm:** 1. As now. 2. A file saved later wins after all when both cover the same orders.
+- A code bought only on ZLOI orders is not counted as bought on the supplier list and pages; a group's mill with only
+  ZLOI lines is listed, not counted; Pilot results says it is the pilot as run, ZLOI included (1,696 fabrics), beside
+  the 1,512 every other page counts.
+- A code whose PLM specification changes is costed again at the next upload; a group whose codes all changed keeps its
+  code, is renamed, and its page says what changed (merges and undone merges are recorded there too, with who). Right
+  cost's purchase-order rows cost each code on the choices the price popup costs (the purchase history's, from the PLM
+  specification), so the two cannot disagree.
+
 ## Answered 27 Nov 2026 (stage 2's review: purchase history and Fab groups)
 
 - **ZLOI order lines: kept out of every calculation, everywhere** ("Yes, everywhere"). 402 of the 1,377 priced ZLOI lines
@@ -54,10 +76,12 @@ S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rat
   moves, and the 184 codes bought only on ZLOI have no order month, so they are costed on today's rates and say why.
   The price popup and the Fab group pages cost each code on its order month as Right cost does, so they still agree.
   (calibrate_splits.py keeps the pilot's own lines, ZLOI included, so its held-back test reads as before.)
-- **Width: within half an inch is one group.** Done as a fixed rule that does not depend on the order files come in:
-  each width is put on the nearest whole inch (a half goes up), so every code of a group is within half an inch of the
-  group's width; 57 in and 145 cm (57.1 in) are one group, 57 in and 58 in two. Two widths either side of a half inch
-  (57.4 and 57.6) stay apart: merge them by hand if they are one cloth.
+- **Width: within half an inch is one group.** Done as a tolerance (the second review: rounding split 57.4 and 57.5 in):
+  codes alike in the other eight fields whose widths are within half an inch of each other, directly or through other
+  codes, are one group (57 in and 145 cm; 57.4 and 57.5 in). It depends only on the widths held, never on the order files
+  come in; the group's name gives the widths it runs from and to. **To confirm:** through each other, a group can run
+  over more than half an inch (57, 57.4 and 57.8 in are one group). 1. As now. 2. Never more than half an inch from end
+  to end (then two widths 0.1 in apart can fall either side of a split).
 - **A usual range needs purchases on at least 5 separate orders** (distinct order numbers, ZLOI left out), not 5 lines. The
   price popup draws a group's median only when the group has a range. Done.
 - Finish names written differently ("Normal Soft" and "Soft Finish", "Regular" and "Normal Soft") stay apart unless an

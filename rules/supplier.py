@@ -36,9 +36,12 @@ def suppliers():
     won = {mills.mill_key(b["supplier"]): b for b in tracker.negotiations_summary()["suppliers"]}
     out = []
     for k, rows in by.items():
-        po = [r for r in rows if r["source"] == "Purchase orders"]
+        # a code bought only on ZLOI orders is not counted as bought (GP, 27 Nov 2026: ZLOI in no figure)
+        po = [r for r in rows if r["source"] == "Purchase orders" and r.get("price") is not None]
         fl = [r for r in rows if r["source"] == "Fabric list" and not r.get("duplicate_of")]
         t = won.get(k) or {}
+        if not po and not fl:
+            continue                    # bought only on ZLOI orders: its page still lists them apart, it counts as no purchase
         out.append({"key": k, "name": _mill_names(rows)[0], "bought": len(po), "quoted": len(fl),
                     "push": sum(1 for r in rows if r["band"] == "Push" and not r.get("duplicate_of")),
                     "above_range": round(sum(_above_range(r) for r in po + fl)),
@@ -121,7 +124,7 @@ def supplier(mill: str):
     if not key or not rows:
         raise common.Refused(404, "No fabric bought from or quoted by that mill")
     m = common.get_masters()
-    po = [r for r in rows if r["source"] == "Purchase orders"]
+    po = [r for r in rows if r["source"] == "Purchase orders" and r.get("price") is not None]     # ZLOI-only codes: listed apart, not bought
     fl = [r for r in rows if r["source"] == "Fabric list"]
     negos = {k: tracker.nego_summary(v) for k, v in tracker._negos().items() if v.get("events")}
 
