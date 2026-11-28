@@ -5,6 +5,10 @@ import hashlib
 import json
 import os
 import re
+import sys
+import threading
+import time
+import traceback
 import pandas as pd
 from rules import common, costing, dashboard, dated, fabric_list, mills
 import data_dated
@@ -33,50 +37,91 @@ def _pilot_choices(r, patterns, contents):
     return {k: v for k, v in sel.items() if v not in (None, "")}
 
 
-_briefs = {"key": None, "data": None, "running": False}
+_briefs = {"done": (None, None), "want": None, "running": False}     # done: (key, verdicts), replaced whole
+_briefs_lock = threading.Lock()
+RETRY_BRIEFS = (2, 120)         # seconds before a failed working-out is tried again: the first wait, doubled up to the second
 
 
-def _pilot_briefs(rows, key):
+def _pilot_briefs(rows, key, start=True):
     """The negotiation brief's verdict for every purchase-order costing, on the yarn rates of its order month (stage 5,
     GP's decision of 27 Nov 2026: a dated rate where there is one, today's rate otherwise, said per yarn) and today's
-    other rates. About 12 ms a fabric, so it runs once in the background and is kept until the rate master or the dated
-    rates change."""
-    import threading
-
-    def work():
+    other rates. About 12 ms a fabric, so it runs in the background and is kept until what it rests on changes (key).
+    None until worked out. start=False: only what is worked out already (rows being replaced are not worked out: on a
+    slow machine that delayed the verdicts of the new rows by a whole working-out, the CI run of 4e1f6f0)."""
+    done_key, data = _briefs["done"]
+    if done_key == key:
+        return data
+    if start:
+        with _briefs_lock:
+            _briefs["want"] = (rows, key)
+            if _briefs["running"]:
+                return None             # the one running takes this up when it ends
+            _briefs["running"] = True
         try:
-            m, out = common.get_masters(), {}
-            months, table = dated.order_months(), data_dated.table()
-            for r in rows:
-                om = months.get(str(r["code"]))
-                try:
-                    res = masters.cost(r["choices"], m, on=om["month"] if om else None, dated=table)
-                    b = costing.brief(res, m, r["metres"], (), r["choices"])
-                    # the figures the row shows follow this costing, worked out as the pilot works them (masters.cost_many,
-                    # pilot.py): on the yarn rates of the order month (stage 5) and today's other rates, so a row, its verdict
-                    # and the price popup always agree (stage 2)
-                    v = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1), "gsm": round(res["gsm"], 1),
-                         "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]},
-                         "placeholders": ", ".join(res["placeholders"]) or None,
-                         "gap": None if res["gap"] is None else round(res["gap"], 2),
-                         "gap_pct": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
-                         "dated": bool((res.get("rates_of") or {}).get("dated")), "rates": dated.po_rates(r["code"], months, res)}
-                    if b is not None:
-                        v.update(stance=b["stance"], implausible=b["implausible"], lo=b["band"]["lo"] * 100, hi=b["band"]["hi"] * 100,
-                                 weak=b["weak"])
-                    out[r["code"]] = v
-                except Exception as e:      # a costing that no longer works on today's rates
-                    out[r["code"]] = {"stance": "error", "weak": [str(e)]}
-            _briefs.update(key=key, data=out)
-        finally:
-            _briefs["running"] = False
-
-    if _briefs["key"] == key:
-        return _briefs["data"]
-    if not _briefs["running"]:
-        _briefs["running"] = True
-        threading.Thread(target=work, daemon=True).start()
+            threading.Thread(target=_work_briefs, daemon=True, name="rightprice-purchase-order-verdicts").start()
+        except Exception:
+            with _briefs_lock:
+                _briefs["running"] = False
+            raise
     return None
+
+
+def _work_briefs():
+    """The verdicts worked out for the newest rows asked for, until they are; one that fails (the store busy or
+    unreachable) is logged and tried again after a wait."""
+    wait = RETRY_BRIEFS[0]
+    while True:
+        with _briefs_lock:
+            rows, key = _briefs["want"]
+            if _briefs["done"][0] == key:
+                _briefs["running"] = False
+                return
+        try:
+            _briefs["done"] = (key, _verdicts(rows))
+            wait = RETRY_BRIEFS[0]
+        except Exception:
+            print(f"RightPrice: the verdicts of Right cost's purchase orders could not be worked out; tried again in {wait} s:\n"
+                  + traceback.format_exc(limit=8), file=sys.stderr, flush=True)
+            time.sleep(wait)
+            wait = min(wait * 2, RETRY_BRIEFS[1])
+
+
+_costed = {"hit": (None, None, {})}     # (the rate master, the dated rates, {(choices, order month): costing}) of the last one
+
+
+def _verdicts(rows):
+    """Every row's verdict. A row costed on the same choices in the same order month, on the same rates and dated rates,
+    as at the last working-out keeps that costing (the costing is nearly all of the time: 1,696 of them took minutes on a
+    slow machine, the stage 4 run of 28 Nov); its verdict is worked out again, as the usual ranges may have moved."""
+    m, out = common.get_masters(), {}
+    months, table = dated.order_months(), data_dated.table()
+    last_m, last_table, last = _costed["hit"]
+    last = last if last_m is m and last_table == table else {}
+    now = {}
+    for r in rows:
+        om = months.get(str(r["code"]))
+        try:
+            on = (json.dumps(r["choices"], sort_keys=True, default=str), om["month"] if om else None)
+            res = now.get(on) or last.get(on) or masters.cost(r["choices"], m, on=on[1], dated=table)
+            now[on] = res
+            b = costing.brief(res, m, r["metres"], (), r["choices"])
+            # the figures the row shows follow this costing, worked out as the pilot works them (masters.cost_many,
+            # pilot.py): on the yarn rates of the order month (stage 5) and today's other rates, so a row, its verdict
+            # and the price popup always agree (stage 2)
+            v = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1), "gsm": round(res["gsm"], 1),
+                 "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]},
+                 "placeholders": ", ".join(res["placeholders"]) or None,
+                 "gap": None if res["gap"] is None else round(res["gap"], 2),
+                 "gap_pct": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
+                 "dated": bool((res.get("rates_of") or {}).get("dated")), "rates": dated.po_rates(r["code"], months, res)}
+            if b is not None:
+                v.update(stance=b["stance"], implausible=b["implausible"], lo=b["band"]["lo"] * 100, hi=b["band"]["hi"] * 100,
+                         weak=b["weak"])
+            out[r["code"]] = v
+        except Exception as e:      # a costing that no longer works on today's rates
+            out[r["code"]] = {"stance": "error", "weak": [str(e)]}
+    _costed["hit"] = (m, table, now)
+    return out
 
 
 # the words of the negotiation brief, so a row reads the same in Right cost, the list and the pack
@@ -96,9 +141,13 @@ def costs():
     gkey = fab_groups.version()
     pkey, pilot_rows = purchases.pilot_rows()
     dv = data_dated.version()           # stage 5: the purchase orders' verdicts follow the dated yarn rates too
-    memo = (common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey)
-    if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
-        return _costs_memo["val"]
+    memo = (common._state_key(), dv, _briefs["done"][0], _briefs["running"], gkey, pkey, purchases.rows_failing())
+    hit = _costs_memo["val"]
+    # kept while nothing it rests on changes; one not ready yet too, while its rows are as up to date as they were (a page
+    # asking every half second while the verdicts are worked out otherwise works it all out each time, and on a slow
+    # machine leaves the background work little time: the CI run of 4e1f6f0)
+    if _costs_memo["key"] == memo and (hit["ready"] or hit["updating"] == (not purchases.rows_up_to_date(pkey))):
+        return hit
     out = []
     if os.path.exists(common.PILOT):
         for r in pilot_rows:
@@ -125,7 +174,10 @@ def costs():
     # the verdicts rest on each row's choices and metres (and the rates): rows served while new ones are worked out
     # (purchases.pilot_rows) with the same choices need no second round
     basis = hashlib.sha256(json.dumps([(r["code"], r["choices"], r["metres"]) for r in po_rows], sort_keys=True, default=str).encode()).hexdigest()
-    verdicts = _pilot_briefs(po_rows, (version, dv, len(out), bool(cats), basis, ins[0] if ins else None)) if out else {}
+    # rows being replaced (worked out again in the background) get no verdicts worked out of their own, unless their pass
+    # keeps failing: those of the new rows follow at once
+    start = purchases.rows_up_to_date(pkey) or purchases.rows_failing()
+    verdicts = _pilot_briefs(po_rows, (version, dv, len(out), bool(cats), basis, ins[0] if ins else None), start) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
         r["rates"] = None           # the rates the costing is on: the order month's (worked out with the verdict)
@@ -202,7 +254,7 @@ def costs():
     fresh = purchases.rows_up_to_date(pkey)     # the purchase-order rows are worked out again in the background after a change
     val = {"rows": out, "ready": verdicts is not None and fresh, "updating": not fresh, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey), val=val)
+    _costs_memo.update(key=memo, val=val)         # the key as it was before: anything that moved meanwhile is worked out again
     return val
 
 

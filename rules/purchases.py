@@ -51,8 +51,10 @@ import json
 import os
 import re
 import socket
+import sys
 import threading
 import time
+import traceback
 import warnings
 import zipfile
 from collections import namedtuple
@@ -578,8 +580,11 @@ def check_prices(st, fabric_ids):
     import math
     held = []
     with _job_tx(st, KIND) as c:
+        # a few statements however many codes the file has: a statement per code held the store for 40 s on a slow machine,
+        # and every page waited (the CI run of 4e1f6f0)
         lines = dp.counted_prices(c, fabric_ids)
         index = {f["id"]: (code, f["fab_group_id"]) for code, f in dp.fabric_index(c).items() if f["id"] in lines}
+        in_group = dp.group_prices(c, {g for _, g in index.values()})
         rows = []
         for fid, live in lines.items():
             if len(live) < 2 and index.get(fid, (None, None))[1] is None:
@@ -594,7 +599,7 @@ def check_prices(st, fabric_ids):
                     others = [q for i, q, _ in live if i != lid]
                     if len(others) < 2:
                         if gp is None:
-                            gp = dp.group_prices(c, index.get(fid, (None, None))[1], fid)
+                            gp = [q for f, q in in_group.get(index.get(fid, (None, None))[1], []) if f != fid]
                         pool, whose = others + gp, "this code's other purchases and its Fab group's"
                     else:
                         pool, whose = others, "this code's other purchases"
@@ -690,20 +695,35 @@ def lists_fingerprint(m=None):
 def recost(st, fabric_ids):
     """The costing choices of these fabrics worked out again (their metres set the quantity band; their specification
     the rest), a few hundred to a transaction; each kept with what it was worked out on (the lists' fingerprint, the
-    metres, the specification's SHA-256), so a stale one can be told (stale())."""
+    metres, the specification's SHA-256), so a stale one can be told (stale()). They are worked out with the store free and
+    written in a short transaction, each only if its metres, specification and main supplier are still what it was worked
+    out on (else it is worked out again): working out a few hundred inside the transaction held the store for half a
+    minute on a slow machine, and every page waited (the CI run of 4e1f6f0)."""
     m = common.get_masters()
     ctx, patterns, fp = pilot.inputs_context(m), masters.lists(m)["Pattern"], lists_fingerprint(m)
-    ids = sorted(set(fabric_ids))
-    for i in range(0, len(ids), 500):
-        with _job_tx(st, KIND) as c:
-            part = ids[i:i + 500]
-            fabs, met, top = dp.fabrics(c, ids=part), dp.metres(c, part), dp.top_suppliers(c, part)
+    todo = sorted(set(fabric_ids) - {None})
+    for _ in range(5):                  # a fabric whose lines or specification another file changed meanwhile: again
+        again = []
+        for i in range(0, len(todo), 500):
+            part = todo[i:i + 500]
+            with _job_tx(st) as c:
+                fabs, met, top = dp.fabrics(c, ids=part, read=False), dp.metres(c, part), dp.top_suppliers(c, part)
+            fabs = {code: dp.fabric_of(f) for code, f in fabs.items()}
             rows = []
             for code, f in fabs.items():
                 metres = float(met.get(f["id"]) or 0)
                 sel, problems = costing_choices(code, f["spec"], metres, m, ctx, patterns, supplier=top.get(f["id"]))
-                rows.append({"id": f["id"], "choices": sel, "problems": problems, "lists": fp, "metres": metres, "spec": f["spec_sha"]})
-            dp.set_choices(c, rows, _now())
+                rows.append({"id": f["id"], "choices": sel, "problems": problems, "lists": fp, "metres": metres, "spec": f["spec_sha"],
+                             "supplier": top.get(f["id"])})
+            with _job_tx(st, KIND) as c:
+                basis, met, top = dp.choices_basis(c, part), dp.metres(c, part), dp.top_suppliers(c, part)
+                still = [r for r in rows if r["id"] in basis and basis[r["id"]][3] == r["spec"] and abs(float(met.get(r["id"]) or 0) - r["metres"]) <= 1e-6
+                         and top.get(r["id"]) == r["supplier"]]
+                dp.set_choices(c, still, _now())
+            again += sorted({r["id"] for r in rows} - {r["id"] for r in still})
+        if not again:
+            return
+        todo = again
 
 
 def stale(st, fabric_ids=None):
@@ -737,8 +757,9 @@ def refresh_choices(wait=False):
             if ids:
                 recost(st, ids)
             _refresh["fp"] = fp
-        except Exception:
-            pass                    # the database not reachable: the next look tries again
+        except Exception:           # the database busy or not reachable: the next look tries again
+            print("RightPrice: the costing choices could not be worked out again; the next look tries again:\n"
+                  + traceback.format_exc(limit=8), file=sys.stderr, flush=True)
         finally:
             _refresh_lock.release()
     if wait:
@@ -807,16 +828,21 @@ def _load(st, uid):
     with _job_tx(st) as c:                                  # the signatures are worked out before the store is held for writing
         codes = set(dp.fabric_index(c)) | set(first)
     ready = fab_groups.signatures(specs, codes)
-    with _job_tx(st, KIND) as c:
-        held = dp.ids_of(c, list(first))
-        new_codes = [code for code in sorted(first, key=lambda x: (first[x], x)) if code not in held]
-        dp.add_fabrics(c, [{"code": code, "description": rd.texts.get(code, (None, ""))[1]} for code in new_codes], at)
-        old_text = {}
-        for part in dp._chunks(sorted(held.values())):            # a few hundred to a statement, however many codes
-            old_text.update(dict(c.all(f"SELECT code, description FROM fabric WHERE id IN {store._in(len(part))}", part)))
-        dp.set_fabrics(c, [{"id": held[code], "description": rd.texts[code][1]} for code in held
-                           if code in rd.texts and rd.texts[code][1] != old_text.get(code)], at)
-        rg = fab_groups.regroup(c, specs, first, set(new_codes), at, uid, ready)
+    new_codes, order = [], sorted(first, key=lambda x: (first[x], x))
+    for i in range(0, len(order), CHUNK):           # new codes added, and descriptions brought up to date, CHUNK at a time
+        these = order[i:i + CHUNK]
+        with _job_tx(st, KIND) as c:
+            held = dp.ids_of(c, these)
+            new = [code for code in these if code not in held]
+            dp.add_fabrics(c, [{"code": code, "description": rd.texts.get(code, (None, ""))[1]} for code in new], at)
+            old_text = {}
+            for part in dp._chunks(sorted(held.values())):        # a few hundred to a statement
+                old_text.update(dict(c.all(f"SELECT code, description FROM fabric WHERE id IN {store._in(len(part))}", part)))
+            dp.set_fabrics(c, [{"id": held[code], "description": rd.texts[code][1]} for code in held
+                               if code in rd.texts and rd.texts[code][1] != old_text.get(code)], at)
+        new_codes += new
+    rg = fab_groups.regroup(lambda write=None: _job_tx(st, write), specs, first, set(new_codes), at, uid, ready)
+    with _job_tx(st) as c:
         fabric_id = dp.ids_of(c, list(first))
     _status(uid, step="Writing the order lines", fabrics_new=len(new_codes), groups_new=rg["groups_new"])
 
@@ -1242,7 +1268,7 @@ def status():
 # (GP, 27 Nov 2026): from the purchase history; until the purchase file that came with the code has been loaded into
 # it, that file is read the same way as well (the history's lines win). A fabric whose lines are the pilot's own (no ZLOI,
 # nothing bought since) keeps the pilot's lines and choices (its should-cost follows the rates in use: rightcost.costs).
-_lines_memo = {"key": None, "val": None, "source": None}
+_lines_memo = {"hit": None}          # (key, bought_lines(), lines_source()), replaced whole
 _shipped_memo = {"key": None, "val": None}
 _sha_memo = {"key": None, "val": None}
 
@@ -1257,7 +1283,7 @@ def shipped_sha():
                 val = hashlib.sha256(f.read()).hexdigest()
         _sha_memo.update(key=key, val=val)
     return _sha_memo["val"]
-_rows_memo = {"key": None, "val": None, "running": False}
+_rows_memo = {"key": None, "val": None, "running": False, "asked": 0, "failing": False}
 _rows_lock = threading.Lock()
 
 
@@ -1290,11 +1316,17 @@ def bought_lines():
     they are the lines of the purchase file that came with the code, as the pilot was run on them; from the first file
     on, the purchase history's alone, as the price popup and the Fab group pages read them, so Right cost and the popup
     always read the same lines (the second review, 28 Nov 2026). lines_source() says which."""
+    return _bought()[0]
+
+
+def _bought():
+    """(bought_lines(), lines_source()) read together, from one reading."""
     st = store.get()
     dbv = st.version(KIND) if st.kind != "files" else None
     key = (dbv, common._mtime(pilot.PO_FILE), common._mtime(common.PILOT))
-    if _lines_memo["key"] == key:
-        return _lines_memo["val"]
+    hit = _lines_memo["hit"]
+    if hit is not None and hit[0] == key:
+        return hit[1], hit[2]
     codes = {str(r["Fabric code"]) for r in pilot_records()}
     held, zl, loaded, any_lines = [], [], False, False
     sha = shipped_sha()
@@ -1321,16 +1353,16 @@ def bought_lines():
     for code, po, item, day, typ, sup, qty, price in sorted(lines.values(), key=lambda x: (x[3], x[1], x[2])):
         by_code.setdefault(code, []).append((po, item, day, typ, sup, qty, price))
     val = (hashlib.sha256(repr(sorted(lines.values())).encode()).hexdigest(), by_code, sorted(outl.values(), key=lambda x: (x[3], x[1], x[2])))
-    _lines_memo.update(key=key, val=val, source={"history": any_lines, "shipped_loaded": loaded, "shipped_available": sha is not None})
-    return val
+    hit = (key, val, {"history": any_lines, "shipped_loaded": loaded, "shipped_available": sha is not None})
+    _lines_memo["hit"] = hit
+    return hit[1], hit[2]
 
 
 def lines_source():
     """Where Right cost's purchase-order rows come from: {"history": True once the purchase history holds a file (they
     come from it alone), "shipped_loaded": whether the purchase file that came with the code is among its files,
     "shipped_available": whether that file is on this server}."""
-    bought_lines()
-    return dict(_lines_memo["source"])
+    return dict(_bought()[1])
 
 
 def _outlier(code, po, item, day, sup, qty, price):
@@ -1338,21 +1370,26 @@ def _outlier(code, po, item, day, sup, qty, price):
 
 
 def _held_fabrics(codes):
-    """{code: (choices, problems, spec, the metres and the lists' fingerprint they were worked out on)} of the codes the
-    purchase history holds (its choices are what the price popup costs), kept until the history changes."""
+    """({code: (choices, problems, spec, the metres and the lists' fingerprint they were worked out on)}, their digest) of
+    the codes the purchase history holds (its choices are what the price popup costs), kept until the history changes.
+    The two are read together: a digest from another thread's newer read would let rows worked out on older choices pass
+    for up to date."""
     st = store.get()
     if st.kind == "files":
-        return {}
+        return {}, None
     key = st.version(KIND)
-    if _held_memo["key"] != key:
+    hit = _held_memo["hit"]
+    if hit is None or hit[0] != key:
         with st.tx() as c:
-            fabs = dp.fabrics(c, codes=sorted(codes))
+            fabs = dp.fabrics(c, codes=sorted(codes), read=False)
+        fabs = {code: dp.fabric_of(f) for code, f in fabs.items()}          # read once the store is free
         val = {code: (f["choices"], f["problems"], f["spec"], f["choices_metres"], f["choices_lists"]) for code, f in fabs.items()}
-        _held_memo.update(key=key, val=val, digest=hashlib.sha256(json.dumps(val, sort_keys=True, default=str).encode()).hexdigest())
-    return _held_memo["val"]
+        hit = (key, val, hashlib.sha256(json.dumps(val, sort_keys=True, default=str).encode()).hexdigest() if val else None)
+        _held_memo["hit"] = hit
+    return hit[1], hit[2]
 
 
-_held_memo = {"key": None, "val": None}
+_held_memo = {"hit": None}
 
 
 def _costed_on(sel):
@@ -1408,51 +1445,84 @@ def pilot_rows():
     key, by_code, src, fp, held = _rows_key()
     if _rows_memo["key"] == key:
         return _rows_memo["val"]
-    job = lambda: _work_rows(key, by_code, src, fp, held)
     if _rows_memo["val"] is None:           # the first time: worked out here, once (a request at the same time waits for it)
-        with _rows_lock:
+        with _first_lock:
             if _rows_memo["val"] is None:
-                job()
+                _work_rows(key, by_code, src, fp, held)
         return _rows_memo["val"]
-    # since then: worked out again in the background, one at a time, and the last complete answer served meanwhile, so no
-    # page waits for it (after a save to the rate master, every page waited half a minute: the stage 4 builder, 28 Nov)
-    with _rows_lock:
-        if not _rows_memo["running"]:
-            _rows_memo["running"] = True
-
-            def work():
-                try:
-                    job()
-                finally:
-                    _rows_memo["running"] = False
-                pilot_rows()                    # a further pass at once if the lines moved again meanwhile
-            threading.Thread(target=work, daemon=True, name="rightprice-purchase-order-rows").start()
+    # since then: worked out again in the background, and the last complete answer served meanwhile, so no page waits for
+    # it (after a save to the rate master, every page waited half a minute: the stage 4 builder, 28 Nov)
+    _bring_up_to_date()
     return _rows_memo["val"]
 
 
+_first_lock = threading.Lock()
+RETRY_ROWS = (2, 120)           # seconds before a failed pass is tried again: the first wait, doubled each time up to the second
+
+
 def _bring_up_to_date():
+    """Rows found stale: make sure a pass runs in this process. Every ask is counted, and the pass ends only when no ask
+    came while it worked and the rows rest on what is held now: an ask that comes as a pass ends is never lost (stale rows
+    with no pass running: the CI run of 4e1f6f0)."""
+    with _rows_lock:
+        _rows_memo["asked"] += 1
+        if _rows_memo["running"]:
+            return
+        _rows_memo["running"] = True
     try:
-        pilot_rows()
+        threading.Thread(target=_passes, daemon=True, name="rightprice-purchase-order-rows").start()
     except Exception:
-        pass                    # the next page to ask works it out
+        with _rows_lock:
+            _rows_memo["running"] = False
+        raise
+
+
+def _passes():
+    """The background passes: each works on what is held when it starts (never on what an earlier caller saw), and they go
+    on while the rows are stale or someone asked meanwhile. A pass that fails (the store busy or unreachable) is logged and
+    tried again after a wait, so stale rows always end up worked out."""
+    wait = RETRY_ROWS[0]
+    while True:
+        with _rows_lock:
+            asked = _rows_memo["asked"]
+        try:
+            key, by_code, src, fp, held = _rows_key()
+            if _rows_memo["key"] != key:
+                _work_rows(key, by_code, src, fp, held)
+            wait, _rows_memo["failing"] = RETRY_ROWS[0], False
+        except Exception:
+            _rows_memo["failing"] = True
+            print(f"RightPrice: Right cost's purchase-order rows could not be worked out; tried again in {wait} s:\n"
+                  + traceback.format_exc(limit=8), file=sys.stderr, flush=True)
+            time.sleep(wait)
+            wait = min(wait * 2, RETRY_ROWS[1])
+            continue
+        with _rows_lock:
+            if _rows_memo["asked"] == asked:
+                _rows_memo["running"] = False
+                return
+
+
+def rows_failing():
+    """Whether the last background pass of the purchase-order rows failed (it is being tried again)."""
+    return _rows_memo["failing"]
 
 
 def kick_right_cost():
-    """An upload read (or its disagreements settled): Right cost's purchase-order rows start on the new lines at once, in
-    the background, without waiting for a page to ask (the verdicts follow when one does)."""
-    threading.Thread(target=_bring_up_to_date, daemon=True, name="rightprice-purchase-order-rows-after-upload").start()
+    """An upload read (or its disagreements settled, or a held price counted): Right cost's purchase-order rows start on the
+    new lines at once, in the background, without waiting for a page to ask (the verdicts follow when one does)."""
+    _bring_up_to_date()
 
 
 def _rows_key():
     """(key, lines by code, where they come from, the lists' fingerprint, the history's choices): what the purchase-order
     rows rest on now. Each part is kept until what it reads changes, so this is quick."""
-    digest, by_code, _ = bought_lines()
-    src = lines_source()
+    (digest, by_code, _), src = _bought()          # the lines and where they come from, of one reading
     fp = lists_fingerprint()
     st = store.get()
     codes = {str(r["Fabric code"]) for r in pilot_records()}
-    held = _held_fabrics(codes)
-    key = (digest, st.version("rates"), common._mtime(common.PILOT), _held_memo.get("digest") if held else None, common._mtime(pilot.PLM_SPECS),
+    held, held_digest = _held_fabrics(codes)
+    key = (digest, st.version("rates"), common._mtime(common.PILOT), held_digest, common._mtime(pilot.PLM_SPECS),
            src["history"], src["shipped_loaded"], fp)
     return key, by_code, src, fp, held
 
@@ -1460,84 +1530,104 @@ def _rows_key():
 def rows_up_to_date(key):
     """Whether purchase-order rows with this key (pilot_rows()[0]) rest on what is held now: worked out afresh for the
     caller's own rows, never read from a flag another thread could have set meanwhile (the CI run of d438c21: a verdict
-    thread asking for the rows at the moment new ones were ready let a page take the old ones for up to date)."""
-    return key == _rows_key()[0]
+    thread asking for the rows at the moment new ones were ready let a page take the old ones for up to date). Rows found
+    stale are being brought up to date when this returns: what is held may have moved since the caller got them."""
+    now = _rows_key()[0]
+    if key == now:
+        return True
+    if _rows_memo["key"] != now:
+        _bring_up_to_date()
+    return False
 
 
 def _work_rows(key, by_code, src, fp, held):
-    """pilot_rows' work: every pilot fabric's row worked out on these lines, this history and these lists."""
+    """pilot_rows' work: every pilot fabric's row worked out on these lines, this history and these lists. A row whose
+    lines and choices are as at the last pass, on the same rates, pilot, PLM list and lists, is that pass's row: after an
+    upload only the codes it touched are worked out again (all of them took minutes on a slow machine, the stage 4 run
+    of 28 Nov; a rate edit still works out every row)."""
     m = common.get_masters()
     patterns, contents = masters.lists(m)["Pattern"], list(yarn_seed.CONTENTS)
     ctx, specs = pilot.inputs_context(m), plm_specs()
     group_of = m["Weaves"].set_index("Weave")["Weave group"]
-    out = []
-    for r in pilot_records():
+    on = (common._mtime(common.PILOT), common._mtime(pilot.PLM_SPECS), src["history"], src["shipped_loaded"], fp)
+    last_m, last_on, last = _row_memo["hit"]
+    last = last if last_m is m and last_on == on else {}
+    out, now = [], {}
+    for i, r in enumerate(pilot_records()):
         code = str(r["Fabric code"])
-        ls = by_code.get(code, [])
-        regular = [x for x in ls if x[3] not in OUTLIER_TYPES]
-        zl = [_outlier(code, po, item, day, sup, qty, price) for po, item, day, typ, sup, qty, price in ls if typ in OUTLIER_TYPES]
-        metres = sum(x[5] for x in regular)
-        value = sum(x[5] * x[6] for x in regular)
-        price = round(value / metres, 2) if metres else None
-        h = held.get(code)
-        if h is not None and h[3] is not None and abs(h[3] - metres) < 1e-6 and h[4] == fp:
-            sel, problems = h[0], h[1]
-        else:                   # not held, or held choices not worked out on these metres or these lists: worked out here
-            if h is not None and h[4] != fp and _refresh["fp"] != fp:
-                refresh_choices()               # and the history's are worked out again in the background
-            sel, problems = costing_choices(code, h[2] if h is not None else specs.get(code), metres, m, ctx, patterns)
-        # the choices Right cost opens in Cost a fabric: with the row's supplier as written (the pilot's, or the one most of
-        # its metres were bought from) and the price paid
-        quoted = lambda s, sup: None if s is None else dict(s, Supplier=sup, **({"Quoted price (Rs/m)": price} if price is not None else {}))
-        pilots = rightcost._pilot_choices(dict(r, **{"PO price Rs/m": None}), patterns, contents)
-        same = (not zl and len(regular) == r["PO lines"] and abs(metres - float(r["PO metres"] or 0)) < 1e-6
-                and price is not None and r["PO price Rs/m"] is not None and abs(price - round(float(r["PO price Rs/m"]), 2)) < 0.005
-                and _costed_on(sel) == _costed_on(pilots))
-        if same:
-            out.append(dict(r, **{"Costing choices": quoted(sel, r["Supplier"]), "Outliers (ZLOI)": [], "Worked out again": None}))
-            continue
-        nr = dict(r)
-        band, slab = quantity_terms(r["Route"], metres, m)
-        top = {}
-        for x in regular:
-            top[x[4]] = top.get(x[4], 0) + x[5]
-        why = [("ZLOI lines left out (the pilot's figures included them)" if zl else "purchases since the pilot")] if (zl or len(regular) != r["PO lines"] or abs(metres - float(r["PO metres"] or 0)) >= 1e-6
-                                                                                  or price is None or abs(price - round(float(r["PO price Rs/m"] or 0), 2)) >= 0.005) else []
-        if _costed_on(sel) != _costed_on(pilots):     # what differs, never why (its specification or the rate master's lists)
-            why.append(("costed on choices that differ from the pilot's: " + _differs(_costed_on(pilots), _costed_on(sel))) if sel
-                       else "not costed now: " + "; ".join(problems or ["no costing choices"]))
-        if not ls and src["history"]:           # the purchase history holds files, and none has this code
-            why[:1] = [NOT_IN_HISTORY + ("" if src["shipped_loaded"] else NOT_LOADED)]
-        sup = max(top, key=lambda s: (top[s], s)) if top else r["Supplier"]
-        nr.update({"PO metres": metres or None, "PO price Rs/m": price, "PO lines": len(regular), "Rate card quantity": band, "Order size": slab,
-                   "Supplier": sup, "Outliers (ZLOI)": zl, "Costing choices": quoted(sel, sup),
-                   "Worked out again": "; ".join(why) + ("; no other purchase, so no price paid" if not regular and ls else "")})
-        if sel is None:                         # nothing to cost: the row says why, with no should-cost
-            nr.update({"Should-cost Rs/m": None, "Should-cost Rs/kg": None, "PO minus should-cost Rs/m": None, "PO above should-cost %": None, "Excess Rs": None})
-            nr.update(_spec_columns(h[2] if h is not None else specs.get(code)))      # its construction now, not the pilot's
-            nr.update({k: None for k in nr if k.endswith(" Rs/m") and k != "PO price Rs/m"})
-            nr["Placeholder rates used"] = None
-            out.append(nr)
-            continue
-        if _costed_on(sel) != _costed_on(pilots):       # the row's construction follows its choices
-            nr.update({col: sel.get(k) for col, k in FROM_CHOICES.items()})
-            nr["Weave group"] = group_of.get(sel.get("Weave"), r["Weave group"])
-            nr.update({"Rate card quantity": sel.get("Rate card quantity"), "Order size": sel.get("Order size")})
-        try:
-            res = masters.cost(quoted(sel, sup), m)
-        except Exception as e:                  # a choice no longer on today's lists
-            nr["Worked out again"] += f"; not costed on today's rates: {e}"
-            out.append(nr)
-            continue
-        nr.update({"Should-cost Rs/m": round(res["total_per_m"], 2), "Should-cost Rs/kg": round(res["per_kg"], 1), "GSM": round(res["gsm"], 1),
-                   "Placeholder rates used": ", ".join(res["placeholders"]) or None})
-        for b in res["buckets"]:
-            nr[f"{b['name']} Rs/m"] = round(b["amount"], 2)
-        gap = None if price is None else round(price - res["total_per_m"], 2)
-        nr.update({"PO minus should-cost Rs/m": gap, "PO above should-cost %": None if gap is None else round((price / res["total_per_m"] - 1) * 100, 1),
-                   "Excess Rs": None if gap is None else gap * metres})
-        out.append(nr)
+        ls, h = by_code.get(code, []), held.get(code)
+        if h is not None and h[4] != fp and _refresh["fp"] != fp:
+            refresh_choices()                   # the history's choices worked out again in the background
+        inputs = (repr(ls), repr(h))
+        row = last[i][1] if i in last and last[i][0] == inputs else _one_row(r, code, ls, h, m, patterns, contents, ctx, specs, group_of, src, fp)
+        now[i] = (inputs, row)
+        out.append(row)
+    _row_memo["hit"] = (m, on, now)
     _rows_memo.update(key=key, val=(key, out))
+
+
+_row_memo = {"hit": (None, None, {})}     # (the rate master, what every row rests on, {pilot row: (its inputs, its row)})
+
+
+def _one_row(r, code, ls, h, m, patterns, contents, ctx, specs, group_of, src, fp):
+    """One pilot fabric's purchase-order row (_work_rows)."""
+    regular = [x for x in ls if x[3] not in OUTLIER_TYPES]
+    zl = [_outlier(code, po, item, day, sup, qty, price) for po, item, day, typ, sup, qty, price in ls if typ in OUTLIER_TYPES]
+    metres = sum(x[5] for x in regular)
+    value = sum(x[5] * x[6] for x in regular)
+    price = round(value / metres, 2) if metres else None
+    if h is not None and h[3] is not None and abs(h[3] - metres) < 1e-6 and h[4] == fp:
+        sel, problems = h[0], h[1]
+    else:                   # not held, or held choices not worked out on these metres or these lists: worked out here
+        sel, problems = costing_choices(code, h[2] if h is not None else specs.get(code), metres, m, ctx, patterns)
+    # the choices Right cost opens in Cost a fabric: with the row's supplier as written (the pilot's, or the one most of
+    # its metres were bought from) and the price paid
+    quoted = lambda s, sup: None if s is None else dict(s, Supplier=sup, **({"Quoted price (Rs/m)": price} if price is not None else {}))
+    pilots = rightcost._pilot_choices(dict(r, **{"PO price Rs/m": None}), patterns, contents)
+    same = (not zl and len(regular) == r["PO lines"] and abs(metres - float(r["PO metres"] or 0)) < 1e-6
+            and price is not None and r["PO price Rs/m"] is not None and abs(price - round(float(r["PO price Rs/m"]), 2)) < 0.005
+            and _costed_on(sel) == _costed_on(pilots))
+    if same:
+        return dict(r, **{"Costing choices": quoted(sel, r["Supplier"]), "Outliers (ZLOI)": [], "Worked out again": None})
+    nr = dict(r)
+    band, slab = quantity_terms(r["Route"], metres, m)
+    top = {}
+    for x in regular:
+        top[x[4]] = top.get(x[4], 0) + x[5]
+    why = [("ZLOI lines left out (the pilot's figures included them)" if zl else "purchases since the pilot")] if (zl or len(regular) != r["PO lines"] or abs(metres - float(r["PO metres"] or 0)) >= 1e-6
+                                                                              or price is None or abs(price - round(float(r["PO price Rs/m"] or 0), 2)) >= 0.005) else []
+    if _costed_on(sel) != _costed_on(pilots):     # what differs, never why (its specification or the rate master's lists)
+        why.append(("costed on choices that differ from the pilot's: " + _differs(_costed_on(pilots), _costed_on(sel))) if sel
+                   else "not costed now: " + "; ".join(problems or ["no costing choices"]))
+    if not ls and src["history"]:           # the purchase history holds files, and none has this code
+        why[:1] = [NOT_IN_HISTORY + ("" if src["shipped_loaded"] else NOT_LOADED)]
+    sup = max(top, key=lambda s: (top[s], s)) if top else r["Supplier"]
+    nr.update({"PO metres": metres or None, "PO price Rs/m": price, "PO lines": len(regular), "Rate card quantity": band, "Order size": slab,
+               "Supplier": sup, "Outliers (ZLOI)": zl, "Costing choices": quoted(sel, sup),
+               "Worked out again": "; ".join(why) + ("; no other purchase, so no price paid" if not regular and ls else "")})
+    if sel is None:                         # nothing to cost: the row says why, with no should-cost
+        nr.update({"Should-cost Rs/m": None, "Should-cost Rs/kg": None, "PO minus should-cost Rs/m": None, "PO above should-cost %": None, "Excess Rs": None})
+        nr.update(_spec_columns(h[2] if h is not None else specs.get(code)))      # its construction now, not the pilot's
+        nr.update({k: None for k in nr if k.endswith(" Rs/m") and k != "PO price Rs/m"})
+        nr["Placeholder rates used"] = None
+        return nr
+    if _costed_on(sel) != _costed_on(pilots):       # the row's construction follows its choices
+        nr.update({col: sel.get(k) for col, k in FROM_CHOICES.items()})
+        nr["Weave group"] = group_of.get(sel.get("Weave"), r["Weave group"])
+        nr.update({"Rate card quantity": sel.get("Rate card quantity"), "Order size": sel.get("Order size")})
+    try:
+        res = masters.cost(quoted(sel, sup), m)
+    except Exception as e:                  # a choice no longer on today's lists
+        nr["Worked out again"] += f"; not costed on today's rates: {e}"
+        return nr
+    nr.update({"Should-cost Rs/m": round(res["total_per_m"], 2), "Should-cost Rs/kg": round(res["per_kg"], 1), "GSM": round(res["gsm"], 1),
+               "Placeholder rates used": ", ".join(res["placeholders"]) or None})
+    for b in res["buckets"]:
+        nr[f"{b['name']} Rs/m"] = round(b["amount"], 2)
+    gap = None if price is None else round(price - res["total_per_m"], 2)
+    nr.update({"PO minus should-cost Rs/m": gap, "PO above should-cost %": None if gap is None else round((price / res["total_per_m"] - 1) * 100, 1),
+               "Excess Rs": None if gap is None else gap * metres})
+    return nr
 
 
 def _held_view(r):
