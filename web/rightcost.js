@@ -513,15 +513,33 @@ function cardView(rows) {
   grid.addEventListener("scroll", () => { if (grid.scrollTop + grid.clientHeight > grid.scrollHeight - 80 && state.shown < rows.length) { const t = grid.scrollTop; state.shown += CONFIG.pageSize; render(); const g = $(".cards"); if (g) g.scrollTop = t; } });
   return grid;
 }
+// SUPPLIER COUNTS: what the Suppliers tab counts for each mill, as /api/suppliers counts it (rules/supplier.py): a
+// purchase-order code only with a price paid (one bought only on ZLOI orders is listed apart, never counted: GP, 27 Nov
+// 2026); a fabric-list row unless it repeats another. check_server.py runs this function on the server's rows and
+// compares it with /api/suppliers.
+function supplierCounts(rows) {
+  const by = {};
+  for (const r of rows) {
+    const x = by[r.mill || "(none)"] = by[r.mill || "(none)"] || { counted: [], zloi: [] };
+    if (r.source === "Purchase orders" ? r.price !== null && r.price !== undefined : !r.duplicate_of) x.counted.push(r);
+    else if (r.source === "Purchase orders" && (r.outliers || []).length) x.zloi.push(r);
+  }
+  return by;
+}
+// END SUPPLIER COUNTS
 function suppliersTab(rows) {
   if (!rows.length) return h("div", { class: "empty" }, "No records to view");
-  const by = {};
-  for (const r of rows) { const s = r.mill || "(none)"; (by[s] = by[s] || []).push(r); }
+  const by = supplierCounts(rows);
   const nameOf = rs => { const n = {}; rs.forEach(r => { if (r.supplier) n[r.supplier] = (n[r.supplier] || 0) + 1; }); return (Object.entries(n).sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)[0] || ["(no supplier)"])[0]; };
-  const list = Object.entries(by).map(([k, rs]) => { const m = rs.filter(r => r.metres && r.price && r.should && !r.duplicate_of); const met = m.reduce((a, r) => a + r.metres, 0); return { k, s: nameOf(rs), n: rs.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" && !r.duplicate_of).length, high: rs.filter(r => r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
-  return h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier (opens its page)", "Fabrics", "Metres", "Price Rs/m (average over metres)", "Should-cost Rs/m", "Price above (average over metres)", "Above range (Push)", "Look high, tool unsure", "Other unsure", ""].map((t, i) => h("th", { class: i && i < 9 ? "n" : "" }, t)))),
-    h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, x.k === "(none)" ? x.s : h("button", { type: "button", class: "code", onclick: () => { location.hash = "#supplier/" + encodeURIComponent(x.k); } }, x.s)), h("td", { class: "n" }, n0(x.n)), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.high)), h("td", { class: "n" }, n0(x.unsure)),
-      h("td", {}, h("button", { type: "button", class: "btn line", style: "height:26px;font-size:12px", onclick: () => { state.filters.mill = [x.k]; state.tab = "items"; rerunWithSkeleton(); } }, "In the list")))))));
+  const list = Object.entries(by).filter(([, x]) => x.counted.length).map(([k, x]) => { const rs = x.counted, m = rs.filter(r => r.metres && r.price && r.should && !r.duplicate_of); const met = m.reduce((a, r) => a + r.metres, 0); return { k, s: nameOf(rs.concat(x.zloi)), n: rs.length, zloi: x.zloi.length, met, paid: met ? m.reduce((a, r) => a + r.price * r.metres, 0) / met : null, should: met ? m.reduce((a, r) => a + r.should * r.metres, 0) / met : null, above: rs.filter(r => r.band === "Push" && !r.duplicate_of).length, high: rs.filter(r => r.band === "Ask break-up, above range").length, unsure: rs.filter(r => r.band === "Ask break-up").length }; }).sort((a, b) => b.n - a.n);
+  const zOnly = Object.entries(by).filter(([, x]) => !x.counted.length && x.zloi.length).map(([k, x]) => ({ k, s: nameOf(x.zloi), n: x.zloi.length })).sort((a, b) => b.n - a.n);
+  const anyZ = list.some(x => x.zloi) || zOnly.length;
+  const millLink = x => x.k === "(none)" ? x.s : h("button", { type: "button", class: "code", onclick: () => { location.hash = "#supplier/" + encodeURIComponent(x.k); } }, x.s);
+  return h("div", {}, list.length ? h("div", { class: "gridscroll" }, h("table", { class: "grid", style: { width: "100%" } }, h("thead", {}, h("tr", {}, ["Supplier (opens its page)", "Fabrics", "Metres", "Price Rs/m (average over metres)", "Should-cost Rs/m", "Price above (average over metres)", "Above range (Push)", "Look high, tool unsure", "Other unsure", ""].map((t, i) => h("th", { class: i && i < 9 ? "n" : "" }, t)))),
+    h("tbody", {}, list.map(x => h("tr", {}, h("td", {}, millLink(x)), h("td", { class: "n" }, n0(x.n), x.zloi ? h("div", { class: "muted", style: "font-size:11px" }, `+ ${n0(x.zloi)} ZLOI only, not counted`) : null), h("td", { class: "n" }, n0(x.met)), h("td", { class: "n" }, n2(x.paid)), h("td", { class: "n" }, n2(x.should)), h("td", { class: "n" }, x.paid ? pc((x.paid / x.should - 1) * 100) : ""), h("td", { class: "n" }, n0(x.above)), h("td", { class: "n" }, n0(x.high)), h("td", { class: "n" }, n0(x.unsure)),
+      h("td", {}, h("button", { type: "button", class: "btn line", style: "height:26px;font-size:12px", onclick: () => { state.filters.mill = [x.k]; state.tab = "items"; rerunWithSkeleton(); } }, "In the list"))))))) : h("div", { class: "empty" }, "No fabric bought (with a price paid) or quoted among these rows"),
+    anyZ ? h("p", { class: "muted", style: "margin-top:10px;font-size:12px" }, "A fabric bought only on ZLOI orders (letters of intent) is not counted as bought: it has no price paid (GP, 27 Nov 2026); its mill's page lists it apart." +
+      (zOnly.length ? " Bought only on ZLOI orders, so not in the table: " : ""), zOnly.map((x, i) => [i ? ", " : "", millLink(x), ` (${n0(x.n)} ${x.n === 1 ? "fabric" : "fabrics"})`])) : null);
 }
 
 // ------------------------------------------------------------------ supplier page: one mill, for the meeting with it
@@ -622,12 +640,12 @@ function renderSelbar() {
 function fields(r) {
   return [["Fabric code", r.code], ["Source", r.source], ["Description", r.description], ["Supplier", r.supplier], ["Route", r.route], ["Weave", r.weave], ["Weave group", r.weave_group],
     ["Finish", r.finish], ["Pattern", r.pattern], ["Warp yarn", r.warp], ["Weft yarn", r.weft], ["EPI × PPI", r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : ""], ["Finished width (in)", r.width],
-    ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", r.source === "Purchase orders" && r.price === null && (r.outliers || []).length ? "None: bought only on ZLOI orders (see Outliers below)" : n2(r.price)],
+    ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", r.source === "Purchase orders" && r.price === null && (r.outliers || []).length ? "None: bought only on ZLOI orders (see Outliers below)" : r.source === "Purchase orders" && r.price === null && /^not in the purchase history/.test(r.worked_out_again || "") ? "None: not in the purchase history (see Worked out again)" : n2(r.price)],
     ["Against should-cost", r.price && r.gap !== null && r.gap !== undefined ? `Rs ${n2(Math.abs(r.gap))} ${r.gap >= 0 ? "above" : "below"} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
     [r.source === "Purchase orders" ? "Paid against should-cost, Rs" : "Quote against should-cost, Rs (not paid)", r.excess === null || r.excess === undefined ? "" : `${n0(Math.abs(r.excess))} ${r.excess >= 0 ? "above" : "below"}`],
     ["Duplicate of", r.duplicate_of || ""], ["Fab group", r.fab_group ? `${r.fab_group}: ${r.fab_group_name}` : r.fab_group_name ? "Not grouped: " + r.fab_group_name : ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
     ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")],
-    ["Worked out again", r.worked_out_again ? `From the purchase lines: ${r.worked_out_again} (the pilot's figures included them)` : ""], ["Outliers (ZLOI)", (r.outliers || []).length ? `${r.outliers.length}, left out of every figure (listed below)` : ""]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
+    ["Worked out again", r.worked_out_again ? (/^not in the purchase history/.test(r.worked_out_again) ? r.worked_out_again.charAt(0).toUpperCase() + r.worked_out_again.slice(1) : `From the purchase lines: ${r.worked_out_again} (the pilot's figures included them)`) : ""], ["Outliers (ZLOI)", (r.outliers || []).length ? `${r.outliers.length}, left out of every figure (listed below)` : ""]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
   document.querySelectorAll(".side").forEach(e => e.remove());

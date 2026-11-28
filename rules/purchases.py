@@ -324,7 +324,9 @@ _plm = {"key": None, "rows": None}
 
 
 def plm_specs():
-    """{material code: its row of data/plm_specs_for_po.csv, as received}, read again only when the file changes."""
+    """{material code: its row of the PLM extract deployed with the code (pilot.PLM_SPECS: data/plm_specs_for_po.csv in the
+    code's own folder, not the data folder; a corrected extract goes in with a code change), as received}, read again only
+    when the file changes."""
     key = common._mtime(pilot.PLM_SPECS)
     if _plm["key"] != key or _plm["rows"] is None:
         rows = {}
@@ -835,9 +837,13 @@ def uploads():
     """The uploads, newest first, with where each stands; and what the purchase history holds."""
     st = need_db()
     resume()
+    sha = shipped_sha()
     with st.tx() as c:
         ups, counts = dp.uploads(c), dp.counts(c)
-    return {"uploads": ups, "counts": counts, "shipped": {"name": SHIPPED_NAME, "available": os.path.exists(pilot.PO_FILE)},
+        history = c.one("SELECT count(*) FROM purchase_line")[0] > 0
+        loaded = sha is not None and dp.shipped_loaded(c, sha)
+    # Right cost's purchase-order rows: the file that came with the code until the history holds a file, then the history's
+    return {"uploads": ups, "counts": counts, "shipped": {"name": SHIPPED_NAME, "available": sha is not None, "loaded": loaded, "history": history},
             "who_may": "Uploading and merging are admin actions (rules/access.py: do:upload_purchases, do:merge_groups)."}
 
 
@@ -984,8 +990,21 @@ def status():
 # (GP, 27 Nov 2026): from the purchase history; until the purchase file that came with the code has been loaded into
 # it, that file is read the same way as well (the history's lines win). A fabric whose lines are the pilot's own (no ZLOI,
 # nothing bought since) keeps the pilot's figures exactly.
-_lines_memo = {"key": None, "val": None}
+_lines_memo = {"key": None, "val": None, "source": None}
 _shipped_memo = {"key": None, "val": None}
+_sha_memo = {"key": None, "val": None}
+
+
+def shipped_sha():
+    """The SHA-256 of the purchase file that came with the code (None when it is not on this server), kept until it changes."""
+    key = common._mtime(pilot.PO_FILE)
+    if _sha_memo["key"] != key:
+        val = None
+        if key is not None:
+            with open(pilot.PO_FILE, "rb") as f:
+                val = hashlib.sha256(f.read()).hexdigest()
+        _sha_memo.update(key=key, val=val)
+    return _sha_memo["val"]
 _rows_memo = {"key": None, "val": None}
 
 
@@ -1014,7 +1033,10 @@ def pilot_records():
 def bought_lines():
     """(key, {code: [(po, item, date, type, supplier, qty, price)]} for the pilot's codes, [ZLOI lines of every code as
     (code, po, item, date, type, supplier, qty, price)]): the order lines counted as bought, ZLOI included and flagged
-    by their type. The key changes when they do."""
+    by their type. The key changes when they do. Before any file is in the purchase history (and on the files store),
+    they are the lines of the purchase file that came with the code, as the pilot was run on them; from the first file
+    on, the purchase history's alone, as the price popup and the Fab group pages read them, so Right cost and the popup
+    always read the same lines (the second review, 28 Nov 2026). lines_source() says which."""
     st = store.get()
     dbv = st.version(KIND) if st.kind != "files" else None
     key = (dbv, common._mtime(pilot.PO_FILE), common._mtime(common.PILOT))
@@ -1022,7 +1044,7 @@ def bought_lines():
         return _lines_memo["val"]
     codes = {str(r["Fabric code"]) for r in pilot_records()}
     held, zl, loaded, any_lines = [], [], False, False
-    sha, base = _shipped() if os.path.exists(pilot.PO_FILE) else (None, [])
+    sha = shipped_sha()
     if st.kind != "files":
         with st.tx() as c:
             any_lines = c.one("SELECT count(*) FROM purchase_line")[0] > 0
@@ -1030,13 +1052,9 @@ def bought_lines():
                 loaded = sha is not None and dp.shipped_loaded(c, sha)
                 held = dp.lines_for_codes(c, codes)
                 zl = dp.outlier_lines(c)
-                base_keys = {(l.po, l.item) for l in base} if not loaded else set()
-                over = dp.lines_by_key(c, list(base_keys)) if base_keys else {}
     lines, outl = {}, {}
-    if not loaded:                      # the file that came with the code, under whatever the history holds
-        for l in base:
-            if any_lines and (l.po, l.item) in over:
-                continue
+    if not any_lines:                   # nothing in the purchase history yet: the file that came with the code
+        for l in (_shipped()[1] if sha is not None else []):
             if l.code in codes:
                 lines[(l.po, l.item)] = (l.code, l.po, l.item, l.date, l.type, l.supplier, float(l.qty), float(l.price))
             if l.type in OUTLIER_TYPES:
@@ -1050,8 +1068,16 @@ def bought_lines():
     for code, po, item, day, typ, sup, qty, price in sorted(lines.values(), key=lambda x: (x[3], x[1], x[2])):
         by_code.setdefault(code, []).append((po, item, day, typ, sup, qty, price))
     val = (hashlib.sha256(repr(sorted(lines.values())).encode()).hexdigest(), by_code, sorted(outl.values(), key=lambda x: (x[3], x[1], x[2])))
-    _lines_memo.update(key=key, val=val)
+    _lines_memo.update(key=key, val=val, source={"history": any_lines, "shipped_loaded": loaded, "shipped_available": sha is not None})
     return val
+
+
+def lines_source():
+    """Where Right cost's purchase-order rows come from: {"history": True once the purchase history holds a file (they
+    come from it alone), "shipped_loaded": whether the purchase file that came with the code is among its files,
+    "shipped_available": whether that file is on this server}."""
+    bought_lines()
+    return dict(_lines_memo["source"])
 
 
 def _outlier(code, po, item, day, sup, qty, price):
@@ -1087,6 +1113,30 @@ FROM_CHOICES = {"Route": "Route", "Weave": "Weave", "Finish": "Finish", "Warp ya
                 "Weft (yarn dyed)": "Weft (yarn dyed)"}
 
 
+def _spec_columns(spec):
+    """A row that is not costed now, as its PLM specification has it now (blank where the specification is): so it never
+    shows the pilot's construction beside "not costed now" (the second review, 28 Nov 2026)."""
+    if not spec:
+        return {}
+    s = fab_groups.short_spec(spec)
+    try:
+        epi, ppi, width = pilot.plm_numbers(s)
+    except KeyError:
+        epi = ppi = width = 0
+    text = lambda k: (s.get(k) or "").strip() or None
+    dye = text("dyemethod_name")
+    return {"Route": pilot.PLM_ROUTE.get((dye or "").lower(), dye), "Weave": text("weavetype_name"),
+            "Weave group": grouping.weave_group(text("weavetype_name") or "") if text("weavetype_name") else None,
+            "Finish": text("finish_name"), "Warp yarn": text("warpcount"), "Weft yarn": text("weftcount"), "Weft (yarn dyed)": None,
+            "EPI": epi if epi > 20 else None, "PPI": ppi if ppi > 20 else None, "Finished width (in)": round(width, 1) if 30 <= width <= 130 else None,
+            "PLM pattern": text("pattern_name"), "Print method": None, "GSM": None}
+
+
+NOT_IN_HISTORY = "not in the purchase history, so no price paid"
+NOT_LOADED = (": the purchase file that came with the code (the pilot's purchases, 1 Aug to 23 Nov 2026) is not loaded, and Right "
+              "cost reads the purchase history alone once it holds a file (Purchase files loads it)")
+
+
 def pilot_rows():
     """(key, rows): the pilot's purchase-order fabrics with their price paid, metres, quantity band, should-cost and gap
     worked out again from the lines bought, ZLOI left out, and costed on the choices the price popup costs: the purchase
@@ -1095,6 +1145,7 @@ def pilot_rows():
     again" (why, or None when the pilot's own figures stand: the same lines and the same choices). Kept until the lines,
     the rates, the history or the PLM list change."""
     digest, by_code, _ = bought_lines()
+    src = lines_source()
     st = store.get()
     codes = {str(r["Fabric code"]) for r in pilot_records()}
     held = _held_fabrics(codes)
@@ -1136,11 +1187,16 @@ def pilot_rows():
                                                                                   or price is None or abs(price - round(float(r["PO price Rs/m"] or 0), 2)) >= 0.005) else []
         if _costed_on(sel) != _costed_on(pilots):
             why.append("its PLM specification changed since the pilot" if sel else "not costed now: " + "; ".join(problems or ["no costing choices"]))
+        if not ls and src["history"]:           # the purchase history holds files, and none has this code
+            why[:1] = [NOT_IN_HISTORY + ("" if src["shipped_loaded"] else NOT_LOADED)]
         nr.update({"PO metres": metres or None, "PO price Rs/m": price, "PO lines": len(regular), "Rate card quantity": band, "Order size": slab,
                    "Supplier": max(top, key=lambda s: (top[s], s)) if top else r["Supplier"], "Outliers (ZLOI)": zl, "Costing choices": quoted(sel),
-                   "Worked out again": "; ".join(why) + ("; no other purchase, so no price paid" if not regular else "")})
+                   "Worked out again": "; ".join(why) + ("; no other purchase, so no price paid" if not regular and ls else "")})
         if sel is None:                         # nothing to cost: the row says why, with no should-cost
             nr.update({"Should-cost Rs/m": None, "Should-cost Rs/kg": None, "PO minus should-cost Rs/m": None, "PO above should-cost %": None, "Excess Rs": None})
+            nr.update(_spec_columns(h[2] if h is not None else specs.get(code)))      # its construction now, not the pilot's
+            nr.update({k: None for k in nr if k.endswith(" Rs/m") and k != "PO price Rs/m"})
+            nr["Placeholder rates used"] = None
             out.append(nr)
             continue
         if _costed_on(sel) != _costed_on(pilots):       # the row's construction follows its choices

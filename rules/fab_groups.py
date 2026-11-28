@@ -208,6 +208,24 @@ def _changed(a, b):
     return "; ".join(out)
 
 
+def _own(v):
+    """A code's own fields (its own width, not the span of its group), or None when it is not grouped."""
+    return {k: (v.get("own_width") if k == "width_in" else v["fields"][k]) for k in FIELDS} if v.get("fields") else None
+
+
+def _widths_moved(f, v, now, new_codes):
+    """Why a code whose specification did not change moved, when only the widths it is grouped with changed: a new code
+    joined them (its widths now meet another group's), or codes of other widths joined or left. None otherwise."""
+    if not f["signature"] or not v["sig"] or _rest(f["signature"]) != _rest(v["sig"]):
+        return None
+    lo, hi = v["fields"]["width_in"], v["fields"].get("width_to") or v["fields"]["width_in"]
+    joined = sorted((x["own_width"], code) for code, x in now.items() if code in new_codes and x["sig"] == v["sig"])
+    if joined:
+        return (f"a new code joined the widths ({', '.join(f'{code} at {w:g} in' for w, code in joined[:3])}"
+                f"{f' and {len(joined) - 3} more' if len(joined) > 3 else ''}): its group now runs {lo:g} to {hi:g} in")
+    return f"codes of other widths joined or left: its group now runs {lo:g} to {hi:g} in"
+
+
 def signatures(specs, codes):
     """What regroup() needs of each code the PLM list has, worked out before its transaction (so the store is held only
     for the writing): {code: {spec, sha, fields, sig, why}}."""
@@ -305,9 +323,17 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
             change.update(fab_group_id=to)
             if code not in new_codes:
                 spec_changed = v["sha"] != f["spec_sha"]
-                why = (("its PLM specification is now complete" if f["fab_group_id"] is None else "its PLM specification changed")
-                       if spec_changed and to is not None else
-                       (f"its PLM specification changed: {v['why']}" if to is None else "the way its fields are tidied changed"))
+                if to is None:
+                    why = f"its PLM specification changed: {v['why']}"
+                elif spec_changed and f["fab_group_id"] is None:
+                    why = "its PLM specification is now complete"
+                elif spec_changed:                   # what changed, as for a code that stays in its group
+                    what = _changed(signature_of(before.get(f["id"]))[0], _own(v))
+                    widths = None if what else _widths_moved(f, v, now, new_codes)
+                    why = ("its PLM specification changed" + (f": {what}" if what else " (not in its Fab group's fields)") + "; costed again"
+                           + (f"; {widths}" if widths else ""))
+                else:
+                    why = _widths_moved(f, v, now, new_codes) or "the way its fields are tidied changed"
                 moves.append((f["id"], f["fab_group_id"], to, why))
         if v["sig"] != f["signature"]:
             change["signature"] = v["sig"]
@@ -318,9 +344,7 @@ def regroup(c, specs, first_seen, new_codes, at, upload_id, ready=None):
             if f["spec_sha"]:
                 respecified.append(f["id"])
                 if to == f["fab_group_id"]:          # it stays in its group: the change is recorded beside it all the same
-                    old = signature_of(before.get(f["id"]))[0]
-                    new = {k: (v.get("own_width") if k == "width_in" else v["fields"][k]) for k in FIELDS} if v["fields"] else None
-                    what = _changed(old, new) if old and new else ""
+                    what = _changed(signature_of(before.get(f["id"]))[0], _own(v))
                     moves.append((f["id"], f["fab_group_id"], to, "its PLM specification changed" + (f": {what}" if what else
                                                                                                     " (not in its Fab group's fields)") + "; costed again"))
         if change:
