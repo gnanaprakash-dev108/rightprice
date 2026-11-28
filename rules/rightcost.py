@@ -18,7 +18,7 @@ import store
 import yarn_seed
 
 
-_costs_memo = {"key": None, "val": None}
+_costs_memo = {"key": None, "val": None, "ask": None}
 
 
 def _pilot_choices(r, patterns, contents):
@@ -147,7 +147,10 @@ def costs():
     # asking every half second while the verdicts are worked out otherwise works it all out each time, and on a slow
     # machine leaves the background work little time: the CI run of 4e1f6f0)
     if _costs_memo["key"] == memo and (hit["ready"] or hit["updating"] == (not purchases.rows_up_to_date(pkey))):
-        return hit
+        # rows up to date and no verdicts yet: their working-out is asked for again, so one is always going (an answer kept
+        # "not ready, not updating" with none asked for stayed so: the stage 4 run of fed6d2f); done meanwhile: worked out
+        if hit["ready"] or hit["updating"] or not _costs_memo["ask"] or _pilot_briefs(*_costs_memo["ask"]) is None:
+            return hit
     out = []
     if os.path.exists(common.PILOT):
         for r in pilot_rows:
@@ -177,7 +180,8 @@ def costs():
     # rows being replaced (worked out again in the background) get no verdicts worked out of their own, unless their pass
     # keeps failing: those of the new rows follow at once
     start = purchases.rows_up_to_date(pkey) or purchases.rows_failing()
-    verdicts = _pilot_briefs(po_rows, (version, dv, len(out), bool(cats), basis, ins[0] if ins else None), start) if out else {}
+    bkey = (version, dv, len(out), bool(cats), basis, ins[0] if ins else None)
+    verdicts = _pilot_briefs(po_rows, bkey, start) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
         r["rates"] = None           # the rates the costing is on: the order month's (worked out with the verdict)
@@ -254,7 +258,10 @@ def costs():
     fresh = purchases.rows_up_to_date(pkey)     # the purchase-order rows are worked out again in the background after a change
     val = {"rows": out, "ready": verdicts is not None and fresh, "updating": not fresh, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=memo, val=val)         # the key as it was before: anything that moved meanwhile is worked out again
+    if verdicts is None and fresh and _pilot_briefs(po_rows, bkey) is not None:
+        _costs_memo.update(key=None, val=None, ask=None)     # the rows were found up to date only now, and the verdicts done
+        return val
+    _costs_memo.update(key=memo, val=val, ask=(po_rows, bkey) if out else None)    # the key as it was before: anything that moved meanwhile is worked out again
     return val
 
 
