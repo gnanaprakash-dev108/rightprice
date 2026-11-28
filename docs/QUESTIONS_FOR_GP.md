@@ -9,6 +9,25 @@
   the checks now test those guards on the screen's address. The assistant has 45 tools.
 - The two tracker remove tools (the assistant's own step; any step): **both kept**. Nothing changed.
 
+## Answered 28 Nov 2026 (stage 2's second review: purchase files whose order cannot be told; widths)
+
+- **Purchase files whose order cannot be told from what they cover: "Saved later wins"** (GP chose this over "an admin
+  settles, as built"). What a file covers still decides first: a file was taken no earlier than its latest document date
+  (or a report date it carries) and no later than it was saved, and one taken after the other for certain is newer.
+  Only where that cannot tell (a correction covering the same orders, the same file saved again), **the file saved later
+  replaces the history's figures automatically**, with no admin's choice: its figures, the lines it shows deleted or no
+  longer bulk, the lines it leaves out of an order, exactly as a certainly newer file. So the first file saved again
+  later now wins over the correction. A saved date counts only when it is there and not before the file's latest order
+  (the upload says "not used" otherwise); a file carrying a report date counts as taken on that date. The upload's page
+  says which file won and why ("saved later", with both saved times). An earlier-saved file read after, or at the same
+  moment in another server process, brings nothing back. **What is still left with no way to tell** (both saved at the
+  same moment, or either file without a saved date that can be used) keeps the earlier behaviour for that remainder
+  only: the history stands and the disagreement is listed on the upload for an admin to keep or to take the file's
+  figures (Purchase files, and the assistant's settle_purchase_disagreements). Done.
+- **Width tolerance: chain, as built.** Codes alike in the other eight fields whose widths are within half an inch of
+  each other, directly or through other codes, are one group, so a group can run over more than half an inch from end
+  to end (57, 57.4 and 57.8 in are one group). Kept; no change.
+
 ## Answers given 25 Nov 2026, night
 
 - Data: the 1,696 purchase-order costings (plus the fabric list). Done.
@@ -49,20 +68,16 @@ S5-8. **The calibration draft, tested fairly.** On cloth it was not fitted on, a
 S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rate of the rate master with no data behind
       it: the brief and the verdicts treat it as unsure. 1. As now. 2. Refuse a typed rate with no source.
 
-## Built 28 Nov 2026 (the second review of stage 2): which purchase file is newer, and what happens when that cannot be told
+## Built 28 Nov 2026 (the second review of stage 2): which purchase file is newer
 
-- **Which file is newer is read from what it covers**, never from when the workbook was saved (a file saved again later
-  is no newer): a file was taken no earlier than its latest document date (every row with a date, kept or not), or the
-  report date it carries in a column of its own (Report Date, Export Date, Extracted On, Run Date, As of), and no later
-  than it was saved. One file is newer than another only when it was taken after the other for certain: a later SAP
-  export, with orders dated after the earlier one was saved, is. SAP's own export carries no report date.
+- **Which file is newer is read first from what it covers**: a file was taken no earlier than its latest document date
+  (every row with a date, kept or not), or the report date it carries in a column of its own (Report Date, Export Date,
+  Extracted On, Run Date, As of), and no later than it was saved. One file is newer than another for certain when it
+  was taken after the other for certain: a later SAP export, with orders dated after the earlier one was saved, is.
+  SAP's own export carries no report date. Where that cannot tell, the file saved later wins (GP, 28 Nov 2026, above).
 - **Every order line keeps the word of the newest file that covered it**: its figures, or that it was deleted, blocked,
   no longer bulk, not in rupees or per metre, or left out of an order the file has, even before any file gave its
   figures. So an older file read after a newer one (or at the same time, in two server processes) brings nothing back.
-- **When which is newer cannot be told** (a correction covering the same orders, a file with no saved date, the first
-  file saved again) **and the file disagrees with the history, the history stands and the disagreement is listed** on
-  the upload (Purchase files), line by line, for an admin to keep the history's figures or take the file's. Nothing is
-  guessed. **To confirm:** 1. As now. 2. A file saved later wins after all when both cover the same orders.
 - A code bought only on ZLOI orders is not counted as bought on the supplier list and pages; a group's mill with only
   ZLOI lines is listed, not counted; Pilot results says it is the pilot as run, ZLOI included (1,696 fabrics), beside
   the 1,512 every other page counts.
@@ -88,9 +103,8 @@ S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rat
 - **Width: within half an inch is one group.** Done as a tolerance (the second review: rounding split 57.4 and 57.5 in):
   codes alike in the other eight fields whose widths are within half an inch of each other, directly or through other
   codes, are one group (57 in and 145 cm; 57.4 and 57.5 in). It depends only on the widths held, never on the order files
-  come in; the group's name gives the widths it runs from and to. **To confirm:** through each other, a group can run
-  over more than half an inch (57, 57.4 and 57.8 in are one group). 1. As now. 2. Never more than half an inch from end
-  to end (then two widths 0.1 in apart can fall either side of a split).
+  come in; the group's name gives the widths it runs from and to. Through each other, a group can run over more than
+  half an inch (57, 57.4 and 57.8 in are one group): GP confirmed this on 28 Nov 2026 ("chain, as built", above).
 - **A usual range needs purchases on at least 5 separate orders** (distinct order numbers, ZLOI left out), not 5 lines. The
   price popup draws a group's median only when the group has a range. Done.
 - Finish names written differently ("Normal Soft" and "Soft Finish", "Regular" and "Normal Soft") stay apart unless an
