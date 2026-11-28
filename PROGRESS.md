@@ -180,6 +180,45 @@ faults; all were fixed the same day (below, "After the cold review").
 
 ### Where things stand
 
+- **28 Nov, early morning (UTC): where everything stands. Start here.**
+  - **Live and checked on the live site (through `/mcp/health` and the read-only MCP tools):** stage 1 (database,
+    PostgreSQL since 27 Nov 12:13 UTC), stage 3 (users and roles, merged PR 26, off until `RIGHTPRICE_ADMINS`), stage 5
+    (dated yarn rates, PR 27), and the **Admin-level AI assistant** (PR 31, merge aabd614: 46 tools; `/mcp/health` showed
+    `"tools": 46`, store postgres, ok). PR 32 removes the price-service tool (45 tools) and records GP's 28 Nov decisions;
+    merge it on green if this handover lands first.
+  - **GP's decisions, 28 Nov:** the assistant may NOT switch off or demote an admin (a person does that on Users and
+    roles); no assistant tool for a price service (its key would pass through the chat); both tracker remove tools stay.
+  - **Stage 2** (PR 28, branch `claude/sleepy-dirac-dknzrp-stage2`): built; cold review and second review done. The second
+    review confirmed the ZLOI Right cost changes are exact (374 of 1,696 rows: 252 price paid, 184 now "No price", 366
+    metres, 233 should-cost, 217 verdicts; plus range/"why unsure" wording on ~1,100 rows from the fabric-type range move)
+    and found faults its builder was fixing when this was written: **N1** a newer file's deleted/dropped lines come back
+    if an older file is loaded after it; **N2** "newer" was taken from the workbook's saved date, not what the file covers;
+    **N3** specification corrections leave should-costs stale and the popup and Right cost can disagree; **N4** ZLOI-only
+    codes still counted on supplier pages and the group Mills tile; N5/N6 wording and counts; the width rule must be a
+    half-inch tolerance (not rounding); progress writes must use the purchases kind's own lock key; then merge main (the
+    assistant) and add assistant tools for stage 2's actions (main's check requires a tool for every `do:*` address).
+    **Next session: read the branch's last commits; if the fixes are in and pushed, run both checks, confirm N1 to N4 by
+    running them (a short targeted review), then merge on a green "checks" job and confirm the deploy.**
+  - **Stage 4** (PR 29, `...-stage4`, head b435b11, green): one front end; cold and second reviews done and fixed; stage
+    5's screens carried into the pages; `check_browser.py` 105 checks. **Merge it last:** after stage 2 (and PR 32) merge,
+    merge main into it, carry stage 2's screens (Fab group page, price popup, purchase files page, the Fab group column)
+    and the assistant's changes into the pages, run all three checks, then merge; then ask GP to confirm each moved page
+    by eye on the live site. After it is deployed GP may delete the unused app setting `RIGHTPRICE_UI`.
+  - **Then stage 6** (the learned benchmark), last, as agreed.
+  - **Scheduled tasks:** this session had "RightPrice stages 2-5: check every 5 hours" (resumes stopped builders after a
+    usage limit). It is deleted at this handover; the next session should create its own if GP wants it.
+  - **Test PostgreSQL in the build container** stops when the container restarts: start it with
+    `rm -f /var/lib/postgresql/rp16/data/postmaster.pid; su postgres -c "/usr/lib/postgresql/16/bin/pg_ctl -D
+    /var/lib/postgresql/rp16/data -o '-p 54329 -k /tmp' -l /var/lib/postgresql/rp16/log.txt start"` (if the folder is
+    gone, `initdb` it as described above).
+  - **Live access for a build session:** the MCP token is saved as a network secret of the cloud environment "rightprice"
+    (host of the live site, path prefix `/mcp`). `curl https://<site>/mcp/health`; JSON-RPC `tools/call` on POST `/mcp`
+    (header `Accept: application/json, text/event-stream`). Use reading tools only unless GP asks.
+  - **Waiting on GP:** `ANTHROPIC_API_KEY` on the web app (real drafts; then read the first drafts against the rules);
+    when ready, `RIGHTPRICE_ADMINS` (first open `/api/me`: own e-mail and `sign_in: on`); the 10 names; stage 5
+    questions S5-1 to S5-9 (the calibration draft: recommend not applying, no measurable gain); July to November yarn
+    prices; mill cost sheets; the invoices and PLM specs for stage 2.
+
 - **27 Nov, evening (latest): where every track stands.** GP agreed (27 Nov) to keep building stages 2 to 5 in parallel
   and to resume automatically after usage limits: a scheduled task "RightPrice stages 2-5: check every 5 hours" wakes this
   session and resumes stopped builders; it deletes itself once stages 2 to 5 are merged and deployed.

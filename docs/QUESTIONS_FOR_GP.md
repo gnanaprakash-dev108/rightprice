@@ -1,5 +1,14 @@
 # Questions for GP
 
+## Answered 28 Nov 2026 (the AI assistant, MCP)
+
+- Switching off an admin, or taking Admin away: **stays with a person**. The assistant is refused it, so the admins
+  cannot be locked out. Kept as built.
+- The tool that brought in prices from a price service: **removed**. It took the service's key through the chat, and keys
+  are never pasted in a chat. The screen keeps it (Prices > Bring in prices > A price service), with the same guards;
+  the checks now test those guards on the screen's address. The assistant has 45 tools.
+- The two tracker remove tools (the assistant's own step; any step): **both kept**. Nothing changed.
+
 ## Answers given 25 Nov 2026, night
 
 - Data: the 1,696 purchase-order costings (plus the fabric list). Done.

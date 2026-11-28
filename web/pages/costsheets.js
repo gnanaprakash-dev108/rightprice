@@ -33,9 +33,9 @@
       const applyBtn = h("button", { class: "btn primary", type: "button", disabled: true, onclick: async e => {
         const b = e.currentTarget;
         if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = `Change ${plural(picked.size, "rate")} in the rate master: sure?`; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ""; b.textContent = `Apply ${plural(picked.size, "draft")}`; } }, 5000); return; }
-        try { const r = await (await postJSON("/api/costsheet/apply", { ids: [...picked] })).json(); picked.clear(); RP.state.meta = await getJSON("/api/meta");
+        try { const r = await (await postJSON("/api/costsheet/apply", { ids: [...picked], expect: Object.fromEntries(d.drafts.filter(x => picked.has(x.id)).map(x => [x.id, { now: x.now, proposed: x.proposed }])) })).json(); picked.clear(); RP.state.meta = await getJSON("/api/meta");
           status.replaceChildren(h("div", { class: "notice info" }, h("b", {}, "Applied. "), r.applied.join("; ") + `. The rate master as it was is kept on the server, beside the rate master, as "${r.backup}".`)); load(); }
-        catch (err) { status.replaceChildren(h("div", { class: "notice err", role: "alert" }, err.message)); }
+        catch (err) { status.replaceChildren(h("div", { class: "notice err", role: "alert" }, err.message)); picked.clear(); load(); }   // the drafts as they are now
       } }, "Apply");
       const rows = d.rows.map(r => h("details", { class: "card cs-row" },
         h("summary", {}, h("b", {}, [r.mill, r.code].filter(Boolean).join(" · ") || "Row"), " ",
