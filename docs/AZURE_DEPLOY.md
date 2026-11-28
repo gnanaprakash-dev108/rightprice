@@ -310,8 +310,9 @@ and remove negotiation steps, and add people and change their roles. Keep it as 
 app setting and in your own Claude Desktop settings, never in an e-mail, a chat or a file you share.
 
 **Stay named in `RIGHTPRICE_ADMINS`.** The assistant does not switch off an admin or take Admin away from one (a person
-does that on Users and roles), so it cannot lock the admins out; but keep your own address in the app setting all the
-same: an admin named there is always let in as Admin, whatever happens to the list of people.
+does that on Users and roles; GP kept this on 28 Nov 2026), so it cannot lock the admins out; but keep your own
+address in the app setting all the same: an admin named there is always let in as Admin, whatever happens to the list
+of people.
 
 ### The MCP endpoint and Microsoft sign-in
 
@@ -348,7 +349,7 @@ through the sign-in, and is then protected by the token alone: every request mus
 
    The first must answer `401` with "A token is needed" (a redirect to login.microsoftonline.com means step 3 has
    not taken; `404` "switched off" means step 2 has not). The second must answer `{"ok": true, ...}`, with
-   `"tools": 46`. Then open the site's home page in a private window: it must still ask for Microsoft sign-in.
+   `"tools": 45`. Then open the site's home page in a private window: it must still ask for Microsoft sign-in.
 
 ### Cutting it off
 
@@ -390,12 +391,12 @@ runs on your computer and adds the token to every request. It needs Node.js (nod
 3. Quit Claude Desktop fully (also from the tray icon) and open it again. RightPrice's tools show under the tools
    icon in a new chat. Ask "What is the store status of RightPrice?" to try it.
 4. Claude Desktop asks before each tool that changes something (they are marked as such), and before each tool that
-   makes RightPrice's server fetch a web address (Bring in prices from a page or an endpoint) or sends fabric figures
+   makes RightPrice's server fetch a web address (Bring in prices from a web page) or sends fabric figures
    to Anthropic (a draft to a mill, when the Claude key is set); read what it says before you allow it. The assistant
    is told to change a rate only when you ask for that change, and to say the old and the new figure first.
 
 Tried by the build session on 27 Nov 2026 against the app on its own machine (not the live site): `mcp-remote` 0.1.37
-and 0.17.1 with exactly these arguments, listing the tools (40 then; 46 since stage 5's dated rates), reading a rate table and adding a cotton price (saved as
+and 0.17.1 with exactly these arguments, listing the tools (40 then; 46 with stage 5's dated rates; 45 since 28 Nov, without the price service), reading a rate table and adding a cotton price (saved as
 "AI assistant"). Claude Desktop itself was not tried.
 
 - **On a laptop, on that laptop's own data** (no token, no Azure): `{"mcpServers": {"rightprice": {"command":
@@ -404,7 +405,7 @@ and 0.17.1 with exactly these arguments, listing the tools (40 then; 46 since st
 - **A build session checking a deploy**: with the token saved for the site's host through the secure form, it can
   call `/mcp/health`, which reports which code is running. Remember the token is an admin key.
 
-### What the assistant can do (46 tools)
+### What the assistant can do (45 tools)
 
 Each tool does what one address of the screens does, through the same rule, with the same refusals:
 
@@ -417,16 +418,20 @@ Each tool does what one address of the screens does, through the same rule, with
   the new one; or the whole table, only with the stamp of the table it read, every column given; a figure moved to
   more than twice or under half what it was needs your explicit yes; no rate below zero, or of zero where a rate is
   always paid, on the screen too; the version before is kept); add a cotton price (a date still to come is refused, on
-  the screen too; a price past twice or under half the newest needs your explicit yes); Bring in prices (read a file, a
-  public page or a public JSON endpoint, never this machine, a private network or the cloud's own addresses, and never
-  with a sign-in header; map its columns; add the checked rows to the market reference or as dated yarn rates); enter
+  the screen too; a price past twice or under half the newest needs your explicit yes); Bring in prices (read a file or
+  a public web page, never this machine, a private network or the cloud's own addresses; map its columns; add the
+  checked rows to the market reference or as dated yarn rates); enter
   or remove a dated yarn rate, load the market history's dated rates; upload a mill's sheet or a template to the
   fabric list, add one fabric, remove rows; upload and remove mill cost sheets, and apply their drafts on the figures
   you were told (a draft that moved since is refused, on the screen too; one that moves a rate past twice or under half
   needs your explicit yes); mark alerts seen or bring them back; record a
   tracker step (two at the same moment: one is kept), undo its own, or remove any step; add a person, change a role or
-  name, switch someone on, change what a role may do. The last admin in the list stays an admin, and the assistant
-  does not switch off an admin or take Admin away.
+  name, switch someone on, change what a role may do. The last admin in the list stays an admin.
+- **Not through the assistant (GP, 28 Nov 2026):** switching off an admin or taking Admin away (a person does that on
+  Users and roles, so the admins cannot be locked out); and bringing in prices from a price service, because that
+  needs the service's key and a key is never pasted in a chat: do it on the screen (Prices > Bring in prices > A price
+  service), which uses the key for that one call and does not keep it. The screen keeps the same guards (public
+  addresses only, never a sign-in, cookie or host header).
 - **Draft a message to a mill** (nothing is sent to the mill or kept; with the Claude key set, the figures go to
   Anthropic's API to write it, so Claude Desktop asks first).
 
