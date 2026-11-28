@@ -18,6 +18,7 @@ import datetime as dt
 import json
 import os
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 import anyio.to_thread
@@ -43,6 +44,8 @@ async def lifespan(_app):
     import anyio.to_thread
     anyio.to_thread.current_default_thread_limiter().total_tokens = 120
     await asyncio.to_thread(store.get)      # with DATABASE_URL set: connect, add any new tables, copy the files in on the first start
+    from rules import purchases as _purchases       # stage 2: purchase files left half-read by a restart are read again
+    threading.Thread(target=_purchases.resume_at_start, daemon=True).start()
     if _mcp_app is not None:
         async with mcp_server.mcp.session_manager.run():       # the MCP endpoint's own machinery, for as long as the app runs
             yield
@@ -234,7 +237,9 @@ def store_status():
 def rightcost_page():
     """The earlier address of Right cost: it is now a page of the shell."""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/#rightcost", status_code=307)
+    # no '#' in the address given: the browser keeps the one asked for (/rightcost#group/Fab-0001), and the shell opens
+    # Right cost when there is none
+    return RedirectResponse("/?from=rightcost", status_code=307)
 
 
 @app.get("/classic")
@@ -550,6 +555,72 @@ def users_permissions(payload: dict = Body(...), request: Request = None):
     return access.set_permissions(payload, request.headers)
 
 
+# ------------------------------------------------------------------ stage 2: purchase history, Fab groups (on a database only)
+# Who may look and who may upload or merge: rules/access.py (ROUTES).
+from rules import fab_groups, purchases  # noqa: E402
+
+
+@app.get("/api/purchases/status")
+def purchases_status():
+    return purchases.status()
+
+
+@app.get("/api/purchases/uploads")
+def purchase_uploads():
+    return purchases.uploads()
+
+
+@app.post("/api/purchases/upload")
+async def purchase_upload(request: Request, file: UploadFile = File(...)):
+    data = await file.read(purchases.MAX_BYTES + 1)        # never more than the most that is read: a larger file is refused unread
+    return await asyncio.to_thread(purchases.upload, file.filename, data, _who(request))
+
+
+@app.post("/api/purchases/load-shipped")
+def purchase_load_shipped(request: Request = None):
+    return purchases.upload_shipped(who=_who(request))
+
+
+@app.get("/api/purchases/uploads/{upload_id}")
+def purchase_upload_detail(upload_id: int):
+    return purchases.upload_detail(upload_id)
+
+
+@app.post("/api/purchases/disagreements")
+def purchase_settle(payload: dict = Body(...), request: Request = None):
+    return purchases.settle(payload, who=_who(request))
+
+
+@app.get("/api/purchases/skipped/{upload_id}")
+def purchase_upload_skipped(upload_id: int):
+    return _file(purchases.skipped_download(upload_id))
+
+
+@app.get("/api/purchases/history")
+def purchase_history(code: str):
+    return purchases.history(code)
+
+
+@app.get("/api/groups")
+def groups_list():
+    return fab_groups.listing()
+
+
+@app.get("/api/groups/{code}")
+def group_page(code: str):
+    return fab_groups.page(code)
+
+
+@app.post("/api/groups/merge")
+def groups_merge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.merge(payload, who=_who(request))
+
+
+@app.post("/api/groups/unmerge")
+def groups_unmerge(payload: dict = Body(...), request: Request = None):
+    return fab_groups.unmerge(payload, who=_who(request))
+
+
 
 # ------------------------------------------------------------------ the front end
 class FreshFiles(StaticFiles):
@@ -572,7 +643,7 @@ def _page(file, assets):
 def index():
     """The app: one shell (left rail, Right cost, the "+" popup) with every page in it; each page is a file in web/pages/."""
     pages = sorted("pages/" + f for f in os.listdir(os.path.join(WEB, "pages")) if f.endswith((".js", ".css")))
-    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js", "dated.css", "dated.js", *pages))
+    return _page("rightcost.html", ("rightcost.css", "rightcost.js", "access.css", "access.js", "dated.css", "dated.js", "purchases.css", "purchases.js", *pages))
 
 
 app.mount("/", FreshFiles(directory=WEB), name="web")

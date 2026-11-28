@@ -85,6 +85,13 @@ PERMISSIONS = [
     ("page:costsheets", "Prices: mill cost sheets (to look at)", "see the mill cost sheets",
      "Unticked, Mill cost sheets is not offered. No other page shows the mills' sheets; a draft that was applied shows "
      "in the rate tables' Basis."),
+    # stage 2: the purchase history
+    ("page:groups", "Fab groups: the list of groups, each group's page, and a fabric's price over time (to look at)", "see the Fab groups",
+     "Unticked, the Fab groups list and pages are not offered. A fabric's price over time (with its group's purchases) "
+     "still opens from Right cost for a role that has Right cost, and Right cost still shows each fabric's Fab group."),
+    ("page:purchase_files", "Purchase files: the uploads of purchase-order files and what each held (to look at)", "see the purchase files",
+     "Unticked, Purchase files is not offered. The purchase history the files filled still shows in Right cost and on the "
+     "Fab group pages."),
     ("page:users", "Users and roles (this page)", "see who may use RightPrice", ""),
     ("do:edit_rates", "Edit rates: rate tables, yarn and cotton prices, Bring in prices", "edit rates", ""),
     ("do:apply_drafts", "Apply mill cost sheet drafts to the rate master", "apply mill cost sheet drafts", ""),
@@ -92,6 +99,9 @@ PERMISSIONS = [
     ("do:record_steps", "Record and remove negotiation steps in the tracker", "record or remove negotiation steps", ""),
     ("do:mark_seen", "Mark quote alerts seen for everyone, or bring them back", "mark quote alerts seen", ""),
     ("do:draft", "Draft messages to mills (e-mail and WhatsApp; nothing is sent)", "draft messages to mills", ""),
+    ("do:upload_purchases", "Upload purchase-order files, load the one that came with the code, and settle what a file and the purchase "
+     "history disagree on (an admin action)", "upload purchase files", ""),
+    ("do:merge_groups", "Merge two Fab groups, or undo a merge (an admin action)", "merge Fab groups", ""),
     ("do:manage_users", "Add people, change their role, switch them off, change what each role may do", "change who may use RightPrice", ""),
 ]
 LABEL = {k: label for k, label, _, _ in PERMISSIONS}
@@ -116,7 +126,7 @@ GRID_NOTE = ("A page's tick decides whether this role can open that page. It is 
 # fails while any address of the app is missing.
 ROUTES = {
     "MOUNT /": PUBLIC,                       # the shell's scripts, styles and icons: no data in them
-    "GET /rightcost": PUBLIC,                # a redirect to /#rightcost
+    "GET /rightcost": PUBLIC,                # a redirect to the shell (to #rightcost, or the # part asked for)
     "GET /classic": PUBLIC,                  # the earlier Streamlit screens are retired (stage 4): a bookmark leads to /
     "GET /classic/{path:path}": PUBLIC,
     "GET /api/me": PUBLIC,
@@ -175,6 +185,19 @@ ROUTES = {
     "POST /api/users/add": "do:manage_users",
     "POST /api/users/change": "do:manage_users",
     "POST /api/users/permissions": "do:manage_users",
+    # stage 2: the purchase history and Fab groups (an upload and a merge are admin actions: Admin and Rates editor)
+    "GET /api/purchases/status": "page:groups",
+    "GET /api/purchases/history": ("page:groups", "page:rightcost"),     # the price popup: from a Fab group page, and from Right cost
+    "GET /api/groups": "page:groups",
+    "GET /api/groups/{code}": "page:groups",
+    "GET /api/purchases/uploads": "page:purchase_files",
+    "GET /api/purchases/uploads/{upload_id}": "page:purchase_files",
+    "GET /api/purchases/skipped/{upload_id}": "page:purchase_files",
+    "POST /api/purchases/upload": "do:upload_purchases",
+    "POST /api/purchases/load-shipped": "do:upload_purchases",
+    "POST /api/purchases/disagreements": "do:upload_purchases",          # settle what a file and the history disagree on
+    "POST /api/groups/merge": "do:merge_groups",
+    "POST /api/groups/unmerge": "do:merge_groups",
 }
 
 # what each page reads (the addresses with a page's permission or MEMBER's), from the screens' own code: web/pages/<page>.js
@@ -186,7 +209,7 @@ PAGE_USES = {
     "page:dashboard": ["GET /api/meta", "GET /api/insights", "POST /api/list", "GET /api/alerts", "GET /api/negotiations/summary"],
     "page:pilot": ["GET /api/meta", "GET /api/pilot"],
     "page:rightcost": ["GET /api/costs", "GET /api/negotiations", "GET /api/alerts", "POST /api/cost", "GET /api/supplier",
-                       "POST /api/costs/download"],
+                       "POST /api/costs/download", "GET /api/purchases/history"],         # stage 2: the price popup (web/purchases.js)
     "page:cost": ["GET /api/meta", "POST /api/cost", "POST /api/cost-sheet", "POST /api/list"],     # Create cost and Compare
     "page:list": ["GET /api/meta", "POST /api/list", "POST /api/list/download", "GET /api/template"],
     "page:pack": ["GET /api/meta", "POST /api/pack"],
@@ -194,6 +217,9 @@ PAGE_USES = {
                     "GET /api/dated-rates", "GET /api/dated-rates/market"],          # stage 5: web/dated.js on Yarn prices
     "page:costsheets": ["GET /api/meta", "GET /api/costsheet", "GET /api/costsheet/template"],
     "page:users": ["GET /api/users"],
+    # stage 2 (web/purchases.js): the Fab group pages and the price popup; the purchase files page
+    "page:groups": ["GET /api/groups", "GET /api/groups/{code}", "GET /api/purchases/history"],
+    "page:purchase_files": ["GET /api/purchases/uploads", "GET /api/purchases/uploads/{upload_id}", "GET /api/purchases/skipped/{upload_id}"],
 }
 
 # the AI assistant (the MCP token): a fixed role. Each tool names the address it mirrors (mcp_server.py) and runs only if

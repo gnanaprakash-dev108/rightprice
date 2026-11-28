@@ -138,7 +138,7 @@ def _state_key():
     While none of them changes, the answer is kept (the pages ask every half minute)."""
     ins = _cache.get(PILOT + "#insights")
     st = store.get()
-    return (st.version("list"), st.version("rates"), bool(ins and ins[1]), _mtime(PILOT))
+    return (st.version("list"), st.version("rates"), bool(ins and ins[1]), ins[0] if ins else None, _mtime(PILOT))
 
 
 def _inr(v, d=2):

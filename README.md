@@ -84,6 +84,7 @@ share.
 | Mill rate card | The rate card tables: print method, dobby, weft, quantity terms, finish upcharges |
 | Settings | Shrinkage, reed space factor, mill tiers, order size slabs |
 | Pilot results | Should-cost against purchase order prices, and the calibration draft |
+| Purchase history and Fab groups (stage 2, on a database only) | Purchase-order files uploaded and read in the background (user icon > Purchase history > Purchase files); every fabric code in a Fab group (the same construction in any colour, across mills: Fab-0001 onward); a Fab group column in Right cost; price over time per fabric code (a popup from the row or its detail page); a page per Fab group (`#group/Fab-0001`) with its median, usual range, should-cost, price over time by mill and the purchases priced above the range; the list of groups and an admin merge (user icon > Purchase history). The newest file's figures win, newer read from what a file covers (its latest document date, or a report date it carries), never from when it was saved; where that cannot be told and a file disagrees, the history stands and the disagreement is listed for an admin to settle; ZLOI order lines are kept but left out of every figure, Right cost's purchase-order rows and their order months (stage 5) included, and listed apart as outliers (GP, 27 Nov 2026). The popup and the group pages cost a code as Right cost does, on its order month's yarn rates. Uploading and merging are admin actions |
 
 ## The calculation
 
@@ -116,7 +117,8 @@ it after any change to `engine.py` or `masters.py`. It must print `ALL OK`.
 | `server.py` | The web requests: serves `web/` (the shell and its pages) and turns each request into one call to `rules/` |
 | `rules/` | The business rules, one module per area (`costing`, `fabric_list`, `pack`, `rightcost`, `tracker`, `supplier`, `alerts`, `drafts`, `dashboard`, `rates`, `costsheets`, `mills`, `common`) |
 | `store.py` | The data layer: files, or PostgreSQL / SQLite when `DATABASE_URL` is set; copies the files in once; `python store.py status`, `export <folder>`, `keep-database` |
-| `db/` | `001_files_moved_in.sql` (the tables in use) and `schema.sql` (the full design for stages 2 to 6) |
+| `db/` | The tables in use: `001_files_moved_in.sql` (stage 1), `002_purchases_and_fab_groups.sql` (stage 2: mills and their spellings, fabrics, Fab groups, uploads, purchase lines); and `schema.sql` (the full design for stages 2 to 6) |
+| `data_purchases.py` | The SQL of the purchase history; `rules/purchases.py` (purchase files read in the background, the price popup) and `rules/fab_groups.py` (Fab groups, their page, the merge) decide what is done with it; `web/purchases.js` and `purchases.css` draw its pages |
 | `web/` | The front end: the shell (`rightcost.html`, `rightcost.js`, `rightcost.css`: the left panel, Right cost, the New cost popup) and its pages, one file each in `web/pages/` |
 | `mill_sheet.py` | Reads a mill's price sheet (base price plus upcharges), turns each row into the tool's choices, and checks the mill's arithmetic |
 | `yarn_seed.py` | Placeholder yarn rates for poly cotton and linen, added once to the rate master |

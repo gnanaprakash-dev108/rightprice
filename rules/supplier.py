@@ -36,9 +36,12 @@ def suppliers():
     won = {mills.mill_key(b["supplier"]): b for b in tracker.negotiations_summary()["suppliers"]}
     out = []
     for k, rows in by.items():
-        po = [r for r in rows if r["source"] == "Purchase orders"]
+        # a code bought only on ZLOI orders is not counted as bought (GP, 27 Nov 2026: ZLOI in no figure)
+        po = [r for r in rows if r["source"] == "Purchase orders" and r.get("price") is not None]
         fl = [r for r in rows if r["source"] == "Fabric list" and not r.get("duplicate_of")]
         t = won.get(k) or {}
+        if not po and not fl:
+            continue                    # bought only on ZLOI orders: its page still lists them apart, it counts as no purchase
         out.append({"key": k, "name": _mill_names(rows)[0], "bought": len(po), "quoted": len(fl),
                     "push": sum(1 for r in rows if r["band"] == "Push" and not r.get("duplicate_of")),
                     "above_range": round(sum(_above_range(r) for r in po + fl)),
@@ -121,7 +124,7 @@ def supplier(mill: str):
     if not key or not rows:
         raise common.Refused(404, "No fabric bought from or quoted by that mill")
     m = common.get_masters()
-    po = [r for r in rows if r["source"] == "Purchase orders"]
+    po = [r for r in rows if r["source"] == "Purchase orders" and r.get("price") is not None]     # ZLOI-only codes: listed apart, not bought
     fl = [r for r in rows if r["source"] == "Fabric list"]
     negos = {k: tracker.nego_summary(v) for k, v in tracker._negos().items() if v.get("events")}
 
@@ -296,4 +299,11 @@ def supplier(mill: str):
             "quoted": dict(q_side, rows=[slim(r) for r in sorted(fl, key=lambda r: (r.get("tracked") == "Agreed", -r["above_range"]))], not_costed=not_costed, sheets=sheets),
             "sums": sums, "hint": hint, "today": common._day(dt.date.today().isoformat()),
             "tracker": {"fabrics": len(track), "agreed": agreed, "open": open_, "won": round(won), "lost": round(lost), "items": track},
-            "questions": {"quoted": quoted_q, "bought": bought_q, "general": general}}
+            "questions": {"quoted": quoted_q, "bought": bought_q, "general": general},
+            "outliers": _outliers(key)}
+
+
+def _outliers(key):
+    """Stage 2: the mill's ZLOI order lines, shown apart; they are in none of the figures above (GP, 27 Nov 2026)."""
+    from rules import purchases
+    return purchases.outliers_for_mill(key)

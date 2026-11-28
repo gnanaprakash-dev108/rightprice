@@ -51,17 +51,19 @@ def _pilot_briefs(rows, key):
                 try:
                     res = masters.cost(r["choices"], m, on=om["month"] if om else None, dated=table)
                     b = costing.brief(res, m, r["metres"], (), r["choices"])
-                    out[r["code"]] = None if b is None else {"stance": b["stance"], "implausible": b["implausible"],
-                                                            "lo": b["band"]["lo"] * 100, "hi": b["band"]["hi"] * 100, "weak": b["weak"]}
-                    if out[r["code"]] is not None:
-                        out[r["code"]]["rates"] = dated.po_rates(r["code"], months, res)
-                        if (res.get("rates_of") or {}).get("dated"):        # a dated yarn rate moved the should-cost itself
-                            out[r["code"]]["dated_should"] = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1),
-                                                              "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]},
-                                                              "placeholders": ", ".join(res["placeholders"]) or None,
-                                                              # worked out as the pilot works them (masters.cost_many, pilot.py)
-                                                              "gap": None if res["gap"] is None else round(res["gap"], 2),
-                                                              "gap_pct": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1)}
+                    # the figures the row shows follow this costing, worked out as the pilot works them (masters.cost_many,
+                    # pilot.py): on the yarn rates of the order month (stage 5) and today's other rates, so a row, its verdict
+                    # and the price popup always agree (stage 2)
+                    v = {"should": round(res["total_per_m"], 2), "per_kg": round(res["per_kg"], 1), "gsm": round(res["gsm"], 1),
+                         "buckets": {x["name"]: round(x["amount"], 2) for x in res["buckets"]},
+                         "placeholders": ", ".join(res["placeholders"]) or None,
+                         "gap": None if res["gap"] is None else round(res["gap"], 2),
+                         "gap_pct": None if res["gap_pct"] is None else round(res["gap_pct"] * 100, 1),
+                         "dated": bool((res.get("rates_of") or {}).get("dated")), "rates": dated.po_rates(r["code"], months, res)}
+                    if b is not None:
+                        v.update(stance=b["stance"], implausible=b["implausible"], lo=b["band"]["lo"] * 100, hi=b["band"]["hi"] * 100,
+                                 weak=b["weak"])
+                    out[r["code"]] = v
                 except Exception as e:      # a costing that no longer works on today's rates
                     out[r["code"]] = {"stance": "error", "weak": [str(e)]}
             _briefs.update(key=key, data=out)
@@ -88,17 +90,16 @@ def costs():
     dashboard._warm_pilot()
     ins = common._cache.get(common.PILOT + "#insights")
     cats = {(c["route"], c["weave"]): c for c in (ins[1]["categories"] if ins and ins[1] else [])}
+    from rules import fab_groups, purchases     # stage 2: Fab groups; the purchase-order rows worked out again, ZLOI left out
+    gkey = fab_groups.version()
+    pkey, pilot_rows = purchases.pilot_rows()
     dv = data_dated.version()           # stage 5: the purchase orders' verdicts follow the dated yarn rates too
-    memo = (common._state_key(), dv, _briefs["key"], _briefs["running"])
+    memo = (common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey)
     if _costs_memo["key"] == memo and _costs_memo["val"]["ready"]:
         return _costs_memo["val"]
     out = []
     if os.path.exists(common.PILOT):
-        def load():
-            f = pd.read_excel(common.PILOT, sheet_name="Fabrics")
-            f = f.astype(object).where(pd.notna(f), None)
-            return f.to_dict("records")
-        for r in common.cached(common.PILOT + "#fabrics", load):
+        for r in pilot_rows:
             gap = r["PO above should-cost %"]
             cat = cats.get((r["Route"], r["Weave group"]))
             hi = costing.BAND_MIN if cat is None else min(costing.BAND_MAX, max(costing.BAND_MIN, cat["p75"]))
@@ -114,25 +115,34 @@ def costs():
                 "excess": r["Excess Rs"], "order_size": r["Order size"], "qty_band": r["Rate card quantity"],
                 "placeholders": r["Placeholder rates used"], "held_back": bool(r["Held back"]), "band": band,
                 "range": [lo, hi], "buckets": {b: r.get(f"{b} Rs/m") for b in dashboard.BUCKETS},
-                "choices": _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS))})
+                # the choices the price popup costs too (stage 2): the purchase history's, from the code's PLM specification
+                "choices": r["Costing choices"] if "Costing choices" in r else _pilot_choices(r, L["Pattern"], list(yarn_seed.CONTENTS)),
+                "outliers": r["Outliers (ZLOI)"], "worked_out_again": r["Worked out again"]})
     version = store.get().version("rates")
-    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"], (version, dv, len(out), bool(cats))) if out else {}
+    verdicts = _pilot_briefs([r for r in out if r["source"] == "Purchase orders"],
+                             (version, dv, len(out), bool(cats), pkey, ins[0] if ins else None)) if out else {}
     for r in out:
         v = (verdicts or {}).get(r["code"])
         r["rates"] = None           # the rates the costing is on: the order month's (worked out with the verdict)
-        if v:
+        r["why_unsure"] = None      # set with the verdict (none on a row with no price: there is nothing to judge)
+        if v and "should" in v:
+            r["rates"] = v["rates"]
+            if r["should"] is not None and (v["dated"] or abs(v["should"] - r["should"]) >= 0.005):
+                # the figures follow the costing the verdict rests on: a dated yarn rate of the order month (stage 5), or a
+                # rate changed since the pilot (stage 2); the placeholder column too (a dated rate with no source is one)
+                r.update(should=v["should"], per_kg=v["per_kg"], gsm=v["gsm"], buckets={b: v["buckets"].get(b) for b in dashboard.BUCKETS},
+                         placeholders=v["placeholders"])
+                if r["price"] is not None:
+                    gap = v["gap"] if v["gap"] is not None else round(r["price"] - v["should"], 2)
+                    r.update(gap=gap, gap_pct=v["gap_pct"] if v["gap_pct"] is not None else round((r["price"] / v["should"] - 1) * 100, 1),
+                             excess=None if not r["metres"] else gap * r["metres"])
+        if r["price"] is None:
+            r["band"] = "No price"          # stage 2: bought only on ZLOI lines, left out of every figure
+        elif v and "stance" in v:
             r["band"] = "Check quote" if v.get("implausible") else STANCE_BAND[v["stance"]]
             r["why_unsure"] = v["weak"]
-            r["rates"] = v.get("rates")
             if "lo" in v:
                 r["range"] = [v["lo"], v["hi"]]
-            if v.get("dated_should"):       # a dated yarn rate was used: the figures follow that costing, not the pilot's
-                ds = v["dated_should"]
-                # the placeholder column follows the costing too: a dated rate with no source is still a placeholder
-                r.update(should=ds["should"], per_kg=ds["per_kg"], buckets={b: ds["buckets"].get(b) for b in dashboard.BUCKETS},
-                         placeholders=ds["placeholders"])
-                if ds["gap"] is not None:
-                    r.update(gap=ds["gap"], gap_pct=ds["gap_pct"], excess=None if r["metres"] is None else ds["gap"] * r["metres"])
         elif verdicts is None:
             r["band"] = "Working it out"
     listed = fabric_list.list_view({})["rows"]
@@ -177,9 +187,14 @@ def costs():
     mills._learn_mill_names({r["supplier"] for r in out})
     for r in out:
         r["mill"] = mills.mill_key(r["supplier"])
+    groups = fab_groups.by_code()
+    for r in out:           # stage 2: the purchase-order fabric's Fab group, from the purchase history
+        if r["source"] == "Purchase orders":
+            g = groups.get(str(r["code"])) or {}
+            r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
     val = {"rows": out, "ready": verdicts is not None, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
-    _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"]), val=val)
+    _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey), val=val)
     return val
 
 
@@ -197,7 +212,7 @@ def costs_download(payload: dict = None):
     for r in pick:
         e = extra.get(key(r)) or {}
         r["status"], r["remarks"] = e.get("status"), e.get("remarks")
-    cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("route", "Route"),
+    cols = [("source", "Source"), ("code", "Fabric code"), ("description", "Description"), ("supplier", "Supplier"), ("fab_group", "Fab group"), ("route", "Route"),
             ("weave", "Weave"), ("finish", "Finish"), ("warp", "Warp yarn"), ("weft", "Weft yarn"), ("epi", "EPI"), ("ppi", "PPI"),
             ("width", "Finished width (in)"), ("should", "Should-cost Rs/m"), ("price", "Price paid (purchase orders) or quoted (fabric list) Rs/m"),
             ("gap", "Above should-cost Rs/m"), ("gap_pct", "Above should-cost %"), ("metres", "Metres"),

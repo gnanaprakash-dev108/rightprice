@@ -30,6 +30,7 @@ const CONFIG = {
         { id: "status", header: "Status", width: 120, type: "edit-dd", options: STATUS, help: "Your own label. Kept in this browser" },
         { id: "description", header: "Description", width: 230 },
         { id: "supplier", header: "Supplier", width: 170 },
+        { id: "fab_group", header: "Fab group", width: 130, type: "fabgroup", help: "Purchase orders: the fabric's Fab group (the same construction in any colour, across mills), from the purchase history. Click it for the group's page; the chart button shows the price over time" },
         { id: "route", header: "Route", width: 90 },
         { id: "weave", header: "Weave", width: 90 },
         { id: "finish", header: "Finish", width: 140 },
@@ -61,7 +62,7 @@ const CONFIG = {
       filterAttrs: [
         { id: "supplier", label: "Supplier" }, { id: "mill", label: "Mill (every spelling)" }, { id: "route", label: "Route" }, { id: "weave_group", label: "Weave group" }, { id: "weave", label: "Weave" },
         { id: "finish", label: "Finish" }, { id: "pattern", label: "Pattern" }, { id: "warp", label: "Warp yarn" }, { id: "weft", label: "Weft yarn" },
-        { id: "order_size", label: "Order size" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
+        { id: "order_size", label: "Order size" }, { id: "fab_group", label: "Fab group" }, { id: "nego_status", label: "Negotiation" }, { id: "has_alert", label: "Quote alert to look at" }, { id: "band", label: "Against range" }, { id: "status", label: "Status" }, { id: "held_back", label: "Held back (calibration test)" },
         { id: "placeholder", label: "Placeholder rates used" }, { id: "should", label: "Should-cost Rs/m", num: true }, { id: "price", label: "Price Rs/m", num: true },
         { id: "gap_pct", label: "Above should-cost %", num: true }, { id: "metres", label: "Metres", num: true }, { id: "added", label: "Added on", date: true },
       ],
@@ -268,7 +269,7 @@ function rerunWithSkeleton() { state.loading = true; state.shown = CONFIG.pageSi
 // ================================================================== RENDER
 function railActive(id) {
   const first = decodeURIComponent(location.hash.slice(1)).split("/")[0] || "dashboard";
-  const now = id || (first === "rightcost" || first === "item" || first === "supplier" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
+  const now = id || (first === "rightcost" || first === "item" || first === "supplier" || first === "group" || first === "groups" ? "costs" : first === "lib" || (CONFIG.frames[first] || [])[0] === "Prices" ? "prices" : "home");
   document.querySelectorAll(".rail .item").forEach(b => b.classList.toggle("active", b.dataset.id === now));
 }
 function renderRail() {
@@ -312,6 +313,8 @@ function openFly(name, anchor, hover, keep) {
       h("div", { class: "g" }, "Settings"),
       h("button", { type: "button", class: "lnk", onclick: () => { toggleTheme(); openFly("profile", null, false, true); } }, dark ? "Light colours" : "Dark colours"),
       can("page:prices") ? [link("Calculation settings", "#settings"), link("Rate tables", "#rates")] : null,
+      canAny("page:groups", "page:purchase_files") ? h("div", { class: "g" }, "Purchase history") : null,      // stage 2: web/purchases.js
+      can("page:groups") ? link("Fab groups", "#groups") : null, can("page:purchase_files") ? link("Purchase files", "#purchase-files") : null,
       h("div", { class: "g" }, "Account"), profileExtras(),
       h("button", { type: "button", class: "lnk", onclick: () => { location.href = "/.auth/logout"; } }, "Log out"));
   }
@@ -339,15 +342,17 @@ function route() {
   if (id === "item") { state.detail = { key: rest.join("/"), tab: (state.detail && state.detail.key === rest.join("/") && state.detail.tab) || tabMemo(rest.join("/")) || "item", editing: false }; }
   else state.detail = null;
   state.users = id === "users";            // Users and roles (web/access.js)
+  state.page = typeof RP_PAGES !== "undefined" && RP_PAGES[id] ? { id, arg: rest.join("/") } : null;      // stage 2: web/purchases.js
   if (id === "lib" && LIB_NAMES().includes(rest.join("/"))) state.library = { name: rest.join("/"), page: 0, size: 20 };
   else if (CONFIG.frames[id]) state.frame = hsh;
-  else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.users) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
-  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier && !state.users ? " fixed listpage" : "");
+  else if (id !== "rightcost" && id !== "item" && !state.supplier && !state.users && !state.page) { state.frame = "dashboard"; if (hsh !== "dashboard") history.replaceState(null, "", "#dashboard"); }
+  $("#main").className = "main" + (state.frame ? " fixed framepage" : !state.detail && !state.library && !state.supplier && !state.users && !state.page ? " fixed listpage" : "") + (state.page ? " rp-page" : "");     // rp-page: a page of RP_PAGES (web/purchases.js), whose own rules are scoped to it
   railActive(); render();
   if (state.supplier) loadSupplier();
   if (state.users) loadUsers();
+  if (state.page) RP_PAGES[state.page.id].enter(state.page);
   if ((id === "rightcost" || id === "item") && state.rows.length) loadNegos();
-  document.title = (state.users ? "Users and roles" : state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
+  document.title = (state.users ? "Users and roles" : state.frame ? CONFIG.frames[state.frame.split("/")[0]][1] : state.library ? state.library.name : state.supplier ? (state.supplier.data ? state.supplier.data.name : "Supplier") : state.page ? RP_PAGES[state.page.id].title(state.page) : state.detail ? rest.join("/").split("|").pop() : CONFIG.appName) + " - RightPrice";
 }
 const newCostButton = () => tipOn(h("button", { type: "button", class: "fab", onclick: () => openPopup("cost") }, h("span", { html: svg("plus") }), "New cost"), "Create cost, bulk upload, compare, negotiation pack");
 
@@ -382,6 +387,7 @@ function render() {
   if (state.frame) return renderPage(main);
   if (state.library) return renderLibrary(main);
   if (state.supplier) return renderSupplier(main);
+  if (state.page) return RP_PAGES[state.page.id].render(main);
   if (state.detail) return renderDetail(main);
   const mod = CONFIG.modules.costs, rows = filtered(), cls = mod.classes.find(c => c[0] === state.cls) || mod.classes[0];
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", CONFIG.appName, "\u00A0\u203A\u00A0", h("span", {}, cls[1]));
@@ -472,6 +478,7 @@ function gridView(rows, skeleton) {
 function cellFor(r, c, cls, pinStyle, pend) {
   const k = keyOf(r), st = pinStyle(c);
   if (c.type === "select") { const b = h("input", { type: "checkbox", class: "cb", "aria-label": `Select ${r.code}` }); b.checked = state.selection.has(k); b.addEventListener("change", () => { b.checked ? state.selection.add(k) : state.selection.delete(k); render(); }); return h("td", { class: cls(c), style: st }, b); }
+  if (c.type === "fabgroup") return h("td", { class: cls(c), style: st }, typeof RP_PURCH !== "undefined" ? RP_PURCH.cell(r) : "");     // stage 2: web/purchases.js
   if (c.type === "thumb") return h("td", { class: cls(c), style: st }, h("div", { class: "thumb", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" }, title: r.route || "" }, (r.route || "—").split(/[ /]/)[0].slice(0, 5).toUpperCase()));
   if (c.type === "link") return h("td", { class: cls(c), style: st }, h("button", { type: "button", class: "code", onclick: () => openDetail(r) }, r.code));
   if (c.type === "band" && r.duplicate_of) return h("td", { class: cls(c), style: st }, h("span", { class: "pill", title: "Same order as " + r.duplicate_of + ": counted once in the negotiation pack" }, h("i", { style: { background: "#B9BEC7" } }), h("span", { class: "pt" }, "Duplicate of " + r.duplicate_of)));
@@ -590,6 +597,7 @@ function renderSupplier(main) {
     B.rows.length ? h("section", { class: "sec" }, h("h2", {}, "Bought"), h("p", { class: "muted" }, counts(B) + "."), h("ul", { class: "mon" }, money(B, true)), swipe(), table(shown, "Paid", false),
       B.rows.length > shown.length ? h("p", { class: "noprint" }, h("button", { type: "button", class: "btn line", onclick: () => { sp.all = true; render(); } }, `Show all ${n0(B.rows.length)} (the ${shown.length} with the most money above the range are shown)`)) : null,
       B.rows.length > shown.length ? h("p", { class: "muted printonly" }, `The ${shown.length} purchases with the most money above the range are printed, of ${n0(B.rows.length)}.`) : null) : null,
+    typeof RP_PURCH !== "undefined" && (d.outliers || []).length ? h("section", { class: "sec" }, RP_PURCH.outliers(d.outliers, "this mill", true)) : null,      // stage 2
     h("p", { class: "muted", style: "margin-top:18px" }, "Quotes: should-cost and verdicts on today's rates. " + (B.rates && B.rates.text ? B.rates.text + " " : "") + "“Above the usual range” is the price less the top of the range for that fabric type, times the metres; it is counted only where the tool is sure of the fabric."));
 }
 function renderSelbar() {
@@ -619,11 +627,12 @@ function renderSelbar() {
 function fields(r) {
   return [["Fabric code", r.code], ["Source", r.source], ["Description", r.description], ["Supplier", r.supplier], ["Route", r.route], ["Weave", r.weave], ["Weave group", r.weave_group],
     ["Finish", r.finish], ["Pattern", r.pattern], ["Warp yarn", r.warp], ["Weft yarn", r.weft], ["EPI × PPI", r.epi ? `${n0(r.epi)} × ${n0(r.ppi)}` : ""], ["Finished width (in)", r.width],
-    ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", n2(r.price)],
+    ["Weight (g/m²)", r.gsm ? Number(r.gsm).toFixed(0) : ""], ["Should-cost Rs/m", n2(r.should)], ["Should-cost Rs/kg", r.per_kg ? n0(r.per_kg) : ""], [r.source === "Purchase orders" ? "Price paid Rs/m" : "Mill's quote Rs/m", r.source === "Purchase orders" && r.price === null && (r.outliers || []).length ? "None: bought only on ZLOI orders (see Outliers below)" : n2(r.price)],
     ["Against should-cost", r.price && r.gap !== null && r.gap !== undefined ? `Rs ${n2(Math.abs(r.gap))} ${r.gap >= 0 ? "above" : "below"} (${pc(r.gap_pct)})` : ""], ["Against the usual range", r.band + (r.range ? ` (usual ${pc(r.range[0])} to ${pc(r.range[1])})` : "")], ["Why the tool is unsure", (r.band === "Ask break-up" && r.why_unsure || []).join("; ")], ["Metres", n0(r.metres)],
     [r.source === "Purchase orders" ? "Paid against should-cost, Rs" : "Quote against should-cost, Rs (not paid)", r.excess === null || r.excess === undefined ? "" : `${n0(Math.abs(r.excess))} ${r.excess >= 0 ? "above" : "below"}`],
-    ["Duplicate of", r.duplicate_of || ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
-    ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
+    ["Duplicate of", r.duplicate_of || ""], ["Fab group", r.fab_group ? `${r.fab_group}: ${r.fab_group_name}` : r.fab_group_name ? "Not grouped: " + r.fab_group_name : ""], ["Order size (pilot slab)", r.qty_band && r.qty_band !== "Not applied" ? `${r.order_size || ""} (not used: the quantity band is)` : r.order_size], ["Quantity band (mill rate card)", r.qty_band], ["Placeholder rates used", r.placeholders || "None"], ["Held back (calibration test)", val(r, "held_back")],
+    ["Added on", r.added || ""], ["Not costed because", (r.problems || []).join("; ")],
+    ["Worked out again", r.worked_out_again ? `From the purchase lines: ${r.worked_out_again} (the pilot's figures included them)` : ""], ["Outliers (ZLOI)", (r.outliers || []).length ? `${r.outliers.length}, left out of every figure (listed below)` : ""]].filter(([, v]) => v !== "" && v !== null && v !== undefined);
 }
 function quickView(r) {
   document.querySelectorAll(".side").forEach(e => e.remove());
@@ -650,7 +659,7 @@ function renderDetail(main) {
   const crumbs = h("div", { class: "crumb" }, h("a", { href: "#dashboard", html: svg("home", 'width="12" height="12"') }), "\u00A0\u203A\u00A0", h("button", { type: "button", onclick: () => { location.hash = "#rightcost"; } }, CONFIG.appName), "\u00A0\u203A\u00A0", h("span", {}, r.code));
   const headIcons = h("div", { class: "dicons" }, ib("pin", "Show in the list", () => { state.search.active = { text: r.code, mode: "exact" }; state.search.text = r.code; state.cls = r.source; location.hash = "#rightcost"; }),
     ib("pdf", "Print this page", () => print()), ib("comment", "Remarks", () => { d.tab = "item"; d.editing = true; render(); setTimeout(() => { const el = $("#f-remarks"); if (el) el.focus(); }, 0); }),
-    ib("open", "Open in Create cost", () => openCostPopup(r)));
+    ib("open", "Open in Create cost", () => openCostPopup(r)), r.source === "Purchase orders" && typeof RP_PURCH !== "undefined" ? ib("chart", "Price over time (purchase history)", () => RP_PURCH.openHistory(r.code)) : null);
   const head = h("div", { class: "dhead" }, h("div", { class: "bigimg", style: { background: ROUTE_COLOR[r.route] || "#B9BEC7" } }, (r.route || "").split(/[ /]/)[0].toUpperCase()), h("div", {}, h("div", { class: "small" }, `${r.code} · ${r.source}`), h("h1", {}, r.description || r.code)), headIcons);
   const tabs = h("div", { class: "tabs" }, [["item", "Item"], ["costing", "Costing"], ["negotiation", "Negotiation"], ["log", "Log"]].map(([t, l]) => h("button", { type: "button", class: "tab" + (d.tab === t ? " on" : ""), onclick: () => { d.tab = t; tabMemo(k, t); render(); if (t === "negotiation" || t === "log") loadNegos(); } }, l)));
   let content;
@@ -660,7 +669,8 @@ function renderDetail(main) {
     const remIn = h("input", { id: "f-remarks", type: "text", value: edit.remarks || "", disabled: !d.editing || null });
     content = [h("div", { style: "margin-top:12px;display:flex;gap:8px" }, d.editing ? [h("button", { type: "button", class: "btn fill", onclick: () => { state.edits[k] = { status: statusIn.value, remarks: remIn.value }; store.set("edits", state.edits); addLog(`${r.code}: status ${statusIn.value}${remIn.value ? `, remarks "${remIn.value}"` : ""}`); d.editing = false; toast("Saved"); render(); } }, "Save"), h("button", { type: "button", class: "btn", onclick: () => { d.editing = false; render(); } }, "Discard")] : h("button", { type: "button", class: "btn line", onclick: () => { d.editing = true; render(); } }, "Edit status and remarks")),
       h("div", { class: "form2" }, h("div", { class: "f" }, h("span", {}, "Status"), statusIn), h("div", { class: "f" }, h("label", { for: "f-remarks" }, "Remarks"), remIn), fields(r).map(([k2, v]) => h("div", { class: "f" }, h("span", {}, k2), h("span", {}, String(v))))),
-      h("p", { style: "color:var(--text2);font-size:11px;margin-top:10px" }, "Status and remarks are kept in this browser only.")];
+      h("p", { style: "color:var(--text2);font-size:11px;margin-top:10px" }, "Status and remarks are kept in this browser only."),
+      typeof RP_PURCH !== "undefined" ? RP_PURCH.outliers(r.outliers, "this fabric") : null];       // stage 2: ZLOI lines, shown apart
   } else if (d.tab === "costing") {
     if (r.buckets) content = costingTab(r);
     else if (r.problems && r.problems.length) content = h("div", { class: "empty" }, "Not costed yet: " + r.problems.join("; ") + ".", h("div", { style: "margin-top:10px" }, h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost")));
@@ -689,7 +699,7 @@ function costingTab(r, when) {
   return h("div", { class: "buckets" }, Object.entries(b).map(([name, v]) => h("div", { class: "bk" }, h("span", {}, name), h("div", {}, h("div", { class: "b", style: { width: Math.abs(v || 0) / top * 100 + "%" } })), h("span", { style: "text-align:right" }, n2(v)), h("span", { style: "text-align:right;color:var(--text2)" }, r.should ? (100 * (v || 0) / r.should).toFixed(1) + "%" : ""))),
     h("div", { class: "bk tot" }, h("span", {}, "Should-cost"), h("span"), h("span", { style: "text-align:right" }, n2(r.should)), h("span", { style: "text-align:right" }, "100%")),
     r.price ? h("div", { class: "bk" }, h("span", {}, r.source === "Purchase orders" ? "Price paid" : "Mill's quote"), h("span"), h("span", { style: "text-align:right" }, n2(r.price)), h("span", { style: "text-align:right" }, pc(r.gap_pct))) : null,
-    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : r.rates && r.rates.dated ? "Rs per metre, with the yarn on the dated rates of the order month (below) and every other rate today's. Create cost works on today's rates." : "Rs per metre, as costed in the purchase-order pilot. The Negotiation tab and Create cost work on today's rates; they give the same should-cost unless a rate has changed since."),
+    h("p", { style: "color:var(--text2);font-size:11px" }, when === "today" ? "Rs per metre, on today's rates." : r.rates && r.rates.dated ? "Rs per metre, with the yarn on the dated rates of the order month (below) and every other rate today's. Create cost works on today's rates." : "Rs per metre, as costed in the purchase-order pilot (worked out again from the purchase lines where ZLOI orders or later purchases change its metres), on today's rates. The Negotiation tab and Create cost give the same should-cost."),
     when !== "today" && r.rates ? h("p", { class: "rates-note", style: "color:var(--text2);font-size:11px" }, "Rates: " + r.rates.note) : null,         // stage 5: which month's rates
     h("button", { type: "button", class: "btn fill", onclick: () => openCostPopup(r) }, "Open in Create cost"));
 }
@@ -1147,4 +1157,5 @@ async function load() {
     if (state.supplier && !d.ready) loadSupplier();
   } catch (err) { if (shutOut()) return render(); fill($("#main"), h("div", { class: "empty" }, "The costings could not be loaded: " + err.message)); }
 }
+if (new URLSearchParams(location.search).get("from") === "rightcost") history.replaceState(null, "", "/" + (location.hash || "#rightcost"));     // the earlier address /rightcost
 renderRail(); route(); load(); loadAlerts(); whoAmI();
