@@ -373,7 +373,7 @@ def main():
                 link = row.locator(".fgcell button.code")
                 in_cell = link.inner_text()
                 link.click()
-                page.wait_for_selector(".main .dhead h1")
+                page.wait_for_function("g => (document.querySelector('.main .dhead h1') || {}).textContent === g", arg=in_cell)
                 page.wait_for_selector(".main .pchart svg circle.dotm")
                 page.wait_for_timeout(400)
                 dots = page.locator(".main .pchart svg circle.dotm").count()
@@ -777,7 +777,8 @@ def main():
             page.wait_for_selector(".pdialog .pchart svg circle.dotm")
             head = page.inner_text(".pdialog .phead h2")
             page.click(f".pdialog .acts button:has-text('Open Fab group {rich['group']}')")
-            page.wait_for_selector(".main .dhead h1")
+            # the fabric's page has a heading of the same kind: wait for the group's own
+            page.wait_for_function("g => (document.querySelector('.main .dhead h1') || {}).textContent === g", arg=rich["group"])
             check("Stage 2: a purchase order's page opens its price popup, and the popup opens its Fab group's page",
                   head == "Price over time: " + rich["code"] and page.locator(".pdialog").count() == 0 and page.inner_text(".main .dhead h1") == rich["group"]
                   and page.url.endswith("#group/" + rich["group"]) and not page.errors, f"{head!r} {page.url} {page.errors[:3]}")
@@ -804,7 +805,7 @@ def main():
             page.press(".main .toolbar input.search", "Enter")
             page.wait_for_function("() => document.querySelectorAll('.main .grid tbody tr').length === 1")
             page.click(f".main .grid tbody tr button.code:has-text('{rich['group']}')")
-            page.wait_for_selector(".main .dhead h1")
+            page.wait_for_function("g => (document.querySelector('.main .dhead h1') || {}).textContent === g", arg=rich["group"])
             check("Stage 2: the list of Fab groups finds a group by its code and opens its page", page.inner_text(".main .dhead h1") == rich["group"]
                   and not page.errors, str(page.errors[:3]))
             page.context.close()
