@@ -591,6 +591,11 @@ def purchase_settle(payload: dict = Body(...), request: Request = None):
     return purchases.settle(payload, who=_who(request))
 
 
+@app.post("/api/purchases/price-check")
+def purchase_price_check(payload: dict = Body(...), request: Request = None):
+    return purchases.count_held_price(payload, who=_who(request))
+
+
 @app.get("/api/purchases/skipped/{upload_id}")
 def purchase_upload_skipped(upload_id: int):
     return _file(purchases.skipped_download(upload_id))

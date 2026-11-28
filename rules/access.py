@@ -196,6 +196,7 @@ ROUTES = {
     "POST /api/purchases/upload": "do:upload_purchases",
     "POST /api/purchases/load-shipped": "do:upload_purchases",
     "POST /api/purchases/disagreements": "do:upload_purchases",          # settle what a file and the history disagree on
+    "POST /api/purchases/price-check": "do:upload_purchases",            # count a price held apart to check in SAP, or hold it again
     "POST /api/groups/merge": "do:merge_groups",
     "POST /api/groups/unmerge": "do:merge_groups",
 }

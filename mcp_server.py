@@ -1352,6 +1352,16 @@ def settle_purchase_disagreements(upload_id: int, take: str) -> dict:
     return dict(_purch()[0].settle({"upload_id": upload_id, "take": take}, who=ASSISTANT), recorded_as=ASSISTANT)
 
 
+@tool(mirrors="POST /api/purchases/price-check", writes=True)
+def count_price_to_check(line_id: int, count: bool = True) -> dict:
+    """Count a purchase line held apart as a "price to check in SAP" (priced more than ten times, or under a tenth of, its
+    code's other purchases) after all (count true), or hold it apart again (count false), as Purchase files and the price
+    popup do; line_id as purchase_upload_status (summary.price_checks) lists it. THIS CHANGES THE PRICE PAID, METRES AND
+    VERDICTS EVERYONE SEES for that fabric code; the person must have checked the price in SAP and confirm first.
+    Recorded as counted by "AI assistant"."""
+    return dict(_purch()[0].count_held_price({"line_id": line_id, "count": count}, who=ASSISTANT), recorded_as=ASSISTANT)
+
+
 @tool(mirrors="POST /api/groups/merge", writes=True)
 def merge_fab_groups(code: str, into: str, confirm: bool = False) -> dict:
     """Merge one Fab group into another, as Fab groups does: its fabric codes count in the other from then on; its code is

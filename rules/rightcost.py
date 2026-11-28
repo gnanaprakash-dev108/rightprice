@@ -84,7 +84,8 @@ STANCE_BAND = {"push": "Push", "fair": "Fair", "below": "Below", "ask": "Ask bre
 
 
 def costs():
-    """Right cost: every purchase-order fabric costed in the pilot (1,696), plus the rows of the fabric list,
+    """Right cost: every purchase-order fabric of the pilot (1,696), costed on the rates in use (the order month's dated yarn
+    rate where there is one) and worked out again at every rate edit or applied cost-sheet draft (GP, 28 Nov 2026), plus the rows of the fabric list,
     each with what the list page shows and the choices to open it in Cost a fabric. Read-only."""
     m = common.get_masters()
     L = masters.lists(m)
@@ -198,7 +199,7 @@ def costs():
         if r["source"] == "Purchase orders":
             g = groups.get(str(r["code"])) or {}
             r["fab_group"], r["fab_group_name"] = g.get("code"), g.get("name") or g.get("why")
-    fresh = purchases.rows_up_to_date()     # the purchase-order rows are worked out again in the background after a change
+    fresh = purchases.rows_up_to_date(pkey)     # the purchase-order rows are worked out again in the background after a change
     val = {"rows": out, "ready": verdicts is not None and fresh, "updating": not fresh, "counts": {"Purchase orders": sum(1 for r in out if r["source"] == "Purchase orders"),
                                     "Fabric list": sum(1 for r in out if r["source"] == "Fabric list")}}
     _costs_memo.update(key=(common._state_key(), dv, _briefs["key"], _briefs["running"], gkey, pkey), val=val)

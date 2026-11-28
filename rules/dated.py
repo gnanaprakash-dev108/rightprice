@@ -303,8 +303,8 @@ def today_rates():
 def pilot_rates_note():
     """Which rates the dashboard's purchase-order panels are on, beside Right cost's (for the dashboard). The count of
     orders on a dated yarn rate is worked out here from the dated rates and the order months, not read from Right cost."""
-    base = ("Panels 1, 2 and 4 are your purchase orders as costed in the pilot, on today's rates (no dated yarn rate), and "
-            "every usual range comes from them.")
+    base = ("Panels 1, 2 and 4 are your purchase orders on the rates in use (no dated yarn rate), worked out again at every rate "
+            "edit or applied cost-sheet draft, and every usual range comes from them.")
     n = sum(o["both"] + o["one"] for o in _orders_by_month(data_dated.rows())) if data_dated.available() else 0
     return base + (f" Right cost costs {n} of these orders on a dated yarn rate of their order month, so for those its should-cost "
                    "and verdict can differ from these panels." if n else

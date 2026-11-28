@@ -203,4 +203,6 @@ def _as_run():
     return (f"This page is the pilot as it was run (pilot/Pilot_Results.xlsx, never changed): {len(rows):,} fabrics, ZLOI orders included. "
             f"Since GP's decision of 27 Nov 2026, ZLOI orders are left out of every other figure: the Dashboard, Right cost and the supplier "
             f"pages count the {priced:,} fabrics with a price paid on other orders ({again:,} worked out again from their order lines)"
-            + (f", and {' and '.join(unpriced)} show no price" if unpriced else "") + ". So a mill's or a fabric type's figures here differ from theirs.")
+            + (f", and {' and '.join(unpriced)} show no price" if unpriced else "") + ". So a mill's or a fabric type's figures here differ from theirs. "
+            "And those pages cost every purchase order on the rates in use (its order month's dated yarn rate where there is one), "
+            "worked out again at every rate edit or applied cost-sheet draft (GP, 28 Nov 2026), where this page keeps the pilot's own figures.")
