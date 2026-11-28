@@ -839,7 +839,7 @@ def stage2_checks(c, check):
         p = subprocess.run(["node", "--check", os.path.join(HERE, "web", "purchases.js")], capture_output=True, text=True)
         check("web/purchases.js parses", p.returncode == 0, p.stderr[-300:])
     shell = c.get("/").text
-    check("Stage 2: the shell loads the purchase-history page script before its own", shell.index("purchases.js") < shell.index("rightcost.js")
+    check("Stage 2: the shell loads the purchase-history page script before its own", shell.index('src="purchases.js') < shell.index('src="rightcost.js')
           and c.get("/purchases.js").status_code == 200 and c.get("/purchases.css").status_code == 200)
     # the rules on their own: counts written many ways, widths, ranges on separate orders, dates
     same = lambda a, b: fab_groups.tidy_count(a) == fab_groups.tidy_count(b)

@@ -6,12 +6,15 @@ Run: python check_browser.py     It must print ALL OK. It needs Python's playwri
 
 What it does: starts the app on a temporary data folder and a SQLite file in it (the rate master that comes with the
 code; nothing in data/ is touched, and DATABASE_URL from the environment is never used), then in Chromium, each page and
-each path opened in a fresh tab (a first load, as from a bookmark or a reload):
+each path opened in a fresh tab (a first load, as from a bookmark or a reload). First the purchase file that came with
+the code is loaded through the app (stage 2's purchase history), so every page is checked with it in place.
 1. every page of the shell (Home, Prices, Right cost, a fabric's page, a supplier's page, a setup list) and every tab of the
    New cost popup, in light and in dark at 1366 x 900 and in light at 390 x 844: it draws (nothing left on "Loading...",
    no "could not be loaded"), carries its heading or its tab, shows the theme's colours (computed, not only the switch),
    on a phone nothing reaches past the screen's edge (the page, its own box, or a part cut off where it cannot be
-   scrolled to), and the console stays empty;
+   scrolled to), and the console stays empty; and stage 2's screens in the same three looks: a Fab group opened from
+   Right cost's Fab group column (its chart drawn, its codes listed), the price popup from the same row (its chart with
+   the group's other codes; Escape closes it), the list of Fab groups and Purchase files;
 2. the main paths: Create cost (the example, Qlty-1, is Rs 181.40, with the rates it is on under the figure; Add to list
    adds a row; Print prints the cost alone, the cost in light colours and the shell left in its theme); Bulk upload (a
    mill sheet's rows, its alert and the rail's count); a row opened in Create cost at the list's should-cost; Compare of
@@ -23,9 +26,12 @@ each path opened in a fresh tab (a first load, as from a bookmark or a reload):
    the rate master's lists read afresh for each popup (a yarn added since shows without a reload); stage 5's dated yarn
    rates (a rate entered on Yarn prices shows in its card and moves the purchase orders of its month, and no other;
    Bring in prices adds its rows as dated rates after asking the month and GST); a bookmark of the retired /classic;
+   stage 2: a purchase order's price popup from its page and the Fab group from the popup, a code's popup from the
+   group's page, a group found on the list of Fab groups, an upload's detail on Purchase files and the purchase file
+   loaded again from that page (read in the background, changing nothing);
 3. with users and roles on (stage 3): a Viewer, a Buyer, a Rates editor and an Admin each see only the buttons their role
    may use; each walks every address (every page, every tab of the popup, Right cost, a fabric's page, a supplier's
-   page, a setup list, Users and roles): what the role may open draws, what it may not says so, the menus offer exactly
+   page, a setup list, Users and roles, a Fab group, the list of Fab groups, Purchase files): what the role may open draws, what it may not says so, the menus offer exactly
    what it may open, and the server is asked for nothing it refuses; and the same walk for a Buyer with each page
    unticked in turn.
 A crash fails the run like any check, and whenever something failed the data folder and the servers' logs are kept.
@@ -82,10 +88,13 @@ TYPE = """sels => sels.map(s => { const e = document.querySelector(s); if (!e) r
 NEEDS = {"dashboard": "page:dashboard", "pilot": "page:pilot", "yarn": "page:prices", "cotton": "page:prices", "rates": "page:prices",
          "ratecard": "page:prices", "settings": "page:prices", "costsheets": "page:costsheets", "intake": "do:edit_rates",
          "rightcost": "page:rightcost", "item": "page:rightcost", "supplier": "page:rightcost", "users": "page:users",
-         "cost": "page:cost", "compare": "page:cost", "bulk": "page:list", "pack": "page:pack"}
+         "cost": "page:cost", "compare": "page:cost", "bulk": "page:list", "pack": "page:pack",
+         "group": "page:groups", "groups": "page:groups", "purchase-files": "page:purchase_files"}         # stage 2 (web/purchases.js)
 # what the menus offer: the Prices links, the sections' tabs above a page, the popup's tabs
 OFFERED = """() => [...CONFIG.flyouts.prices.groups.flatMap(g => g[1]).map(x => x[1].slice(1)).filter(x => !x.startsWith('lib/')),
     ...Object.values(CONFIG.sections).flat(), ...CONFIG.popupTabs.map(t => t[0])]"""
+# how many of these elements have a box drawn round them (a border or a background): stage 2's .note stays on its pages
+BOXED = """sel => [...document.querySelectorAll(sel)].map(e => getComputedStyle(e)).filter(c => c.borderTopWidth !== '0px' || c.backgroundColor !== 'rgba(0, 0, 0, 0)').length"""
 # records whether Ctrl+F reached the browser (not prevented), and stands in for the print dialog
 INIT = """addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") setTimeout(() => { window.__ctrlF = e.defaultPrevented; }); });
 window.__printed = 0; window.print = () => { window.__printed++; };"""
@@ -157,6 +166,30 @@ def type_on_paper(page, sels):
         if not any(abs(g - px * 0.75) <= 0.1 for g in got):
             off.append(f"{sel} {text[:20]!r}: {got or 'not found'} pt on paper against {px * 0.75:g} pt")
     return off
+
+
+def load_shipped(app):
+    """Stage 2: the purchase file that came with the code, loaded through the app (read in the background); its upload
+    once it is read, and Right cost's rows worked out again with it."""
+    up = app.api("/api/purchases/load-shipped", {})
+    for _ in range(600):
+        u = app.api(f"/api/purchases/uploads/{up['id']}")
+        if u["status"] in ("done", "failed"):
+            app.costs()
+            return u
+        time.sleep(1)
+    return {"status": "still being read after 10 minutes"}
+
+
+def rich_row(app):
+    """A purchase order of Right cost in the Fab group with the most codes (and purchases): its code and its group. The
+    group page and the price popup then have other codes and many dots to draw."""
+    groups = {g["code"]: g for g in app.api("/api/groups")["groups"]}
+    po = [r for r in app.costs() if r["source"] == "Purchase orders" and r.get("fab_group") in groups and r.get("price") is not None]
+    if not po:
+        return None
+    r = min(po, key=lambda r: (-groups[r["fab_group"]]["codes"], -groups[r["fab_group"]]["purchases"], r["code"]))
+    return {"code": r["code"], "group": r["fab_group"], "codes": groups[r["fab_group"]]["codes"]}
 
 
 class App:
@@ -232,7 +265,14 @@ def main():
         check("The app starts on a temporary folder and SQLite", app.api("/api/store")["store"] == "sqlite")
         with open(files["costsheet"], "wb") as f:
             f.write(cost_sheet_file(app.api("/api/costsheet/template")))
-        where = {}           # a fabric's page and a supplier's page, for the walks of section 3
+        # stage 2: the purchase history, as on the live site once GP loads it: the purchase file that came with the code,
+        # read in the background; every page below is checked with it in place
+        shipped = load_shipped(app)
+        rich = rich_row(app)
+        check("Stage 2: the purchase file that came with the code loads through the app, and Right cost's purchase orders carry their Fab group",
+              shipped["status"] == "done" and shipped["rows_loaded"] and rich, f"{shipped.get('status')} {shipped.get('error') or ''} {rich}")
+        n_groups = app.api("/api/groups")["counts"]["groups"]
+        where = {"group": "group/" + rich["group"]}           # a fabric's page, a supplier's page and a Fab group, for the walks of section 3
         with sync_playwright() as p:
             browser = p.chromium.launch()
 
@@ -262,6 +302,27 @@ def main():
                     return [getComputedStyle(document.body).backgroundColor, pg ? getComputedStyle(pg).color : '', card ? getComputedStyle(card).backgroundColor : null] }""", sel)
                 want = THEME[theme]
                 return got[0] == want[0] and got[1] == want[1] and (got[2] is None or got[2] == want[2]), got
+
+            def stage2_colours(page, theme, sel, card):
+                """Stage 2's pages draw straight into the shell's page (no box of their own), and the price popup over it:
+                the theme's colours on the page, its text and its tiles."""
+                got = page.evaluate("""([sel, card]) => { const el = document.querySelector(sel), c = card && document.querySelector(card);
+                    return [getComputedStyle(document.body).backgroundColor, getComputedStyle(el).color, c ? getComputedStyle(c).backgroundColor : null,
+                            sel === '.main' ? null : getComputedStyle(el).backgroundColor] }""", [sel, card])
+                want = THEME[theme]
+                return got[0] == want[0] and got[1] == want[1] and got[2] in (None, want[2]) and got[3] in (None, want[2]), got
+
+            def right_cost_row(page, code, fresh=True):
+                """Right cost found by a code in its search box (a fresh load at #rightcost first): that code's row."""
+                if fresh:
+                    open_at(page, "rightcost", None)
+                    page.wait_for_selector(".grid tbody tr td .code")
+                    page.fill("#search", code)
+                    page.press("#search", "Enter")
+                page.wait_for_function("c => [...document.querySelectorAll('.grid tbody tr')].some(tr => tr.textContent.includes(c) && tr.querySelector('.fgcell'))", arg=code)
+                return page.locator(".grid tbody tr", has_text=code).first
+
+            active_rail = lambda page: page.evaluate("() => [...document.querySelectorAll('.rail .item.active')].map(b => b.dataset.id)")
 
             # ---------------------------------------------------------------- 1. every page, in each look
             for theme, size, look in (("light", DESK, "light"), ("dark", DESK, "dark"), ("light", PHONE, "phone")):
@@ -304,6 +365,52 @@ def main():
                 page.wait_for_selector(".main .title")
                 check(f"A setup list opens ({look})", not page.errors and page.inner_text(".main .title") == "Payment terms", str(page.errors[:3]))
                 page.context.close()
+
+                # stage 2 (web/purchases.js), in the shell with no frame: a Fab group opened from Right cost's Fab group column,
+                # the price popup from the same row, the list of Fab groups, Purchase files
+                page = tab(theme, size)
+                row = right_cost_row(page, rich["code"])
+                link = row.locator(".fgcell button.code")
+                in_cell = link.inner_text()
+                link.click()
+                page.wait_for_selector(".main .dhead h1")
+                page.wait_for_selector(".main .pchart svg circle.dotm")
+                page.wait_for_timeout(400)
+                dots = page.locator(".main .pchart svg circle.dotm").count()
+                wide = page.evaluate(SIDEWAYS, ".main") if size is PHONE else [0, ""]
+                hue, got = stage2_colours(page, theme, ".main", ".main .stile")
+                good = (in_cell == rich["group"] and page.inner_text(".main .dhead h1") == rich["group"] and page.url.endswith("#group/" + rich["group"])
+                        and page.title() == rich["group"] + " - RightPrice" and active_rail(page) == ["costs"] and dots >= 2
+                        and rich["code"] in page.inner_text(".main") and not page.errors and wide[0] <= 1 and hue)
+                check(f"Stage 2: a Fab group opens from Right cost's Fab group column, its chart drawn and its codes listed ({look})", good,
+                      "" if good else f"cell {in_cell!r}, {page.url}, {page.title()!r}, rail {active_rail(page)}, {dots} dots, sideways {wide}, colours {got}, console {page.errors[:3]}")
+                page.go_back()
+                row = right_cost_row(page, rich["code"], fresh=False)
+                row.locator(".fgcell .pib").click()
+                page.wait_for_selector(".pdialog .pchart svg circle.dotm")
+                page.wait_for_timeout(400)
+                dots = page.locator(".pdialog .pchart svg circle.dotm").count()
+                head = page.inner_text(".pdialog .phead h2")
+                wide = page.evaluate(SIDEWAYS, ".pdialog") if size is PHONE else [0, ""]
+                hue, got = stage2_colours(page, theme, ".pdialog", ".pdialog .stile")
+                page.keyboard.press("Escape")
+                page.wait_for_function("() => !document.querySelector('.pdialog')")
+                good = head == "Price over time: " + rich["code"] and dots >= 2 and page.locator(".pdialog .stile").count() == 0 and not page.errors and wide[0] <= 1 and hue
+                check(f"Stage 2: the price popup opens from the same row, its chart drawn with the group's other codes, and Escape closes it ({look})", good,
+                      "" if good else f"{head!r}, {dots} dots, sideways {wide}, colours {got}, console {page.errors[:3]}")
+                page.context.close()
+                for addr, title, sel in (("groups", "Fab groups", ".main .toolbar"), ("purchase-files", "Purchase files", ".main .stiles")):
+                    page = tab(theme, size)
+                    open_at(page, addr, None)
+                    page.wait_for_selector(sel)
+                    page.wait_for_selector(".main .grid tbody tr")
+                    page.wait_for_timeout(400)
+                    wide = page.evaluate(SIDEWAYS, ".main") if size is PHONE else [0, ""]
+                    hue, got = stage2_colours(page, theme, ".main", ".main .stile" if addr != "groups" else None)
+                    good = (page.inner_text(".main .ptitle") == title and page.title() == title + " - RightPrice" and not page.errors and wide[0] <= 1 and hue
+                            and (page.inner_text(".main .toolbar .count") == f"{n_groups:,} groups" if addr == "groups" else page.locator(".main .grid .upst.done").count() >= 1))
+                    check(f"Stage 2: {title} opens ({look})", good, "" if good else f"{page.title()!r}, sideways {wide}, colours {got}, console {page.errors[:3]}")
+                    page.context.close()
 
             # ---------------------------------------------------------------- 2. the main paths, each in a fresh tab
             # Create cost: the example and the rates it is on; a chart's tooltip and Escape; Print (in dark: only the cost turns light)
@@ -552,6 +659,9 @@ def main():
             check("Mill cost sheets: a ticked draft is applied after asking once more", asked.endswith("sure?") and draft["id"] not in {d["id"] for d in app.api("/api/costsheet")["drafts"]}
                   and not page.errors, f"{asked!r} {page.errors[:3]}")
             page.context.close()
+            # after a change of rates the server works Right cost out again (with stage 2, every request waits on it, for
+            # about half a minute here): that work done first, so a page's wait below is the page's own
+            app.costs()
 
             # the rate master's lists are read afresh for each popup: a yarn added since (by someone else) shows without a reload
             page = tab()
@@ -571,6 +681,7 @@ def main():
             first = warp_yarns()
             yarn_table = app.api("/api/table/Yarn_Rates")
             app.api("/api/table/Yarn_Rates", {"columns": yarn_table["columns"], "rows": yarn_table["rows"] + [["Cotton 99S", "Cotton", "99S", 99, 500, time.strftime("%Y-%m-%d"), "Browser check"]]}, method="PUT")
+            app.costs()
             second = warp_yarns()
             app.api("/api/table/Yarn_Rates", {"columns": yarn_table["columns"], "rows": yarn_table["rows"]}, method="PUT")     # as it was
             check("Create cost reads the rate master's lists afresh each time the popup opens: a yarn added since shows without a reload",
@@ -654,6 +765,66 @@ def main():
             check("A bookmark of the retired /classic opens the app", page.url.rstrip("/").split("#")[0] == app.base and page.inner_text(".main .title") == "Dashboard"
                   and not page.errors, page.url)
             page.context.close()
+
+            # stage 2's main paths: on a purchase order's page the price popup, and from it the Fab group; on the group's page a
+            # code's price popup; the list of Fab groups searched and a group opened; Purchase files: an upload's detail, and
+            # the purchase file that came with the code loaded again from the page (it changes nothing)
+            app.costs()             # the dated rates above: Right cost worked out again first
+            page = tab()
+            open_at(page, "item/Purchase orders|" + rich["code"], None)
+            page.wait_for_selector(".dhead h1")
+            page.click(".dicons button[aria-label='Price over time (purchase history)']")
+            page.wait_for_selector(".pdialog .pchart svg circle.dotm")
+            head = page.inner_text(".pdialog .phead h2")
+            page.click(f".pdialog .acts button:has-text('Open Fab group {rich['group']}')")
+            page.wait_for_selector(".main .dhead h1")
+            check("Stage 2: a purchase order's page opens its price popup, and the popup opens its Fab group's page",
+                  head == "Price over time: " + rich["code"] and page.locator(".pdialog").count() == 0 and page.inner_text(".main .dhead h1") == rich["group"]
+                  and page.url.endswith("#group/" + rich["group"]) and not page.errors, f"{head!r} {page.url} {page.errors[:3]}")
+            other = page.locator(".main button.code[title='Price over time for this code']").first
+            code = other.inner_text()
+            other.click()
+            page.wait_for_selector(".pdialog .pchart svg circle.dotm")
+            check("Stage 2: on a Fab group's page, a code of the group opens its price popup", page.inner_text(".pdialog .phead h2") == "Price over time: " + code
+                  and rich["codes"] >= 2 and not page.errors, f"{code} {page.errors[:3]}")
+            page.context.close()
+            # with no frame, stage 2's own look stays on its pages: no box round a stat's note on Pilot results (the profile's
+            # notes: section 3); and Pilot results says it is the pilot as it was run (stage 2's line, carried from the frame)
+            page = tab()
+            open_at(page, "pilot")
+            on_pilot = page.evaluate(BOXED, ".pg .stat .note")
+            as_run = page.locator(".pg .notice.info", has_text="the pilot as it was run").count()
+            check("Stage 2's own look stays on its pages (no box round a stat's note on Pilot results); Pilot results says it is the pilot as run",
+                  page.locator(".pg .stat .note").count() >= 4 and on_pilot == 0 and as_run == 1 and not page.errors, f"{on_pilot} boxed, {as_run} {page.errors[:3]}")
+            page.context.close()
+            page = tab()
+            open_at(page, "groups", None)
+            page.wait_for_selector(".main .toolbar")
+            page.fill(".main .toolbar input.search", rich["group"])
+            page.press(".main .toolbar input.search", "Enter")
+            page.wait_for_function("() => document.querySelectorAll('.main .grid tbody tr').length === 1")
+            page.click(f".main .grid tbody tr button.code:has-text('{rich['group']}')")
+            page.wait_for_selector(".main .dhead h1")
+            check("Stage 2: the list of Fab groups finds a group by its code and opens its page", page.inner_text(".main .dhead h1") == rich["group"]
+                  and not page.errors, str(page.errors[:3]))
+            page.context.close()
+            page = tab()
+            open_at(page, "purchase-files", None)
+            page.wait_for_selector(".main .grid tbody tr")
+            page.click(".main .grid tbody tr button.code:has-text('#')")
+            page.wait_for_selector(".main .updetail h3")
+            detail = page.inner_text(".main .updetail h3")
+            before = app.api("/api/purchases/status")["counts"]
+            page.click(".main button:has-text('Load the purchase file that came with the code')")
+            # the uploads are the page's first table (an upload's detail below it has tables of its own)
+            page.wait_for_function("() => { const t = document.querySelector('.main .grid'); return !!t && t.tBodies[0].rows.length === 2 && t.querySelectorAll('.upst.done').length === 2 }", timeout=600000)
+            newest = page.locator(".main .grid tbody tr").first.inner_text()
+            after = app.api("/api/purchases/status")["counts"]
+            check("Purchase files: an upload opens to what it held; the file that came with the code, loaded again from the page, is read in the background and changes nothing",
+                  detail.startswith(f"Upload #{shipped['id']}: ") and "Loading the purchase file" in page.inner_text("#toast") and "already in" in newest
+                  and after == before and not page.errors, f"{detail!r} {newest[:160]!r} {page.errors[:3]}")
+            page.context.close()
+            app.costs()             # Right cost worked out again after the load, before the next checks
             browser.close()
         app.stop()
 
@@ -715,13 +886,16 @@ def main():
                 page.goto(f"{app.base}/?at={time.time()}#intake")
                 page.wait_for_function(shut, arg=".pgbox > .pg", timeout=60000)
                 seen["intake page"] = page.locator(".main .ua-nopage", has_text="not open to your role").count() == 0
+                seen["merge groups"] = at("groups", ".main .toolbar").locator("xpath=..").locator(".mergerow").count() > 0          # stage 2
+                seen["purchase upload"] = at("purchase-files", ".main .stiles").locator("xpath=..").locator(".uprow input[type=file]").count() > 0
                 page.context.close()
                 return seen, page.refused + page.errors
 
             # every address the shell has: how to reach it, and what shows once it has drawn
             addresses = [(a, a, ".pgbox > .pg") for a, _ in PAGES] + [("rightcost", "rightcost", ".grid tbody tr td .code"),
                          ("item", where["item"], ".dhead h1"), ("supplier", where["supplier"], ".dhead h1"), (None, "lib/Payment terms", ".main .title"),
-                         ("users", "users", ".main .ua-card")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
+                         ("users", "users", ".main .ua-card"), ("group", where["group"], ".main .dhead h1"), ("groups", "groups", ".main .toolbar"),
+                         ("purchase-files", "purchase-files", ".main .stiles")] + [(t, f"dashboard?new={t}", None) for t, _ in POPUP_TABS]
 
             def walk(who):
                 """Every address as this person, each from a fresh load: what the role may open draws, what it may not says so
@@ -759,7 +933,8 @@ def main():
 
             want = {"Viewer": set(), "Buyer": {"mark seen", "list upload", "list remove", "add to list", "cost sheet upload"}}
             want["Rates editor"] = want["Admin"] = {"edit rates", "bring in prices", "dated rate entry", "rate tables edit", "add cotton", "cost sheet upload",
-                                                    "apply drafts", "mark seen", "list upload", "list remove", "add to list", "intake page"}
+                                                    "apply drafts", "mark seen", "list upload", "list remove", "add to list", "intake page",
+                                                    "merge groups", "purchase upload"}
             for who, role in people:
                 seen, refused = offered(who)
                 got = {k for k, v in seen.items() if v}
@@ -769,6 +944,16 @@ def main():
                 wrong = walk(who)
                 check(f"Roles: {an} {role} walks every address ({len(addresses)}): each opens or says it is not open as the role says, the menus agree, nothing refused",
                       not wrong, "; ".join(wrong[:4]))
+            # the profile's notes (the e-mail, the role) stay as the shell draws them: stage 2's .note is its pages' own
+            page = person("gp@example.com")
+            page.goto(f"{app.base}/?at={time.time()}#dashboard")
+            page.wait_for_function("() => typeof RPA !== 'undefined' && !!RPA.me")
+            page.click("#avatar")
+            page.wait_for_selector(".flyout:not([hidden]) .note")
+            notes, boxed = page.locator(".flyout .note").count(), page.evaluate(BOXED, ".flyout .note")
+            check("The profile's notes (the role; the e-mail on Azure) have no box round them: stage 2's look stays on its own pages", notes >= 1 and boxed == 0 and not page.errors,
+                  f"{boxed} of {notes} boxed {page.errors[:3]}")
+            page.context.close()
             # each page unticked in turn, for a Buyer: that page goes, every other still works, and nothing is refused
             for perm in [k for k in sorted(set(NEEDS.values())) if k.startswith("page:") and k != "page:users"]:
                 app.api("/api/users/permissions", {"changes": [{"role": "Buyer", "permission": perm, "allowed": False}]}, who="gp@example.com")
