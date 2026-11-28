@@ -78,6 +78,13 @@ S5-9. **A typed dated rate with no source** is kept as a Placeholder, like a rat
 - **Every order line keeps the word of the newest file that covered it**: its figures, or that it was deleted, blocked,
   no longer bulk, not in rupees or per metre, or left out of an order the file has, even before any file gave its
   figures. So an older file read after a newer one (or at the same time, in two server processes) brings nothing back.
+- **Right cost's purchase-order rows read the purchase history alone once it holds a file**, as the price popup and the
+  Fab group pages do, so the two never disagree. Before any file is loaded they show the pilot's purchases as the
+  purchase file that came with the code has them. If an admin uploads an own SAP export first, a pilot fabric in none of
+  the files uploaded shows no price paid, and Purchase files says the file that came with the code is not loaded (and
+  offers it). The Suppliers tab of Right cost counts as the supplier list does (a code bought only on ZLOI is not
+  counted). A code that moves group says what changed in its specification, or that a new code joined its widths; a
+  code not costed now shows its specification as it is now.
 - A code bought only on ZLOI orders is not counted as bought on the supplier list and pages; a group's mill with only
   ZLOI lines is listed, not counted; Pilot results says it is the pilot as run, ZLOI included (1,696 fabrics), beside
   the 1,512 every other page counts.
